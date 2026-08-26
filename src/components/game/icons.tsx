@@ -74,7 +74,35 @@ function glyph(id: TraitId) {
       return (
         <>
           <rect x="4" y="7" width="8" height="10" rx="1" {...stroke} />
-          <rect x="12" y="7" width="8" height="10" rx="1" {...stroke} opacity={0.6} />
+          <rect x="12" y="7" width="8" height="10" rx="1" opacity={0.6} {...stroke} />
+        </>
+      );
+    // ── Континенты ──
+    case "migration":
+      return <path {...stroke} d="M4 16c3-2 5-8 9-8m0 0h-4m4 0v4M17 6c2 2 3 4 3 6s-1 4-3 6" />;
+    case "remora":
+      return <path {...stroke} d="M6 12c4-4 10-4 13 0-3 4-9 4-13 0Zm11 0h.01" />;
+    case "herding":
+      return (
+        <>
+          <circle cx="7" cy="14" r="2.2" {...stroke} />
+          <circle cx="12" cy="14" r="2.2" {...stroke} />
+          <circle cx="17" cy="14" r="2.2" {...stroke} />
+        </>
+      );
+    case "nematocysts":
+      return <path {...stroke} d="M7 18V9m0 0L5 5m2 4 2-4m0 13V9m5 9V9m0 0-2-4m2 4 2-4" />;
+    case "regeneration":
+      return <path {...stroke} d="M19 12a7 7 0 1 1-3-5.7M19 4v4h-4" />;
+    case "recombination":
+      return <path {...stroke} d="M8 5v14m8-14v14M6 8h4m4 0h4M6 16h4m4 0h4" />;
+    case "edificator":
+      return <path {...stroke} d="M6 20v-7l6-5 6 5v7M10 20v-5h4v5" />;
+    case "neoplasia":
+      return (
+        <>
+          <circle cx="12" cy="12" r="3" {...stroke} />
+          <path {...stroke} d="M12 4v3m0 10v3M4 12h3m10 0h3M6.6 6.6l2.1 2.1m6.6 6.6 2.1 2.1m0-10.8-2.1 2.1M8.7 15.3l-2.1 2.1" />
         </>
       );
     default:

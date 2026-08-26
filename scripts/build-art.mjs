@@ -6,6 +6,8 @@ import { readdir, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
 const SRC = "assets";
+// Новые партии складываются в подпапки assets/; сканируем все известные.
+const SRC_DIRS = [SRC, `${SRC}/continents`];
 const OUT = "public/img";
 
 // kind: см. processKind ниже
@@ -36,6 +38,8 @@ const JOBS = [
   ["31d3dd2f", "meta/app-icon.png", "icon512"],
   // --- жетоны ---
   ["318a3352", "token/meat.jpg", "tok"],
+  // Синяя фишка (мясо/охота/сотрудничество) — тот же жетон с поворотом тона.
+  ["318a3352", "token/blue.jpg", "tokBlue"],
   ["cd2b9ec5", "token/plant.jpg", "tok"],
   ["64f44427", "token/fat.jpg", "tok"],
   ["f86b74c1", "token/seed.jpg", "tok"],
@@ -101,13 +105,26 @@ const JOBS = [
   ["8450d44a", "fx/bone-chip.png", "fx"],
   ["36cddc5e", "fx/footprint.png", "fx"],
   ["e322bc6b", "fx/egg.png", "fx"],
-  // --- континенты ---
+  // --- континенты (тайлы-карты, старая партия) ---
   ["f3cd1e02", "world/continent-africa.jpg", "cont"],
   ["9036ca92", "world/continent-eurasia.jpg", "cont"],
   ["7026cb13", "world/continent-north-america.jpg", "cont"],
   ["89e22ab2", "world/continent-south-america.jpg", "cont"],
   ["c0ca52e9", "world/continent-australia.jpg", "cont"],
   ["2ad076a7", "world/continent-antarctica.jpg", ["cont", "attention"]],
+  // --- дополнение «Континенты»: свойства (карточный арт) ---
+  ["trait-migration", "trait/migration.jpg", "card"],
+  ["trait-remora", "trait/remora.jpg", "card"],
+  ["trait-herding", "trait/herding.jpg", "card"],
+  ["trait-nematocysts", "trait/nematocysts.jpg", "card"],
+  ["trait-regeneration", "trait/regeneration.jpg", "card"],
+  ["trait-recombination", "trait/recombination.jpg", "card"],
+  ["trait-edificator", "trait/edificator.jpg", "card"],
+  ["trait-neoplasia", "trait/neoplasia.jpg", "card"],
+  // --- дополнение «Континенты»: тайлы территорий ---
+  ["world-laurasia", "world/laurasia.jpg", "cont"],
+  ["world-gondwana", "world/gondwana.jpg", "cont"],
+  ["world-ocean", "world/ocean.jpg", "cont"],
   // --- мутации ---
   ["1da57803", "mutation/virus-1.jpg", "mut"],
   ["85c9dadb", "mutation/virus-2.jpg", "mut"],
@@ -125,11 +142,19 @@ const JOBS = [
   ["2b7377c7", "../x-banner.jpg", ["bgw", 1600, 900]],
 ];
 
-const files = await readdir(SRC);
+const files = [];
+for (const dir of SRC_DIRS) {
+  try {
+    const list = await readdir(dir);
+    files.push(...list.map((f) => `${dir}/${f}`));
+  } catch {
+    // подпапка может отсутствовать — пропускаем
+  }
+}
 const resolve = (prefix) => {
-  const hit = files.find((f) => f.startsWith(`grok-${prefix}`));
+  const hit = files.find((f) => f.split("/").pop().startsWith(`grok-${prefix}`));
   if (!hit) throw new Error(`нет файла с префиксом ${prefix}`);
-  return `${SRC}/${hit}`;
+  return hit;
 };
 
 async function processKind(kind, src, dest) {
@@ -145,6 +170,9 @@ async function processKind(kind, src, dest) {
     pipe = sharp(src).resize(512, 512, { fit: "cover", position: "attention" });
   } else if (kind === "tok") {
     pipe = sharp(src).resize(256, 256, { fit: "cover" });
+  } else if (kind === "tokBlue") {
+    // 226° по кругу тонов: красный жетон становится синим, оправа остаётся.
+    pipe = sharp(src).resize(256, 256, { fit: "cover" }).modulate({ hue: 226 });
   } else if (kind === "art") {
     pipe = sharp(src).resize(192, 192, { fit: "cover", position: "attention" });
   } else if (kind === "fx") {

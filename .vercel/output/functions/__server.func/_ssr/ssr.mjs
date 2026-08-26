@@ -88,7 +88,7 @@ var HEADERS = { TSS_SHELL: "X-TSS_SHELL" };
 * the dev styles URL for route-scoped CSS collection.
 */
 async function getStartManifest(matchedRoutes) {
-	const { tsrStartManifest } = await import("../_tanstack-start-manifest_v-B4qNxdBB.mjs");
+	const { tsrStartManifest } = await import("../_tanstack-start-manifest_v-DvKZBm2U.mjs");
 	const startManifest = tsrStartManifest();
 	let routes = startManifest.routes;
 	routes[rootRouteId];
@@ -110,35 +110,35 @@ async function getStartManifest(matchedRoutes) {
 var manifest = {
 	"0ae6763f4a9392d1dc978022ba9a80b0b3aa8d50b84dfd2903b7639f24bfb552": {
 		functionName: "netSetBots_createServerFn_handler",
-		importer: () => import("./api-CqKx0nDV.mjs")
+		importer: () => import("./api-Cdy6LvRQ.mjs")
 	},
 	"18b6efd10626f6282f46662236a9f4efa95081d933b3c79a203a2bf43f221fa0": {
 		functionName: "netAction_createServerFn_handler",
-		importer: () => import("./api-CqKx0nDV.mjs")
+		importer: () => import("./api-Cdy6LvRQ.mjs")
 	},
 	"20bb5f392b3e05a16098d48523e3b73255d44092301929c9ed9a4bed4959d3d0": {
 		functionName: "netJoinRoom_createServerFn_handler",
-		importer: () => import("./api-CqKx0nDV.mjs")
+		importer: () => import("./api-Cdy6LvRQ.mjs")
 	},
 	"5d10ae946134fb6b27bc7c68ea783639ad617431c539331dc58524d97407b4bb": {
 		functionName: "netCreateRoom_createServerFn_handler",
-		importer: () => import("./api-CqKx0nDV.mjs")
+		importer: () => import("./api-Cdy6LvRQ.mjs")
 	},
 	"97c6cf3f2776e31a2770acfbc62d86143077f49705e3043649873d49707919d1": {
 		functionName: "netPoll_createServerFn_handler",
-		importer: () => import("./api-CqKx0nDV.mjs")
+		importer: () => import("./api-Cdy6LvRQ.mjs")
 	},
 	"9be6f8dbb902e4d7a86ed61a5ec451298b7693cb95cd353b30302c3968525e24": {
 		functionName: "netRejoin_createServerFn_handler",
-		importer: () => import("./api-CqKx0nDV.mjs")
+		importer: () => import("./api-Cdy6LvRQ.mjs")
 	},
 	"c863eef5e87854022b362f26f321d98a7752563244b6bf8043f48c6e5e79acfc": {
 		functionName: "netAgain_createServerFn_handler",
-		importer: () => import("./api-CqKx0nDV.mjs")
+		importer: () => import("./api-Cdy6LvRQ.mjs")
 	},
 	"fafa464b4c4488361c51f863768135107e02c148e255f23da160ffa440fc3f99": {
 		functionName: "netStart_createServerFn_handler",
-		importer: () => import("./api-CqKx0nDV.mjs")
+		importer: () => import("./api-Cdy6LvRQ.mjs")
 	}
 };
 async function getServerFnById(id, access) {
@@ -1408,7 +1408,7 @@ var getBaseManifest = getProdBaseManifest;
 var createEarlyHintsForRequest = createEarlyHintsCollector;
 async function loadEntries() {
 	const [routerEntry, startEntry, pluginAdapters] = await Promise.all([
-		import("./router-ByYxWN2G.mjs").then((n) => n.t),
+		import("./router-DDHdWK4u.mjs").then((n) => n.t),
 		import("./start-5Z2QO8AU.mjs"),
 		import("./empty-plugin-adapters-D9UWiqvJ.mjs")
 	]);

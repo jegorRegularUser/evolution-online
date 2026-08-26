@@ -87,6 +87,14 @@ function pickDev(state: GameState, acts: GameAction[]): GameAction {
       s = 6 - p.animals.length * 1.4;
       if (p.animals.length === 0) s = 14;
       if (state.lastYear) s = 8;
+      // «Континенты»: бот расселяет по континентам — предпочитает менее населённый,
+      // а если в руке есть водоплавающая грань, животное всё равно попадёт в океан.
+      if (a.zoneId) {
+        const inZone = p.animals.filter((x) => x.zoneId === a.zoneId).length;
+        s -= inZone * 0.6;
+        const card = p.hand.find((c) => c.id === a.cardId);
+        if (card?.faces.includes("swimming")) s += 0.5; // уйдёт в океан — там свободнее
+      }
     }
     if (a.type === "devPlayTrait") {
       const card = p.hand.find((c) => c.id === a.cardId);
@@ -100,6 +108,14 @@ function pickDev(state: GameState, acts: GameAction[]): GameAction {
         }
         if (trait === "carnivore" && animal.ownerId === p.id) s += 3;
         if (trait === "fatTissue" && animal.ownerId === p.id) s += 2;
+        // Хищника выгоднее класть туда, где больше чужих голодных жертв.
+        if (trait === "carnivore" && animal.ownerId === p.id && a.face !== undefined) {
+          const zone = animal.zoneId ?? "laurasia";
+          const preyHere = state.players
+            .flatMap((x) => x.animals)
+            .filter((x) => x.ownerId !== p.id && x.zoneId === zone).length;
+          s += Math.min(preyHere, 3) * 0.7;
+        }
         if (state.lastYear) s += TRAITS[trait].scoreBonus * 2 + 1;
       }
     }
@@ -118,6 +134,12 @@ function pickDev(state: GameState, acts: GameAction[]): GameAction {
 
 function hunger(a: Animal): number {
   return Math.max(0, foodNeeded(a) - a.food);
+}
+
+/** Есть ли вообще еда, доступная этому игроку (по всем его территориям). */
+function usedAllFood(state: GameState): boolean {
+  if (!state.modules.continents) return state.foodBank <= 0;
+  return Object.values(state.territoryFood ?? {}).every((v) => (v ?? 0) <= 0);
 }
 
 function pickFeed(state: GameState, acts: GameAction[]): GameAction {
@@ -161,6 +183,21 @@ function pickFeed(state: GameState, acts: GameAction[]): GameAction {
       // Топтун тратит ход: полезен, только если соперники голоднее нас.
       s = oppHungry > myHungry ? 2.5 : -1;
       if (state.foodBank <= 1) s -= 1;
+    }
+    if (a.type === "feedMigrate") {
+      // Миграция — запасной ход: полезна при переезде к еде, иначе избегаем.
+      const mv = findAnimal(state, a.moves[0]!.animalId);
+      s = 3;
+      if (mv) {
+        // Уезжающее голодное животное из пустой зоны — да; сытая жизнь — нет.
+        s -= hunger(mv);
+      }
+      if (myHungry > 0 && !usedAllFood(state)) s -= 6;
+    }
+    if (a.type === "feedEndTurn") {
+      // Завершать ход есть смысл, только если он уже чем-то занят.
+      const used = state.turnUse;
+      s = used.foodTaken || used.combatUsed || used.grazers.length > 0 ? 2 : -5;
     }
     if (a.type === "feedSkip") {
       s = myHungry === 0 ? 4 : -3;

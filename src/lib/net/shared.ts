@@ -75,6 +75,12 @@ export const createRoomInput = z.object({
   capacity: z.union([z.literal(2), z.literal(3), z.literal(4)]),
   botSeats: z.number().int().min(0).max(3),
   difficulty: z.enum(["easy", "normal", "hard"]) satisfies z.ZodType<Difficulty>,
+  /** Включённые дополнения; ключи валидируются строго (белый список). */
+  modules: z
+    .object({ continents: z.boolean().optional() })
+    .partial()
+    .default({})
+    .optional(),
 });
 export type CreateRoomInput = z.infer<typeof createRoomInput>;
 

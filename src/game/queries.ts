@@ -1,5 +1,5 @@
 import { TRAITS } from "./traits.ts";
-import type { Animal, GameState, Player, TraitId, TraitInstance } from "./types.ts";
+import type { Animal, GameState, Player, TerritoryId, TraitId, TraitInstance } from "./types.ts";
 
 /** Свойство активно: раскрыто и не отключено (шов под неоплазию/мутации). */
 export function isActive(t: TraitInstance): boolean {
@@ -48,6 +48,52 @@ export function foodNeeded(animal: Animal, includeHidden = false): number {
   return n;
 }
 
+/** Территория животного; вне «Континентов» зоны нет — все в одном поле. */
+export function territoryOf(state: GameState, a: Animal): TerritoryId | undefined {
+  return state.modules.continents ? a.zoneId : undefined;
+}
+
+/**
+ * Паралич стрекательными клетками: хищник теряет ВСЕ свойства до конца фазы
+ * питания (остаётся базовая потребность 1), в океане ещё и водоплавающее.
+ */
+export function isParalyzed(state: GameState, animalId: string): boolean {
+  return Boolean(state.paralyzed?.includes(animalId));
+}
+
+/**
+ * Активен ли хищник как хищник: не спит, голоден, жив и не парализован.
+ * Свойства сытого (и парализованного) животного не работают.
+ */
+export function canHuntWith(state: GameState, carnivore: Animal): boolean {
+  if (!hasTrait(carnivore, "carnivore")) return false;
+  if (carnivore.hibernating || isFed(carnivore)) return false;
+  return !isParalyzed(state, carnivore.id);
+}
+
+/** Сколько животных со «стадностью» и сколько хищников находится в локации. */
+export function herdingBalance(
+  state: GameState,
+  zone: TerritoryId,
+): { herding: number; carnivores: number } {
+  let herding = 0;
+  let carnivores = 0;
+  for (const a of allAnimals(state)) {
+    if (territoryOf(state, a) !== zone) continue;
+    if (a.traits.some((t) => t.type === "herding" && isActive(t))) herding += 1;
+    if (hasTrait(a, "carnivore")) carnivores += 1;
+  }
+  return { herding, carnivores };
+}
+
+/** Защищено ли стадное животное в своей локации: стадных строго больше хищников. */
+export function herdingProtects(state: GameState, prey: Animal): boolean {
+  if (!state.modules.continents) return false;
+  if (!prey.traits.some((t) => t.type === "herding" && isActive(t))) return false;
+  const bal = herdingBalance(state, prey.zoneId ?? "laurasia");
+  return bal.herding > bal.carnivores;
+}
+
 export function isFed(animal: Animal, includeHidden = false): boolean {
   if (animal.hibernating) return true;
   return animal.food >= foodNeeded(animal, includeHidden);
@@ -86,10 +132,18 @@ export function canAttack(state: GameState, carnivore: Animal, prey: Animal): bo
   if (carnivore.id === prey.id) return false;
   if (!hasTrait(carnivore, "carnivore")) return false;
   if (carnivore.hibernating) return false;
-  if (isFed(carnivore) && emptyFatSlots(carnivore) === 0) return false;
+  // Накормленный хищник не нападает: свойства сытого животного не работают.
+  if (isFed(carnivore)) return false;
+  // Парализованный стрекательными клетками — не хищник вовсе.
+  if (isParalyzed(state, carnivore.id)) return false;
 
-  // Шов под «Континенты»: зоны размещения; в базовой игре зоны нет — атака разрешена.
-  if (state.modules.continents && carnivore.zoneId !== prey.zoneId) return false;
+  if (state.modules.continents) {
+    // Атаковать можно только в своей территории.
+    if (carnivore.zoneId !== prey.zoneId) return false;
+    // Стадность: одно стадное уязвимо даже против одного хищника; защита
+    // включается, только когда стадных в локации строго больше, чем хищников.
+    if (herdingProtects(state, prey)) return false;
+  }
 
   if (livingSymbiontProtects(state, prey)) return false;
   const aquaticRule = [...carnivore.traits, ...prey.traits].some(
@@ -114,6 +168,11 @@ export function animalValue(animal: Animal): number {
     v += 1 + TRAITS[t.type].scoreBonus;
   }
   return v;
+}
+
+/** Животное мигрирует само (свойство «миграция» активно и не парализовано). */
+export function canMigrate(state: GameState, a: Animal): boolean {
+  return a.traits.some((t) => t.type === "migration" && isActive(t)) && !a.hibernating && !isParalyzed(state, a.id);
 }
 
 export function visibleTraits(animal: Animal) {

@@ -30,6 +30,7 @@ export function NetMenuPanel() {
   // боты добавляются кнопкой в лобби.
   const [bots, setBots] = useState(0);
   const [difficulty, setDifficulty] = useState<Difficulty>("normal");
+  const [continents, setContinents] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -187,6 +188,29 @@ export function NetMenuPanel() {
             </div>
           </div>
 
+          <div className="mb-3">
+            <p className="mb-1.5 text-xs text-muted">Дополнение</p>
+            <button
+              type="button"
+              onClick={() => setContinents((v) => !v)}
+              aria-pressed={continents}
+              className={cn(
+                "flex w-full items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-sm",
+                continents ? "border-accent bg-accent/15 text-fg" : "border-border bg-bg text-fg hover:bg-surface-2",
+              )}
+            >
+              <span>Континенты — Лавразия, Гондвана и Океан</span>
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
+                  continents ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
+                )}
+              >
+                {continents ? "вкл" : "выкл"}
+              </span>
+            </button>
+          </div>
+
           <Button
             className="w-full"
             size="lg"
@@ -198,6 +222,7 @@ export function NetMenuPanel() {
                   capacity,
                   botSeats: bots,
                   difficulty,
+                  modules: continents ? { continents: true } : {},
                 }),
               )
             }

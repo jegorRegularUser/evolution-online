@@ -5,8 +5,12 @@ import type { TraitId } from "@/game/types";
  * Стиль: винтажный натуралистический атлас — тушь и акварель на пергаменте.
  */
 
-/** Арт карт свойств. У mimicry арт — гравюра на чёрном (см. DARK_ART). */
-export const TRAIT_ART: Record<TraitId, string> = {
+/**
+ * Арт карт свойств. У mimicry арт — гравюра на чёрном (см. DARK_ART).
+ * Свойства «Континентов» имеют собственные картинки; если какой-то ключ
+ * временно без арта, UI рисует векторный глиф (см. hasTraitArt).
+ */
+export const TRAIT_ART: Partial<Record<TraitId, string>> = {
   carnivore: "/img/trait/carnivore.jpg",
   swimming: "/img/trait/swimming.jpg",
   camouflage: "/img/trait/camouflage.jpg",
@@ -26,7 +30,21 @@ export const TRAIT_ART: Record<TraitId, string> = {
   poisonous: "/img/trait/poisonous.jpg",
   hibernation: "/img/trait/hibernation.jpg",
   mimicry: "/img/trait/mimicry.jpg",
+  // Дополнение «Континенты»
+  migration: "/img/trait/migration.jpg",
+  remora: "/img/trait/remora.jpg",
+  herding: "/img/trait/herding.jpg",
+  nematocysts: "/img/trait/nematocysts.jpg",
+  regeneration: "/img/trait/regeneration.jpg",
+  recombination: "/img/trait/recombination.jpg",
+  edificator: "/img/trait/edificator.jpg",
+  neoplasia: "/img/trait/neoplasia.jpg",
 };
+
+/** Есть ли сгенерированная картинка свойства; нет — UI рисует векторный глиф. */
+export function hasTraitArt(id: TraitId): boolean {
+  return Boolean(TRAIT_ART[id]);
+}
 
 /** Арты с чёрным фоном: в пергаментных карточках кладутся на тёмную плашку. */
 export const DARK_ART: ReadonlySet<TraitId> = new Set<TraitId>(["mimicry"]);
@@ -40,9 +58,14 @@ export function speciesArt(opts: { swimming?: boolean; carnivore?: boolean; bulk
 
 export const SPECIES_EXTINCT = "/img/species/extinct.jpg";
 
-/** Жетоны еды. */
+/**
+ * Жетоны еды. red — фишка из кормовой базы, blue — мясо и всё, что приходит
+ * от свойств (охота, сотрудничество, пиратство, падальщик, хвост, жир).
+ */
 export const TOKEN = {
   meat: "/img/token/meat.jpg",
+  red: "/img/token/meat.jpg",
+  blue: "/img/token/blue.jpg",
   plant: "/img/token/plant.jpg",
   fat: "/img/token/fat.jpg",
 } as const;
@@ -65,4 +88,11 @@ export const PHASE_ICON: Partial<Record<string, string>> = {
   foodBank: "/img/phase/roll-food.png",
   feeding: "/img/phase/feeding.png",
   extinction: "/img/phase/extinction.png",
+};
+
+/** Арты территорий «Континентов»: фон полос и миниатюры банков. */
+export const TERRITORY_ART: Record<"laurasia" | "gondwana" | "ocean", string> = {
+  laurasia: "/img/world/laurasia.jpg",
+  gondwana: "/img/world/gondwana.jpg",
+  ocean: "/img/world/ocean.jpg",
 };

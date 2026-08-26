@@ -108,7 +108,7 @@ async function autoStep(page) {
       return "animal";
     }
   }
-  for (const label of ["Взять еду", "Жир", "Спячка", "Только топтать", "Охота", "Пас"]) {
+  for (const label of ["Взять еду", "Жир", "Спячка", "Охота", "Топотун", "Закончить ход", "Пас"]) {
     if (label === lastLabel && label !== "Охота") continue;
     const b = page.getByRole("button", { name: label, exact: true });
     if ((await b.count()) > 0 && (await b.first().isEnabled().catch(() => false))) {

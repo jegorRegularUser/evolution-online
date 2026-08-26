@@ -16,7 +16,7 @@ import {
   legalFeedActions,
 } from "../../game/engine.ts";
 import { chooseAIAction } from "../../game/ai.ts";
-import type { Difficulty, GameAction, GameState } from "../../game/types.ts";
+import type { Difficulty, GameAction, GameState, ModuleId } from "../../game/types.ts";
 import type {
   CreateRoomInput,
   PollResult,
@@ -45,6 +45,7 @@ interface RoomRow {
   status: RoomStatus;
   capacity: number;
   difficulty: Difficulty;
+  modules: Partial<Record<ModuleId, boolean>> | null;
   version: number;
   state: GameState | null;
   auto_step_at: unknown;
@@ -75,7 +76,7 @@ function isUniqueViolation(e: unknown): boolean {
 
 async function readRoom(sql: SqlLike, code: string): Promise<RoomRow | null> {
   const rows = await sql.query<Omit<RoomRow, "state"> & { state_json: unknown }>(
-    `select code, status, capacity, difficulty, version, state as state_json,
+    `select code, status, capacity, difficulty, modules, version, state as state_json,
             auto_step_at, created_at
        from evo_rooms where code = $1`,
     [code],
@@ -86,6 +87,7 @@ async function readRoom(sql: SqlLike, code: string): Promise<RoomRow | null> {
     ...r,
     status: r.status as RoomStatus,
     difficulty: r.difficulty as Difficulty,
+    modules: (r.modules as Partial<Record<ModuleId, boolean>> | null) ?? {},
     state: (r.state_json as GameState | null) ?? null,
   };
 }
@@ -330,9 +332,15 @@ export function createRoomService(
         const code = makeCode();
         try {
           await sql.query(
-            `insert into evo_rooms (code, capacity, difficulty, seed)
-             values ($1, $2, $3, $4)`,
-            [code, input.capacity, input.difficulty, Math.floor(Math.random() * 1_000_000)],
+            `insert into evo_rooms (code, capacity, difficulty, seed, modules)
+             values ($1, $2, $3, $4, $5::jsonb)`,
+            [
+              code,
+              input.capacity,
+              input.difficulty,
+              Math.floor(Math.random() * 1_000_000),
+              JSON.stringify(input.modules ?? {}),
+            ],
           );
           await sql.query(
             `insert into evo_seats (room_code, seat, name, token)
@@ -415,7 +423,13 @@ export function createRoomService(
         throw new NetError("Заполните все места — людьми или ботами");
       }
       const defs = seats.map((s) => ({ name: s.name, isAI: s.is_ai }));
-      const state = createGame(room.capacity, room.difficulty, Math.floor(Math.random() * 1_000_000), defs);
+      const state = createGame(
+        room.capacity,
+        room.difficulty,
+        Math.floor(Math.random() * 1_000_000),
+        defs,
+        room.modules ?? {},
+      );
       await casUpdateStrict(sql, code, room.version, {
         state,
         status: "playing",
@@ -496,14 +510,47 @@ type GlobalRef = typeof globalThis & {
 };
 
 /**
+ * Та же схема, что в migrations/0002_net_rooms.sql, но исполняется и в рантайме:
+ * на Vercel `db:migrate` выполняется на этапе билда и молча пропускается, если
+ * DATABASE_URL не был виден процессу сборки. Идемпотентно — можно вызывать всегда.
+ */
+export const NET_TABLES_DDL = `
+create table if not exists evo_rooms (
+  code         text primary key,
+  status       text not null default 'lobby',
+  capacity     int  not null check (capacity between 2 and 4),
+  difficulty   text not null default 'normal',
+  seed         bigint not null,
+  state        jsonb,
+  version      int  not null default 0,
+  auto_step_at timestamptz,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+create table if not exists evo_seats (
+  room_code    text not null references evo_rooms(code) on delete cascade,
+  seat         int  not null check (seat between 0 and 3),
+  name         text not null,
+  token        text not null,
+  is_ai        boolean not null default false,
+  last_seen_at timestamptz not null default now(),
+  primary key (room_code, seat)
+);
+alter table evo_rooms add column if not exists modules jsonb not null default '{}';
+`;
+
+/**
  * Общий экземпляр для прод-сервера. @/lib/db импортируется динамически:
  * node-тесты подставляют свой SqlLike и никогда не трогают Vite-специфику db.ts.
+ * Перед первым использованием гарантируем схему (см. NET_TABLES_DDL).
  */
 export function getRoomService(): Promise<RoomService> {
   const g = globalThis as GlobalRef;
-  g.__evoNetService__ ??= import("@/lib/db").then(({ getSql }) =>
-    getSql().then((sql) => createRoomService(sql as SqlLike)),
-  );
+  g.__evoNetService__ ??= import("@/lib/db").then(async ({ getSql }) => {
+    const sql = await getSql();
+    await sql.query(NET_TABLES_DDL);
+    return createRoomService(sql as SqlLike);
+  });
   return g.__evoNetService__;
 }
 

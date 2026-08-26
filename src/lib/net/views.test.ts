@@ -21,6 +21,7 @@ function withHidden(): GameState {
     cardId: "c9",
     traits: [{ id: "t1", cardId: "c9", type: "parasite", hidden: true, playSeq: 5 }],
     food: 0,
+    blueFood: 0,
     fatTokens: 0,
     hibernating: false,
     hibernatedLastYear: false,

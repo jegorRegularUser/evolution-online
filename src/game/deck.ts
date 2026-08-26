@@ -1,4 +1,4 @@
-import type { Card, TraitId } from "./types.ts";
+import type { Card, ModuleId, TraitId } from "./types.ts";
 
 const SINGLES: Array<[TraitId, number]> = [
   ["mimicry", 4],
@@ -26,9 +26,37 @@ const DUALS: Array<[TraitId, TraitId, number]> = [
   ["hibernation", "carnivore", 4],
 ];
 
+/**
+ * Карты «Континентов» (Правильные игры, 2012): 42 карты восьми новых свойств.
+ * Миграция крупнее всех, прилипала идёт в комплекте к ней.
+ */
+const CONTINENTS_SINGLES: Array<[TraitId, number]> = [
+  ["migration", 8],
+  ["remora", 6],
+  ["herding", 4],
+  ["nematocysts", 6],
+  ["edificator", 6],
+  ["regeneration", 4],
+];
+
+/** Рекомбинация — парная карта; неоплазия кладётся «под» свойства. */
+const CONTINENTS_PAIRS: Array<[TraitId, number]> = [
+  ["recombination", 4],
+  ["neoplasia", 2],
+];
+
 export const DECK_SIZE = SINGLES.reduce((n, [, c]) => n + c, 0) + DUALS.reduce((n, [, , c]) => n + c, 0);
 
-export function buildDeck(nextId: (prefix: string) => string): Card[] {
+export function continentsDeckSize(): number {
+  return (
+    CONTINENTS_SINGLES.reduce((n, [, c]) => n + c, 0) +
+    CONTINENTS_PAIRS.reduce((n, [, c]) => n + c, 0)
+  );
+}
+
+export const BASE_DECK_SIZE = DECK_SIZE;
+
+export function buildDeck(nextId: (prefix: string) => string, modules?: Partial<Record<ModuleId, boolean>>): Card[] {
   const cards: Card[] = [];
   for (const [trait, n] of SINGLES) {
     for (let i = 0; i < n; i++) {
@@ -40,5 +68,19 @@ export function buildDeck(nextId: (prefix: string) => string): Card[] {
       cards.push({ id: nextId("c"), faces: [a, b] });
     }
   }
+  if (modules?.continents) {
+    for (const [trait, n] of CONTINENTS_SINGLES) {
+      for (let i = 0; i < n; i++) {
+        cards.push({ id: nextId("c"), faces: [trait] });
+      }
+    }
+    for (const [trait, n] of CONTINENTS_PAIRS) {
+      // Двусторонние карты не имеет смысла делать: у этих свойств по одной грани.
+      for (let i = 0; i < n; i++) {
+        cards.push({ id: nextId("c"), faces: [trait] });
+      }
+    }
+  }
   return cards;
 }
+

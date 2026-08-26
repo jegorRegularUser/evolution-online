@@ -8,7 +8,7 @@ import {
   legalDevActions,
   legalFeedActions,
 } from "@/game/engine";
-import type { Difficulty, GameAction, GameSpeed, GameState } from "@/game/types";
+import type { Difficulty, GameAction, GameSpeed, GameState, ModuleId } from "@/game/types";
 import { NetSession, type NetHooks, type NetStatus } from "@/lib/net/session";
 import type { SeatInfo } from "@/lib/net/shared";
 
@@ -40,6 +40,8 @@ export interface NetCreateConfig {
   capacity: 2 | 3 | 4;
   botSeats: number;
   difficulty: Difficulty;
+  /** Включённые дополнения стола (пока «Континенты»). */
+  modules?: Partial<Record<ModuleId, boolean>>;
 }
 
 interface GameStore {
@@ -51,10 +53,13 @@ interface GameStore {
   rulesOpen: boolean;
   logOpen: boolean;
   speed: GameSpeed;
+  /** Дополнения, выбранные в меню — применяются к новой solo-партии. */
+  modules: Partial<Record<ModuleId, boolean>>;
   /** solo — партия против ботов на этом устройстве; net — сетевой стол. */
   mode: "solo" | "net";
   net: NetUiState | null;
   start: (players: number, difficulty: Difficulty) => void;
+  setModules: (m: Partial<Record<ModuleId, boolean>>) => void;
   reset: () => void;
   dispatch: (action: GameAction) => void;
   setIntent: (intent: UiIntent) => void;
@@ -151,13 +156,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
   rulesOpen: false,
   logOpen: false,
   speed: "normal",
+  modules: {},
   mode: "solo",
   net: null,
 
   start: (players, difficulty) => {
     clearAi();
     const seed = Date.now() % 1_000_000;
-    const state = createGame(players, difficulty, seed);
+    const state = createGame(players, difficulty, seed, undefined, get().modules);
     lastBotActor = null;
     set({
       state,
@@ -167,6 +173,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
     queueMicrotask(() => get().tickAI());
   },
+
+  setModules: (modules) => set({ modules }),
 
   reset: () => {
     clearAi();

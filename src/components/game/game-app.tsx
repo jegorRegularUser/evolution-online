@@ -2,13 +2,14 @@ import { BookOpen, List, Pause } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { TRAITS } from "@/game/traits";
-import type { Animal, GameAction, GameSpeed, GameState, Player, TraitId } from "@/game/types";
+import type { Animal, GameAction, GameSpeed, GameState, Player, TerritoryId, TraitId } from "@/game/types";
+import { TERRITORIES } from "@/game/types";
 import { currentActor, legalDefenseActions, legalDevActions, legalFeedActions } from "@/game/engine";
 import { canAttack, canReceiveFood, findAnimal, foodNeeded, hasTrait, player } from "@/game/queries";
 import { cn } from "@/lib/utils";
-import { BG, LOGO, PHASE_ICON, TOKEN } from "@/lib/art";
+import { BG, LOGO, PHASE_ICON, TERRITORY_ART, TOKEN } from "@/lib/art";
 import { loadSpeed, useGameStore, type UiIntent } from "@/store/game-store";
-import { AnimalCard, HandCard } from "./cards";
+import { AnimalCard, HandCard, PAIR_COLORS, PairPlate, type PairMark } from "./cards";
 import { Die } from "./icons";
 import { LobbyScreen } from "./net-screens";
 import { GameOverScreen, MenuScreen, RulesPanel } from "./screens";
@@ -98,7 +99,7 @@ function useActionFx(state: GameState | null): FxBadge[] {
           break;
         }
         case "preyKilled":
-          push(anchorOf(animalEl(e.carnivoreId)), "добыча съедена +2", "attack");
+          push(anchorOf(animalEl(e.carnivoreId)), "добыча съедена +2 синие", "attack");
           break;
         case "defenseUsed": {
           const prey = animalEl(e.preyId);
@@ -114,11 +115,25 @@ function useActionFx(state: GameState | null): FxBadge[] {
           break;
         }
         case "foodFromBank":
-          push(anchorOf(animalEl(e.animalId)), "+1", "good");
+          push(anchorOf(animalEl(e.animalId)), "+1 красная", "good");
           break;
-        case "blueFood":
-          if (e.reason === "piracy") push(anchorOf(animalEl(e.animalId)), "пиратство +1", "info");
+        case "blueFood": {
+          // Цвет фишки виден на карточке, а подпись объясняет, откуда она.
+          const label =
+            e.reason === "piracy"
+              ? "пиратство +1 синяя"
+              : e.reason === "cooperation"
+                ? "сотрудничество +1 синяя"
+                : e.reason === "scavenger"
+                  ? "падальщик +1 синяя"
+                  : e.reason === "fat"
+                    ? "жир → синие"
+                    : e.reason === "tailLoss"
+                      ? "+1 синяя"
+                      : null; // «hunt» уже подписан в preyKilled
+          if (label) push(anchorOf(animalEl(e.animalId)), label, "info");
           break;
+        }
         case "bankBurned":
           push(anchorOf(document.querySelector(".felt")), `−${e.amount} база`, "bad");
           break;
@@ -380,6 +395,7 @@ function Table() {
               interactions={getInteraction}
               dying={dying}
               freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
+              continents={Boolean(state.modules.continents)}
             />
           </div>
         ))}
@@ -394,6 +410,7 @@ function Table() {
               interactions={getInteraction}
               dying={dying}
               freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
+              continents={Boolean(state.modules.continents)}
             />
           ))}
         </div>
@@ -404,6 +421,7 @@ function Table() {
           lastYear={state.lastYear}
           phase={state.phase}
           bank={state.foodBank}
+          territoryFood={state.modules.continents ? state.territoryFood : undefined}
           deckLeft={state.deckCount ?? state.deck.length}
           foodRoll={state.foodRoll}
           lastLog={lastLog}
@@ -421,6 +439,7 @@ function Table() {
               interactions={getInteraction}
               dying={dying}
               freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
+              continents={Boolean(state.modules.continents)}
             />
           ))}
         </div>
@@ -433,6 +452,7 @@ function Table() {
           interactions={getInteraction}
           dying={dying}
           freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
+          continents={Boolean(state.modules.continents)}
           style={wideSeats ? { gridArea: "human" } : undefined}
         />
       </main>
@@ -460,7 +480,8 @@ function Table() {
             human={human}
             intent={intent}
             disabled={!isHumanTurn || Boolean(state.pendingAttack)}
-            onPlayAnimal={(cardId) => dispatch({ type: "devPlayAnimal", cardId })}
+            continents={Boolean(state.modules.continents)}
+            onPlayAnimal={(cardId, zoneId) => dispatch({ type: "devPlayAnimal", cardId, zoneId })}
             onPickTrait={(cardId, face) => {
               const card = human.hand.find((c) => c.id === cardId);
               const trait = card?.faces[face] as TraitId | undefined;
@@ -476,6 +497,7 @@ function Table() {
             intentKind={intent.kind}
             bank={state.foodBank}
             onIntent={setIntent}
+            onEndTurn={() => dispatch({ type: "feedEndTurn" })}
             onSkip={() => dispatch({ type: "feedSkip" })}
           />
         ) : (
@@ -636,7 +658,7 @@ function animalHighlight(
   return false;
 }
 
-/** Табло игрока со его животными. */
+/** Табло игрока со его животными; парные карты кладутся между животными. */
 const PlayerSection = memo(function PlayerSection({
   p,
   isHuman,
@@ -645,6 +667,7 @@ const PlayerSection = memo(function PlayerSection({
   interactions,
   dying,
   freshSince,
+  continents,
   style,
 }: {
   p: Player;
@@ -654,9 +677,181 @@ const PlayerSection = memo(function PlayerSection({
   interactions: (a: Animal) => Interaction;
   dying: Set<string>;
   freshSince?: number;
+  /** «Континенты»: животные группируются по территориям. */
+  continents?: boolean;
   style?: React.CSSProperties;
 }) {
+  const dispatch = useGameStore((s) => s.dispatch);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  // Ссылка на перетаскиваемое для drop по зоне (замыкание зон не тянет стейт).
+  const dragIdRef = useRef<string | null>(null);
   const active = actorId === p.id;
+
+  /**
+   * Разметка пар этого табло. У животного бывает две пары плюс симбионт,
+   * поэтому каждая парная карта получает свой цвет (по порядку выкладывания),
+   * а подпись говорит, кто напарник: у симбиоза — кто именно симбионт.
+   */
+  const pairs = useMemo(() => {
+    const numberOf = new Map<string, number>();
+    p.animals.forEach((a, i) => numberOf.set(a.id, i + 1));
+    const links = p.animals
+      .flatMap((a) => a.traits.filter((t) => t.pairWith).map((t) => ({ owner: a, t })))
+      .sort((x, y) => x.t.playSeq - y.t.playSeq || x.t.id.localeCompare(y.t.id));
+
+    const colorOf = new Map<string, string>();
+    for (const { t } of links) {
+      if (!colorOf.has(t.cardId)) {
+        colorOf.set(t.cardId, PAIR_COLORS[colorOf.size % PAIR_COLORS.length]!);
+      }
+    }
+
+    const marks: Record<string, PairMark> = {};
+    /** Подпись плашки по id карты пары: «№1 ↔ №2», «симбионт — №1». */
+    const plateNote = new Map<string, string>();
+    for (const { t } of links) {
+      const color = colorOf.get(t.cardId)!;
+      const partnerNo = numberOf.get(t.pairWith!);
+      const partner = partnerNo ? `№${partnerNo}` : "напарник";
+      if (t.type === "symbiosis") {
+        // Роль «a» — симбионт, роль «b» — тот, кого симбионт защищает.
+        marks[t.id] = {
+          color,
+          note: t.pairRole === "a" ? `симбионт для ${partner}` : `симбионт — ${partner}`,
+        };
+      } else {
+        marks[t.id] = { color, note: `с ${partner}` };
+      }
+    }
+    // Плашке нужна подпись про обе стороны: считаем её по роли «a».
+    for (const { owner, t } of links) {
+      if (t.pairRole !== "a") continue;
+      const selfNo = numberOf.get(owner.id);
+      const partnerNo = numberOf.get(t.pairWith!);
+      const self = selfNo ? `№${selfNo}` : "?";
+      const partner = partnerNo ? `№${partnerNo}` : "?";
+      plateNote.set(
+        t.cardId,
+        t.type === "symbiosis" ? `симбионт ${self} → ${partner}` : `${self} ↔ ${partner}`,
+      );
+    }
+    return { colorOf, marks, plateNote };
+  }, [p.animals]);
+
+  const cardProps = (a: Animal) => ({
+    draggable: isHuman,
+    dropTarget: isHuman && dragId !== null && overId === a.id && dragId !== a.id,
+    onDragStartCard: isHuman
+      ? (e: React.DragEvent) => {
+          setDragId(a.id);
+          dragIdRef.current = a.id;
+          e.dataTransfer.setData("text/plain", a.id);
+          e.dataTransfer.effectAllowed = "move";
+        }
+      : undefined,
+    onDragOverCard: isHuman
+      ? (e: React.DragEvent) => {
+          if (dragId && dragId !== a.id) {
+            e.preventDefault();
+            setOverId(a.id);
+          }
+        }
+      : undefined,
+    onDropCard: isHuman
+      ? () => {
+          if (dragId && dragId !== a.id) dispatch({ type: "reorderAnimal", animalId: dragId, beforeId: a.id });
+          setDragId(null);
+          setOverId(null);
+        }
+      : undefined,
+    onDragEndCard: isHuman
+      ? () => {
+          setDragId(null);
+          setOverId(null);
+        }
+      : undefined,
+  });
+  const renderCard = (a: Animal, no: number) => {
+    const it = interactions(a);
+    return (
+      <AnimalCard
+        key={a.id}
+        animal={a}
+        no={no}
+        pairMarks={pairs.marks}
+        selected={it.selected}
+        highlight={it.highlight}
+        dimmed={it.dimmed}
+        dying={dying.has(a.id)}
+        freshSince={freshSince}
+        {...(isHuman ? cardProps(a) : {})}
+      />
+    );
+  };
+
+  const rows: React.ReactNode[] = [];
+  if (p.animals.length === 0) {
+    rows.push(
+      <p key="empty" className="text-xs text-subtle">
+        {isHuman ? "Выложите животное из руки" : "Нет животных"}
+      </p>,
+    );
+  } else {
+    // Между двумя соседними связанными животными лежит их парная карта.
+    // Такую цепочку собираем в одну группу: на узком экране она идёт столбиком
+    // (плашка — полосой между карточками), на широком — рядом.
+    const linkBetween = (x: Animal, y: Animal) =>
+      x.traits.find((t) => t.pairWith === y.id) ?? y.traits.find((t) => t.pairWith === x.id);
+    let i = 0;
+    while (i < p.animals.length) {
+      const first = p.animals[i]!;
+      const items: React.ReactNode[] = [renderCard(first, i + 1)];
+      while (i + 1 < p.animals.length) {
+        const cur = p.animals[i]!;
+        const next = p.animals[i + 1]!;
+        const link = linkBetween(cur, next);
+        if (!link) break;
+        items.push(
+          <PairPlate
+            key={`pair-${link.cardId}`}
+            type={link.type}
+            color={pairs.colorOf.get(link.cardId)}
+            note={pairs.plateNote.get(link.cardId)}
+          />,
+        );
+        items.push(renderCard(next, i + 2));
+        i += 1;
+      }
+      if (items.length === 1) {
+        rows.push(items[0]);
+      } else {
+        rows.push(
+          <div
+            key={`pair-group-${first.id}`}
+            className="flex shrink-0 flex-col items-stretch gap-2 sm:flex-row sm:items-stretch"
+          >
+            {items}
+          </div>,
+        );
+      }
+      i += 1;
+    }
+  }
+
+  const dropRow = isHuman
+    ? {
+        onDragOver: (e: React.DragEvent) => {
+          if (dragId) e.preventDefault();
+        },
+        onDrop: () => {
+          if (dragId) dispatch({ type: "reorderAnimal", animalId: dragId });
+          setDragId(null);
+          setOverId(null);
+        },
+      }
+    : {};
+
   return (
     <section
       style={style}
@@ -680,29 +875,80 @@ const PlayerSection = memo(function PlayerSection({
           рука {p.handCount ?? p.hand.length} · сброс {p.discardCount}
         </span>
       </div>
-      {p.animals.length === 0 ? (
-        <p className="text-xs text-subtle">{isHuman ? "Выложите животное из руки" : "Нет животных"}</p>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {p.animals.map((a) => {
-            const it = interactions(a);
+      {continents ? (
+        // «Континенты»: территории игрока — две полосы континентов и океан.
+        <div className="flex flex-col gap-2">
+          {TERRITORIES.map((t) => {
+            const animals = p.animals.filter((a) => (a.zoneId ?? "laurasia") === t.id);
             return (
-              <AnimalCard
-                key={a.id}
-                animal={a}
-                selected={it.selected}
-                highlight={it.highlight}
-                dimmed={it.dimmed}
-                dying={dying.has(a.id)}
-                freshSince={freshSince}
-              />
+              <TerritoryRow
+                key={t.id}
+                zone={t.id}
+                name={t.name}
+                count={animals.length}
+                dropHint={isHuman}
+                onDropZone={
+                  isHuman
+                    ? () => dispatch({ type: "reorderAnimal", animalId: dragIdRef.current!, toZoneId: t.id })
+                    : undefined
+                }
+              >
+                {animals.length === 0 ? (
+                  <span className="px-1 text-[11px] text-subtle">{t.id === "ocean" ? "пусто (нужна водоплавающая)" : "пусто"}</span>
+                ) : null}
+                {animals.map((a, i) => renderCard(a, i + 1))}
+              </TerritoryRow>
             );
           })}
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-stretch gap-2" {...dropRow}>
+          {rows}
         </div>
       )}
     </section>
   );
 });
+
+/** Полоса одной территории в табло игрока («Континенты»). */
+function TerritoryRow({
+  zone,
+  name,
+  count,
+  children,
+  dropHint,
+  onDropZone,
+}: {
+  zone: TerritoryId;
+  name: string;
+  count: number;
+  children: React.ReactNode;
+  dropHint?: boolean;
+  onDropZone?: () => void;
+}) {
+  return (
+    <div
+      data-zone={zone}
+      onDragOver={dropHint ? (e) => e.preventDefault() : undefined}
+      onDrop={onDropZone}
+      className={cn(
+        "relative flex min-h-[52px] flex-wrap items-stretch gap-2 rounded-[var(--radius-md)] border border-dashed px-2 py-2",
+        zone === "ocean" ? "border-water/40 bg-water/10" : "border-border-strong/25 bg-bg/40",
+      )}
+    >
+      <img
+        src={TERRITORY_ART[zone]}
+        alt=""
+        aria-hidden
+        className="pointer-events-none absolute inset-0 h-full w-full rounded-[var(--radius-md)] object-cover opacity-[0.08]"
+      />
+      <span className="absolute -top-1.5 left-2 rounded-full border border-border bg-surface px-1.5 text-[9px] font-medium uppercase tracking-[0.14em] text-muted">
+        {name} · {count}
+      </span>
+      {children}
+    </div>
+  );
+}
 
 /** Центральное поле: кубики кормовой базы, банк еды, индикатор года и фазы. */
 function CenterField({
@@ -710,6 +956,7 @@ function CenterField({
   lastYear,
   phase,
   bank,
+  territoryFood,
   deckLeft,
   foodRoll,
   lastLog,
@@ -721,6 +968,8 @@ function CenterField({
   lastYear: boolean;
   phase: string;
   bank: number;
+  /** «Континенты»: базы каждой территории. */
+  territoryFood?: Partial<Record<TerritoryId, number>>;
   deckLeft: number;
   foodRoll: number[] | null;
   lastLog?: string;
@@ -759,6 +1008,8 @@ function CenterField({
         <div className="relative animate-[fade-in_.3s_var(--ease-out)] rounded-full border border-danger/60 bg-danger/15 px-4 py-1.5 text-sm font-medium text-clay">
           Вымирание: погибает {deaths === 0 ? "никто" : `животных: ${deaths}`}
         </div>
+      ) : territoryFood ? (
+        <TerritoryBanks banks={territoryFood} active={phase === "feeding"} />
       ) : (
         <BankPile count={bank} active={phase === "feeding"} />
       )}
@@ -768,6 +1019,43 @@ function CenterField({
       ) : null}
       {lastLog ? <p className="relative max-w-md text-center text-[11px] leading-snug text-muted">{lastLog}</p> : null}
     </section>
+  );
+}
+
+/** Три банка «Континентов»: Лавразия / Гондвана / Океан — в один ряд. */
+function TerritoryBanks({
+  banks,
+  active,
+}: {
+  banks: Partial<Record<TerritoryId, number>>;
+  active: boolean;
+}) {
+  return (
+    <div className="relative grid w-full max-w-sm grid-cols-3 gap-2">
+      {TERRITORIES.map((t) => {
+        const n = banks[t.id] ?? 0;
+        return (
+          <div
+            key={t.id}
+            title={`Кормовая база «${t.name}»`}
+            className={cn(
+              "flex flex-col items-center gap-1 rounded-[var(--radius-md)] border px-2 py-1.5",
+              t.id === "ocean" ? "border-water/50 bg-water/15" : "border-border bg-bg/45",
+            )}
+          >
+            <img src={TERRITORY_ART[t.id]} alt="" className="h-7 w-full rounded-[4px] object-cover opacity-80" />
+            <div className="flex items-center gap-1">
+              {Array.from({ length: Math.min(n, 6) }).map((_, i) => (
+                <img key={`${i}-${n}`} src={TOKEN.meat} alt="" className="token-pop size-3 rounded-full" />
+              ))}
+              {n > 6 ? <span className="text-[10px] tabular-nums text-muted">+{n - 6}</span> : null}
+              {n === 0 ? <span className="text-[10px] text-subtle">{active ? "пусто" : "—"}</span> : null}
+            </div>
+            <span className="font-display text-lg leading-none tabular-nums">{n}</span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -848,6 +1136,7 @@ function DevDock({
   human,
   intent,
   disabled,
+  continents,
   onPlayAnimal,
   onPickTrait,
   onPass,
@@ -855,7 +1144,9 @@ function DevDock({
   human: Player;
   intent: UiIntent;
   disabled?: boolean;
-  onPlayAnimal: (id: string) => void;
+  /** «Континенты»: карта-животное кладётся с выбором континента. */
+  continents?: boolean;
+  onPlayAnimal: (id: string, zoneId?: TerritoryId) => void;
   onPickTrait: (id: string, face: number) => void;
   onPass: () => void;
 }) {
@@ -871,7 +1162,9 @@ function DevDock({
                 ? "Парное свойство: выберите первое животное"
                 : intent.kind === "playPair"
                   ? "Второе животное пары"
-                  : "Карта как животное или свойство"}
+                  : continents
+                    ? "Карта как животное (выберите континент) или свойство"
+                    : "Карта как животное или свойство"}
         </p>
         <Button variant="secondary" size="sm" onClick={onPass} disabled={disabled}>
           Пас
@@ -879,17 +1172,51 @@ function DevDock({
       </div>
       <div data-hand-row className="flex gap-2 overflow-x-auto pb-1">
         {human.hand.map((card) => (
-          <HandCard
-            key={card.id}
-            card={card}
-            disabled={disabled}
-            selected={intent.kind !== "none" && "cardId" in intent && intent.cardId === card.id}
-            selectedFace={"face" in intent && intent.cardId === card.id ? (intent.face as number) : null}
-            onSelect={(face) => {
-              if (face === "animal") onPlayAnimal(card.id);
-              else onPickTrait(card.id, face);
-            }}
-          />
+          <div key={card.id} className="relative shrink-0">
+            <HandCard
+              card={card}
+              disabled={disabled}
+              selected={intent.kind !== "none" && "cardId" in intent && intent.cardId === card.id}
+              selectedFace={"face" in intent && intent.cardId === card.id ? (intent.face as number) : null}
+              onSelect={(face) => {
+                if (face === "animal" && continents) {
+                  // Выбор континента через меню над картой.
+                  const el = document.getElementById(`zone-menu-${card.id}`);
+                  el?.classList.toggle("hidden");
+                } else if (face === "animal") {
+                  onPlayAnimal(card.id);
+                } else {
+                  onPickTrait(card.id, face);
+                }
+              }}
+            />
+            {continents ? (
+              <div id={`zone-menu-${card.id}`} className="absolute inset-x-0 top-8 z-30 hidden flex-col gap-1 p-1">
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => {
+                    document.getElementById(`zone-menu-${card.id}`)?.classList.add("hidden");
+                    onPlayAnimal(card.id, "laurasia");
+                  }}
+                  className="rounded-[var(--radius-xs)] bg-parchment px-1 py-1 text-[10px] font-semibold text-ink shadow-[var(--shadow-card)] hover:bg-parchment-2"
+                >
+                  ↑ Лавразия
+                </button>
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => {
+                    document.getElementById(`zone-menu-${card.id}`)?.classList.add("hidden");
+                    onPlayAnimal(card.id, "gondwana");
+                  }}
+                  className="rounded-[var(--radius-xs)] bg-parchment px-1 py-1 text-[10px] font-semibold text-ink shadow-[var(--shadow-card)] hover:bg-parchment-2"
+                >
+                  ↓ Гондвана
+                </button>
+              </div>
+            ) : null}
+          </div>
         ))}
       </div>
     </div>
@@ -901,12 +1228,14 @@ function FeedDock({
   intentKind,
   bank,
   onIntent,
+  onEndTurn,
   onSkip,
 }: {
   acts: GameAction[];
   intentKind: string;
   bank: number;
   onIntent: (i: { kind: "take" | "hunt" | "pirate" | "hibernate" | "fat" | "graze" | "none" }) => void;
+  onEndTurn: () => void;
   onSkip: () => void;
 }) {
   const dispatch = useGameStore((s) => s.dispatch);
@@ -916,6 +1245,7 @@ function FeedDock({
   const sleeps = acts.filter((a): a is Extract<GameAction, { type: "feedHibernate" }> => a.type === "feedHibernate");
   const fats = acts.filter((a): a is Extract<GameAction, { type: "feedConvertFat" }> => a.type === "feedConvertFat");
   const grazes = acts.filter((a): a is Extract<GameAction, { type: "feedGraze" }> => a.type === "feedGraze");
+  const migrations = acts.filter((a): a is Extract<GameAction, { type: "feedMigrate" }> => a.type === "feedMigrate");
   const canSkip = acts.some((a) => a.type === "feedSkip");
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -977,11 +1307,38 @@ function FeedDock({
             else onIntent({ kind: "graze" });
           }}
         >
-          Топотун
+          Топтун
         </Button>
       ) : null}
+      {migrations.length ? (
+        migrations.length === 1 ? (
+          <Button variant="secondary" size="sm" onClick={() => dispatch(migrations[0])}>
+            Миграция
+          </Button>
+        ) : (
+          <div className="flex items-center gap-1 rounded-[var(--radius-md)] border border-border bg-surface p-1">
+            {migrations.map((m, i) => {
+              const target = m.moves[0]!.to;
+              const label = target === "laurasia" ? "↑ Лавразия" : target === "gondwana" ? "↓ Гондвана" : "≈ Океан";
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => dispatch(m)}
+                  className="rounded-[var(--radius-xs)] px-2 py-1 text-xs font-medium text-fg hover:bg-ink/10"
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        )
+      ) : null}
+      <Button variant="secondary" size="sm" onClick={onEndTurn}>
+        Закончить ход
+      </Button>
       {canSkip ? (
-        <Button variant="ghost" size="sm" onClick={onSkip}>
+        <Button variant="ghost" size="sm" onClick={onSkip} title="Пас до конца фазы питания">
           Пас
         </Button>
       ) : null}
@@ -1002,7 +1359,9 @@ function DefenseDock({
   const running = acts.find((a) => a.type === "chooseDefense" && a.kind === "running");
   const none = acts.find((a) => a.type === "chooseDefense" && a.kind === "none");
   const mimics = acts.filter((a) => a.type === "chooseDefense" && a.kind === "mimicry");
-  const tails = acts.filter((a) => a.type === "chooseDefense" && a.kind === "tailLoss");
+  const tails = acts.filter(
+    (a): a is Extract<GameAction, { type: "chooseDefense" }> => a.type === "chooseDefense" && a.kind === "tailLoss",
+  );
 
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center bg-bg/70 p-3 sm:items-center">
@@ -1022,15 +1381,11 @@ function DefenseDock({
               </Button>
             ) : null,
           )}
-          {tails.map((a) => {
-            if (a.type !== "chooseDefense") return null;
-            const tr = prey?.traits.find((t) => t.id === a.discardTraitId);
-            return (
-              <Button key={a.discardTraitId} variant="secondary" onClick={() => onPick(a)}>
-                Отбросить {tr ? TRAITS[tr.type].name : "свойство"}
-              </Button>
-            );
-          })}
+          {tails.map((a) => (
+            <Button key={a.discardTraitId} variant="secondary" onClick={() => onPick(a)}>
+              Отбросить хвост
+            </Button>
+          ))}
           {none ? (
             <Button variant="danger" onClick={() => onPick(none)}>
               Не защищаться

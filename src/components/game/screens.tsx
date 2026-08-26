@@ -6,6 +6,7 @@ import { TRAITS } from "@/game/traits";
 import type { Difficulty, ScoreBreakdown } from "@/game/types";
 import { BG, DARK_ART, LOGO, TRAIT_ART } from "@/lib/art";
 import { cn } from "@/lib/utils";
+import { TraitGlyph } from "./icons";
 import { useGameStore } from "@/store/game-store";
 
 const SPEEDS: Array<["slow" | "normal" | "fast", string, string]> = [
@@ -14,9 +15,8 @@ const SPEEDS: Array<["slow" | "normal" | "fast", string, string]> = [
   ["fast", "Быстро", "Для тех, кто ждёт только своего хода"],
 ];
 
-/** Зарезервировано под следующий заход: официальные правила дополнений. */
+/** Дополнения: «Континенты» готовы, остальные — по официальным правилам позже. */
 const MODULES: Array<[string, string]> = [
-  ["Континенты", "зоны размещения и расселение животных"],
   ["Растения", "дополнительные источники еды на столе"],
   ["Грибы", "питание, распад и новые цепочки еды"],
   ["Случайные мутации", "скрытые мутации и неоплазия с растущим вирусом"],
@@ -33,6 +33,8 @@ export function MenuScreen({
   const [difficulty, setDifficulty] = useState<Difficulty>("normal");
   const speed = useGameStore((s) => s.speed);
   const setSpeed = useGameStore((s) => s.setSpeed);
+  const continents = useGameStore((s) => Boolean(s.modules.continents));
+  const setModules = useGameStore((s) => s.setModules);
 
   return (
     <>
@@ -137,18 +139,45 @@ export function MenuScreen({
 
         <fieldset>
           <legend className="mb-3 text-sm font-medium text-muted">Дополнения</legend>
-          <ul className="grid gap-2 sm:grid-cols-2">
-            {MODULES.map(([name, hint]) => (
-              <li
-                key={name}
-                title={`${name}: ${hint}. Готовится — официальный пересказ правил следующим обновлением.`}
-                className="flex cursor-not-allowed items-center justify-between rounded-[var(--radius-md)] border border-dashed border-border bg-bg px-3 py-2.5 opacity-60"
+          <div className="grid gap-2">
+            <button
+              type="button"
+              onClick={() => setModules({ continents: !continents })}
+              aria-pressed={continents}
+              title="Континенты: Лавразия и Гондвана с отдельными кормовыми базами, Океан для водоплавающих, миграция, прилипала, стадность, стрекательные клетки, эдификатор, регенерация, рекомбинация, неоплазия"
+              className={cn(
+                "flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left",
+                continents ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2",
+              )}
+            >
+              <span>
+                <span className="block text-sm font-medium text-fg">Континенты</span>
+                <span className="mt-0.5 block text-xs text-muted">
+                  две кормовые базы и океан · миграция · новые свойства
+                </span>
+              </span>
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
+                  continents ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
+                )}
               >
-                <span className="text-sm text-fg">{name}</span>
-                <span className="rounded-full bg-ink/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">скоро</span>
-              </li>
-            ))}
-          </ul>
+                {continents ? "вкл" : "выкл"}
+              </span>
+            </button>
+            <ul className="grid gap-2 sm:grid-cols-2">
+              {MODULES.map(([name, hint]) => (
+                <li
+                  key={name}
+                  title={`${name}: ${hint}. Готовится — официальный пересказ правил следующим обновлением.`}
+                  className="flex cursor-not-allowed items-center justify-between rounded-[var(--radius-md)] border border-dashed border-border bg-bg px-3 py-2.5 opacity-60"
+                >
+                  <span className="text-sm text-fg">{name}</span>
+                  <span className="rounded-full bg-ink/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">скоро</span>
+                </li>
+              ))}
+            </ul>
+          </div>
         </fieldset>
 
         <div className="flex flex-col gap-2 sm:flex-row">
@@ -184,33 +213,60 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
           <h3 className="text-fg">Ход года</h3>
           <ol className="list-decimal space-y-2 pl-5">
             <li>
-              <strong className="text-fg">Развитие.</strong> По кругу выкладывайте по одной карте: новое животное или свойство. Свойства кладутся лицом вверх — все видят, кто что выложил. Двойные карты — одно из двух свойств. Паразит только на чужих. Пас — и больше не играете в этой фазе; когда спасовали все, фаза заканчивается.
+              <strong className="text-fg">Развитие.</strong> По кругу выкладывайте по одной карте: новое животное или свойство. Свойства кладутся лицом вверх — все видят, кто что выложил. Двойные карты — одно из двух свойств. Паразит только на чужих. Парная карта (симбиоз, сотрудничество, взаимодействие) кладётся между двумя животными — на пару может лежать только одна парная карта. Пас — и больше не играете в этой фазе; когда спасовали все, фаза заканчивается.
             </li>
             <li>
               <strong className="text-fg">Кормовая база.</strong> 2 игрока: 1d6+2. 3: 2d6. 4: 2d6+2.
             </li>
             <li>
-              <strong className="text-fg">Питание.</strong> В свой ход — ровно одно действие: взять 1 фишку на животное (сытое берёт только в пустой жировой запас), напасть хищником (раз за фазу), пиратство, топтун (уничтожить 1 фишку из базы), спячка. Превращение жира в еду — свободное действие, ход не тратит. Пас пропускает вас; фаза заканчивается, когда база пуста, все накормлены, все пасанули или никому больше нельзя ходить.
+              <strong className="text-fg">Питание.</strong> Ход длится, пока не нажмёте «Закончить ход»: одно действие ход не отдаёт. За ход можно напасть каждым из своих хищников и/или использовать всех пиратов — либо взять одну фишку еды (накормленное животное берёт только в пустой жировой запас); если берёте еду, хищники и пираты в этот ход недоступны. Накормленное животное больше не использует свойства: не нападает, не пиратствует, не топчет, не уходит в спячку и не тратит жир. Топтуны топчут вместе с взятием еды, каждый — раз за ход. Превращение жира — свободное действие. Когда делать нечего совсем, ход передаётся сам. «Пас» выводит вас до конца фазы; фаза заканчивается, когда база пуста, все накормлены, все пасанули или никому нельзя ходить.
             </li>
             <li>
               <strong className="text-fg">Вымирание.</strong> Ненакормленные погибают. Добор: число выживших + 1. Если никого нет и рука пуста — 6 карт. Пустая колода — последний год.
             </li>
           </ol>
+          <h3 className="text-fg">Дополнение «Континенты»</h3>
+          <ul className="list-decimal space-y-2 pl-5">
+            <li>
+              <strong className="text-fg">Территории.</strong> Животные живут на Лавразии, в Гондване и в Океане. Выкладывая животное, выбираете континент; в Океан животное попадает только со свойством «Водоплавающее». Потеряло водоплавающее — возвращается на континент.
+            </li>
+            <li>
+              <strong className="text-fg">Кормовые базы.</strong> У каждой территории своя база: 2 игрока — 8/7/5, три — 11/10/7, четыре — 14/13/9 (Лавразия/Гондвана/Океан). В свой ход вы привязаны к одной территории: берёте еду её базы и используете свойства животных, стоящих на ней. Хищник ест только в своей территории. «Эдификатор» добавляет 2 фишки в базу своей территории ежегодно.
+            </li>
+            <li>
+              <strong className="text-fg">Парные карты.</strong> Кладутся между двумя животными одной территории. Разъехалась пара — карта уходит в сброс.
+            </li>
+            <li>
+              <strong className="text-fg">Миграция.</strong> Объявите миграцию вместо обычного хода: ни еды, ни других свойств. Мигрирующие животные (в любом числе) переезжают: океан ↔ континенты, континент → континент напрямую нельзя. Сухопутное в океан не идёт. С мигрантом едут прилипалы — свои и чужие, даже с континента на континент.
+            </li>
+            <li>
+              <strong className="text-fg">Новые свойства.</strong> Стадность: пока хищников в локации не больше, чем стадных, стадных нельзя есть. Стрекательные клетки: атаковавший хищник теряет все свойства до конца года (потребность 1), в океане ещё и водоплавающее — выброшен на континент. Регенерация: съеденное хищником животное оставляет свойства — владелец восстанавливает их новым животным из руки. Рекомбинация (парная): партнёры обмениваются по одному свойству. Неоплазия: каждый год выключает соседнее непарное свойство, а когда выключать нечего — убивает носителя.
+            </li>
+            <li>
+              <strong className="text-fg">Спасение.</strong> Игрок без руки и животных берёт 10 карт и две сразу кладёт животными по континенту.
+            </li>
+          </ul>
           <h3 className="text-fg">Очки</h3>
           <p>2 за каждое выжившее животное, 1 за каждое свойство. Дополнительно: хищник и большой +1, паразит +2. Ничья — по картам в сбросе.</p>
           <h3 className="text-fg">Свойства</h3>
           <ul className="grid gap-2 sm:grid-cols-2">
             {Object.values(TRAITS).map((t) => (
               <li key={t.id} className="flex gap-3 rounded-[var(--radius-sm)] border border-border bg-bg p-3">
-                <img
-                  src={TRAIT_ART[t.id]}
-                  alt=""
-                  loading="lazy"
-                  className={cn(
-                    "h-[68px] w-12 shrink-0 rounded-[var(--radius-xs)] object-cover object-top",
-                    DARK_ART.has(t.id) && "bg-ink object-contain p-0.5",
-                  )}
-                />
+                {TRAIT_ART[t.id] ? (
+                  <img
+                    src={TRAIT_ART[t.id]}
+                    alt=""
+                    loading="lazy"
+                    className={cn(
+                      "h-[68px] w-12 shrink-0 rounded-[var(--radius-xs)] object-cover object-top",
+                      DARK_ART.has(t.id) && "bg-ink object-contain p-0.5",
+                    )}
+                  />
+                ) : (
+                  <span className="flex h-[68px] w-12 shrink-0 items-center justify-center rounded-[var(--radius-xs)] border border-border bg-surface">
+                    <TraitGlyph id={t.id} className="size-7 text-muted" />
+                  </span>
+                )}
                 <div>
                   <div className="font-medium text-fg">{t.name}</div>
                   <div className="mt-1 text-xs leading-snug">{t.description}</div>

@@ -18,11 +18,13 @@ let fixedNow = Date.now();
 before(async () => {
   const pg = new PGlite();
   await pg.waitReady;
-  const ddl = readFileSync(
-    fileURLToPath(new URL("../../../migrations/0002_net_rooms.sql", import.meta.url)),
-    "utf8",
-  );
-  await pg.exec(ddl);
+  for (const f of ["0002_net_rooms.sql", "0003_room_modules.sql"]) {
+    const ddl = readFileSync(
+      fileURLToPath(new URL(`../../../migrations/${f}`, import.meta.url)),
+      "utf8",
+    );
+    await pg.exec(ddl);
+  }
   // Сервис использует только sql.query(text, params) — этого достаточно.
   const run = async <T>(text: string, params: unknown[] = []): Promise<T[]> =>
     (await pg.query<T>(text, params)).rows as T[];
@@ -188,6 +190,15 @@ describe("партия", () => {
           await s.action(host.code, host.token, { type: "devPass" });
         } catch {
           /* уже спасовал/ход ушёл */
+        }
+        continue;
+      }
+      // Пас в питании тоже теперь за человеком (feedSkip всегда доступен).
+      if (st.phase === "feeding" && st.currentPlayerId === 0) {
+        try {
+          await s.action(host.code, host.token, { type: "feedSkip" });
+        } catch {
+          /* уже скипнул/ход ушёл */
         }
       }
     }
