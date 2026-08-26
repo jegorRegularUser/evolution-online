@@ -1,0 +1,38 @@
+{
+  "url": "http://127.0.0.1:8081/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Эволюция",
+      "hasCanvas": false,
+      "bodyTextLen": 238,
+      "bodyTextHash": "74339b049d5fea7326b178a3bb289eb46360580225506f88a221cd991be095d8",
+      "bodyTextPrefix": "ПРАВИЛЬНЫЕ ИГРЫ · КНОРРЕ Эволюция Настольная игра о происхождени",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Эволюция",
+      "hasCanvas": false,
+      "bodyTextLen": 238,
+      "bodyTextHash": "74339b049d5fea7326b178a3bb289eb46360580225506f88a221cd991be095d8",
+      "bodyTextPrefix": "ПРАВИЛЬНЫЕ ИГРЫ · КНОРРЕ Эволюция Настольная игра о происхождени",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-built.json",
+  "divergesFromBaseline": false,
+  "baselineReasons": []
+}

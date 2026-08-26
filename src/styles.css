@@ -1,0 +1,253 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Fraunces", "Iowan Old Style", "Palatino Linotype", Palatino, serif;
+  --font-sans: "Source Sans 3", "Source Sans Pro", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --color-bg: #111410;
+  --color-bg-2: #161a14;
+  --color-surface: #1c2119;
+  --color-surface-2: #252b21;
+  --color-fg: #e6e2d6;
+  --color-muted: #9aa08f;
+  --color-subtle: #6d7366;
+  --color-accent: #8b9a74;
+  --color-accent-fg: #111410;
+  --color-border: color-mix(in oklab, #e6e2d6 12%, transparent);
+  --color-border-strong: color-mix(in oklab, #e6e2d6 22%, transparent);
+  --color-ring: #8b9a74;
+  --color-parchment: #e6dcc8;
+  --color-parchment-2: #d9cdb4;
+  --color-ink: #1f1c16;
+  --color-ink-soft: #4a453c;
+  --color-moss: #6f7f5c;
+  --color-clay: #b45a45;
+  --color-danger: #9a4a3a;
+  --color-food-red: #b4453a;
+  --color-food-blue: #3d6a86;
+  --color-food-yellow: #c4a15a;
+  --color-good: #6f8b5c;
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  --shadow-card: 0 10px 30px color-mix(in oklab, #000 40%, transparent);
+
+  /* Длительности и плавности для переходов и анимаций (используются карточками и кубиками). */
+  --motion-fast: 160ms;
+  --motion-quick: 280ms;
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  html,
+  body,
+  #app {
+    min-height: 100%;
+  }
+
+  html {
+    background: var(--color-bg);
+    color: var(--color-fg);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background:
+      radial-gradient(1200px 700px at 50% -10%, color-mix(in oklab, var(--color-moss) 16%, transparent), transparent 60%),
+      var(--color-bg);
+    color: var(--color-fg);
+    line-height: 1.5;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.03em;
+    line-height: 1.15;
+    font-weight: 600;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.token {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, #000 25%, transparent);
+}
+.token-red {
+  background: var(--color-food-red);
+}
+.token-blue {
+  background: var(--color-food-blue);
+}
+.token-yellow {
+  background: var(--color-food-yellow);
+}
+
+.grain {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='80' height='80' filter='url(%23n)' opacity='.07'/%3E%3C/svg%3E");
+}
+
+/* Сукно центрального поля */
+.felt {
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in oklab, var(--color-good) 22%, transparent), transparent 55%),
+    radial-gradient(140% 110% at 50% 115%, color-mix(in oklab, #000 45%, transparent), transparent 60%),
+    linear-gradient(160deg, #23301f, #1a2417 55%, #151d13);
+}
+
+/* Кубик кормовой базы */
+.die-body {
+  fill: var(--color-parchment);
+  stroke: color-mix(in oklab, var(--color-ink) 30%, transparent);
+  stroke-width: 1;
+}
+.die-pip {
+  fill: var(--color-ink);
+}
+@keyframes die-tumble {
+  0% { transform: rotate(-14deg) translateY(-2px); }
+  25% { transform: rotate(10deg) translateY(1px); }
+  50% { transform: rotate(-8deg) translateY(-1px); }
+  75% { transform: rotate(12deg) translateY(0); }
+  100% { transform: rotate(0deg); }
+}
+.die-tumble {
+  animation: die-tumble 0.32s ease-in-out infinite;
+}
+
+/* Появление фишек еды и чисел */
+@keyframes pop-in {
+  0% { transform: scale(0.4); opacity: 0; }
+  70% { transform: scale(1.15); }
+  100% { transform: scale(1); opacity: 1; }
+}
+.pop-in {
+  animation: pop-in 0.35s var(--ease-out);
+}
+.token-pop {
+  animation: pop-in 0.28s var(--ease-out);
+}
+
+/* Индикатор «бот думает» */
+@keyframes pulse-dot-kf {
+  0%, 100% { opacity: 0.35; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+.pulse-dot {
+  animation: pulse-dot-kf 1s ease-in-out infinite;
+}
+
+/* Свойство, вложенное в текущем круге развития */
+.chip-fresh::after,
+.chip-fresh-dark::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  border: 1px dashed color-mix(in oklab, var(--color-accent) 65%, transparent);
+  pointer-events: none;
+}
+
+/* Животное, которое погибнет при вымирании */
+@keyframes dying-pulse-kf {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-danger) 40%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in oklab, var(--color-danger) 18%, transparent); }
+}
+.dying-pulse {
+  animation: dying-pulse-kf 1.4s ease-in-out infinite;
+  filter: saturate(0.6) brightness(0.92);
+}
+
+/* Виньетка вымирания на столе */
+.extinction-glow .felt {
+  outline: 1px solid color-mix(in oklab, var(--color-danger) 55%, transparent);
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in oklab, var(--color-danger) 16%, transparent), transparent 55%),
+    linear-gradient(160deg, #2b1e1a, #241814 55%, #1c1310);
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ── Анимации событий партии ─────────────────────────────────────────── */
+
+/* Новая карточка животного появляется на столе */
+@keyframes card-in {
+  0% { transform: translateY(12px) scale(0.9); opacity: 0; }
+  60% { transform: translateY(-3px) scale(1.02); opacity: 1; }
+  100% { transform: none; opacity: 1; }
+}
+.anim-card-in {
+  animation: card-in 0.45s var(--ease-out);
+}
+
+/* Свойство вставляется в животное */
+@keyframes chip-in {
+  0% { transform: translateY(-9px) scale(0.75); opacity: 0; }
+  70% { transform: translateY(1px) scale(1.1); opacity: 1; }
+  100% { transform: none; opacity: 1; }
+}
+.anim-chip-in {
+  animation: chip-in 0.4s var(--ease-out);
+}
+
+/* Встряска при нападении хищника */
+@keyframes hit-shake {
+  0%, 100% { transform: none; }
+  20% { transform: translateX(-5px) rotate(-1.6deg); }
+  40% { transform: translateX(5px) rotate(1.6deg); }
+  60% { transform: translateX(-3px) rotate(-0.8deg); }
+  80% { transform: translateX(3px) rotate(0.8deg); }
+}
+.anim-shake {
+  animation: hit-shake 0.5s var(--ease-out);
+}
+
+/* Всплывающий бейдж события (атака, +карты, −хвост и т.п.) */
+@keyframes float-up {
+  0% { transform: translate(-50%, 4px) scale(0.85); opacity: 0; }
+  15% { transform: translate(-50%, -6px) scale(1); opacity: 1; }
+  70% { opacity: 1; }
+  100% { transform: translate(-50%, -40px) scale(1); opacity: 0; }
+}
+.fx-badge {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  white-space: nowrap;
+  animation: float-up 1.7s var(--ease-out) forwards;
+}
+
+/* Короткая вспышка сукна при гибели животных */
+@keyframes felt-flash-kf {
+  0% { filter: none; }
+  30% { filter: brightness(1.55) saturate(1.25); }
+  100% { filter: none; }
+}
+.anim-felt-flash {
+  animation: felt-flash-kf 0.9s var(--ease-out);
+}
