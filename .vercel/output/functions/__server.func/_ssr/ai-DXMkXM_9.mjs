@@ -1,5 +1,5 @@
 import { a as number, c as union, i as literal, n as boolean, o as object, r as custom, s as string, t as _enum } from "../_libs/zod.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/ai-AwW7_vaR.js
+//#region node_modules/.nitro/vite/services/ssr/assets/ai-DXMkXM_9.js
 /**
 * Общий контракт сетевой партии: типы кадров опроса, zod-схемы входа и
 * серверные константы темпа. Импортируется и клиентом, и сервером;
@@ -28,9 +28,13 @@ var createRoomInput = object({
 	capacity: union([
 		literal(2),
 		literal(3),
-		literal(4)
+		literal(4),
+		literal(5),
+		literal(6),
+		literal(7),
+		literal(8)
 	]),
-	botSeats: number().int().min(0).max(3),
+	botSeats: number().int().min(0).max(7),
 	difficulty: _enum([
 		"easy",
 		"normal",
@@ -47,7 +51,7 @@ var codeTokenInput = object({
 	code: CODE,
 	token: string().min(10)
 });
-var botsInput = codeTokenInput.extend({ count: number().int().min(0).max(4) });
+var botsInput = codeTokenInput.extend({ count: number().int().min(0).max(7) });
 var actionInput = object({
 	code: CODE,
 	token: string().min(10),
@@ -129,14 +133,32 @@ var DUALS = [
 /**
 * Карты «Континентов» (Правильные игры, 2012): 42 карты восьми новых свойств.
 * Миграция крупнее всех, прилипала идёт в комплекте к ней.
+* Миграция, прилипала и часть паразитов идут с гранью «водоплавающее»:
+* карта даёт выбор одного из двух свойств.
 */
 var CONTINENTS_SINGLES = [
-	["migration", 8],
-	["remora", 6],
 	["herding", 4],
 	["nematocysts", 6],
 	["edificator", 6],
 	["regeneration", 4]
+];
+/** [лицо 1, лицо 2, количество] — две грани на выбор. */
+var CONTINENTS_DUALS = [
+	[
+		"migration",
+		"swimming",
+		8
+	],
+	[
+		"remora",
+		"swimming",
+		6
+	],
+	[
+		"parasite",
+		"swimming",
+		2
+	]
 ];
 /** Рекомбинация — парная карта; неоплазия кладётся «под» свойства. */
 var CONTINENTS_PAIRS = [["recombination", 4], ["neoplasia", 2]];
@@ -155,6 +177,10 @@ function buildDeck(nextId, modules) {
 		for (const [trait, n] of CONTINENTS_SINGLES) for (let i = 0; i < n; i++) cards.push({
 			id: nextId("c"),
 			faces: [trait]
+		});
+		for (const [a, b, n] of CONTINENTS_DUALS) for (let i = 0; i < n; i++) cards.push({
+			id: nextId("c"),
+			faces: [a, b]
 		});
 		for (const [trait, n] of CONTINENTS_PAIRS) for (let i = 0; i < n; i++) cards.push({
 			id: nextId("c"),
@@ -360,6 +386,7 @@ var TRAITS = {
 		description: "Только на чужое животное. +2 к потребности в еде. В конце игры даёт владельцу животного 2 дополнительных очка.",
 		isPair: false,
 		opponentOnly: true,
+		virusLike: true,
 		stackable: false,
 		extraFood: 2,
 		scoreBonus: 2,
@@ -518,12 +545,14 @@ var TRAITS = {
 		id: "neoplasia",
 		name: "Неоплазия",
 		short: "Неоплазия",
-		description: "Только на непарные свойства. Кладётся под свойства животного и каждый год поднимается: выключает лежащее выше непарное свойство (оно перестаёт действовать, но очки даёт). Выключать нечего — животное немедленно погибает.",
+		description: "Играется на ЛЮБОЕ животное (своё или чужое), только на непарные свойства. Кладётся под свойства и каждый год в начале определения кормовой базы поднимается: выключает лежащее выше непарное свойство (оно перестаёт действовать, но очки даёт). Выключать нечего — животное немедленно погибает. «Водоплавающее» в океане неприкосновенно.",
 		isPair: false,
 		opponentOnly: false,
+		anyTarget: true,
 		stackable: false,
 		extraFood: 0,
 		scoreBonus: 0,
+		virusLike: true,
 		aiValue: -6
 	}
 };
@@ -572,7 +601,16 @@ function territoryOf(state, a) {
 	return state.modules.continents ? a.zoneId : void 0;
 }
 /**
-* Паралич стрекательными клетками: хищник теряет ВСЕ свойства до конца фазы
+* Водность животного. В «Континентах» океан сам делает животное водным:
+* пока оно в океане, свойство «водоплавающее» неотчуждаемо (его не снять
+* ни неоплазией, ни рекомбинацией, ни параличом). На континенте водность —
+* только по карте свойства.
+*/
+function isAquatic(state, animal) {
+	if (state.modules.continents && animal.zoneId === "ocean") return true;
+	return hasTrait(animal, "swimming");
+}
+/** Паралич стрекательными клетками: хищник теряет ВСЕ свойства до конца фазы
 * питания (остаётся базовая потребность 1), в океане ещё и водоплавающее.
 */
 function isParalyzed(state, animalId) {
@@ -647,7 +685,9 @@ function canAttack(state, carnivore, prey) {
 		if (herdingProtects(state, prey)) return false;
 	}
 	if (livingSymbiontProtects(state, prey)) return false;
-	if ([...carnivore.traits, ...prey.traits].some((t) => isActive(t) && TRAITS[t.type].symmetricAquatic) && hasTrait(carnivore, "swimming") !== hasTrait(prey, "swimming")) return false;
+	const aquaticRule = [...carnivore.traits, ...prey.traits].some((t) => isActive(t) && TRAITS[t.type].symmetricAquatic);
+	const zoneAquatic = state.modules.continents && (carnivore.zoneId === "ocean" || prey.zoneId === "ocean");
+	if ((aquaticRule || zoneAquatic) && isAquatic(state, carnivore) !== isAquatic(state, prey)) return false;
 	for (const t of prey.traits) {
 		if (!isActive(t)) continue;
 		const rule = TRAITS[t.type].protection;
@@ -677,7 +717,11 @@ function nextPlayerId(state, from = state.currentPlayerId) {
 var AI_NAMES = [
 	"Дарвин",
 	"Уоллес",
-	"Мендель"
+	"Мендель",
+	"Линней",
+	"Кювье",
+	"Ламарк",
+	"Геккель"
 ];
 function log(state, text, tone = "neutral") {
 	state.log.push({
@@ -827,8 +871,8 @@ function legalDevActions(state, playerId) {
 		for (let face = 0; face < card.faces.length; face++) {
 			const trait = faceOf(card, face);
 			const def = TRAITS[trait];
-			if (def.opponentOnly) for (const o of state.players) {
-				if (o.id === p.id) continue;
+			if (def.opponentOnly || def.anyTarget) for (const o of state.players) {
+				if (def.opponentOnly && o.id === p.id) continue;
 				for (const a of o.animals) if (canAttachTrait(a, trait, true)) actions.push({
 					type: "devPlayTrait",
 					cardId: card.id,
@@ -887,6 +931,7 @@ function canAttachTrait(animal, trait, includeHidden) {
 }
 function canAttachPair(a, b, _trait) {
 	if (a.id === b.id) return false;
+	if (a.zoneId !== b.zoneId) return false;
 	return !(a.traits.some((t) => t.pairWith === b.id) || b.traits.some((t) => t.pairWith === a.id));
 }
 /** Реальное действие в фазу питания: игрок снова участвует в круге. */
@@ -1071,11 +1116,10 @@ function legalFeedActions(state, playerId) {
 */
 function migrationTargets(state, a) {
 	const from = a.zoneId ?? "laurasia";
-	const swim = hasTrait(a, "swimming");
+	const swim = from === "ocean" || hasTrait(a, "swimming");
 	const out = [];
 	if (from === "ocean") out.push("laurasia", "gondwana");
 	else if (swim) out.push("ocean");
-	else out.length = 0;
 	return out.filter((z) => z !== from);
 }
 function defenseOptions(animal, attack) {
@@ -1157,7 +1201,7 @@ function finishHuntSuccess(state, carnivore, prey, foodGain) {
 		});
 	}
 	if (hasTrait(prey, "regeneration")) {
-		state.pendingRegeneration = regenSnapshotOf(prey, victim.id);
+		state.pendingRegeneration = [...state.pendingRegeneration ?? [], regenSnapshotOf(prey, victim.id)];
 		log(state, `Свойства съеденного регенерируют — владелец вернёт их животным.`, "good");
 		const p0 = ownerOf(state, prey.id);
 		p0.animals = p0.animals.filter((a) => a.id !== prey.id);
@@ -1400,6 +1444,7 @@ function startFoodRoll(state) {
 	if (state.phase !== "foodBank" || state.foodRoll) return;
 	const n = state.players.length;
 	if (state.modules.continents) {
+		advanceNeoplasia(state);
 		const dice = [dieFor(state), dieFor(state)];
 		const bases = territoryBases(n);
 		for (const a of allAnimals(state)) {
@@ -1470,25 +1515,30 @@ function territoryBases(playerCount) {
 		gondwana: 10,
 		ocean: 7
 	};
-	return {
+	if (playerCount === 4) return {
 		laurasia: 14,
 		gondwana: 13,
 		ocean: 9
 	};
+	const extra = playerCount - 4;
+	return {
+		laurasia: 14 + 2 * extra,
+		gondwana: 13 + 2 * extra,
+		ocean: 9 + extra
+	};
 }
 /**
-* Размещение животного с учётом зон. Несёт в себе правило «водоплавающее —
-* сразу в океан» и переезд на континент при его потере.
+* Размещение животного с учётом зон: получило «водоплавающее» — уходит в океан.
+* Обратной высадки нет: в океане водность перманентна (см. queries.isAquatic),
+* поэтому потеря карты свойства животное оттуда не выгоняет — только миграция
+* или паралич стрекательными клетками.
 */
 function settleAfterTraitChange(state, a) {
-	if (!state.modules.continents || a.hibernating) {
-		if (state.modules.continents && !a.zoneId) a.zoneId = "laurasia";
-		return;
-	}
-	const wasOcean = a.zoneId === "ocean";
-	const swim = hasTrait(a, "swimming");
-	if (swim && !wasOcean) moveAnimalToZone(state, a, "ocean");
-	else if (!swim && wasOcean) moveAnimalToZone(state, a, nextRandom(state) < .5 ? "laurasia" : "gondwana");
+	if (!state.modules.continents) return;
+	if (!a.zoneId) a.zoneId = "laurasia";
+	const before = a.zoneId;
+	if (hasTrait(a, "swimming") && a.zoneId !== "ocean") moveAnimalToZone(state, a, "ocean");
+	if (a.zoneId !== before) dropCrossTerritoryPairs(state);
 }
 function moveAnimalToZone(_state, a, zone) {
 	a.zoneId = zone;
@@ -1503,7 +1553,8 @@ function hasFreshAction(state, playerId) {
 	return legalFeedActions({
 		...state,
 		currentPlayerId: playerId,
-		turnUse: freshTurnUse()
+		turnUse: freshTurnUse(),
+		turnTerritory: void 0
 	}, playerId).some((a) => a.type !== "feedSkip" && a.type !== "feedEndTurn");
 }
 /** Съедобная еда территории хода; вне «Континентов» — общий банк. */
@@ -1887,7 +1938,6 @@ function endFeeding(state) {
 	state.phase = "extinction";
 	state.extinctionDeaths = [];
 	const doomed = allAnimals(state).filter((a) => a.poisoned || !isFed(a));
-	advanceNeoplasia(state);
 	for (const a of allAnimals(state)) if (doomed.some((d) => d.id === a.id)) state.extinctionDeaths.push(a.id);
 	for (const id of state.extinctionDeaths) {
 		const a = findAnimal(state, id);
@@ -1896,13 +1946,21 @@ function endFeeding(state) {
 		log(state, a.poisoned ? `Хищник ${p.name} погибает от яда.` : `Животное ${p.name} вымирает — не накормлено.`, "bad");
 	}
 }
-/** Подъём «неоплазии» в конце года. */
+/**
+* Подъём «неоплазии» в начале определения кормовой базы: карта поднимается на
+* одну позицию и выключает лежащее над ней непарное свойство (выключенное не
+* действует, но очки за него остаются). Выключать нечего — животное погибает.
+* «Водоплавающее» в океане неотчуждаемо: зона делает животное водным, поэтому
+* неоплазия его пропускает.
+*/
 function advanceNeoplasia(state) {
 	if (!state.modules.continents) return;
 	for (const p of state.players) for (const a of [...p.animals]) {
-		const neo = a.neoplasia;
-		if (!neo || neo.disabled) continue;
-		const next = [...a.traits.filter((t) => t.id !== neo.id && !t.pairWith)].sort((x, y) => y.playSeq - x.playSeq || a.traits.indexOf(y) - a.traits.indexOf(x))[0];
+		const neo = a.traits.find((t) => t.type === "neoplasia");
+		if (!neo) continue;
+		a.neoplasia = neo;
+		const protectedSwim = a.zoneId === "ocean";
+		const next = [...a.traits.filter((t) => t.id !== neo.id && !t.pairWith && !t.disabled && !(protectedSwim && t.type === "swimming"))].sort((x, y) => y.playSeq - x.playSeq || a.traits.indexOf(y) - a.traits.indexOf(x))[0];
 		if (!next) {
 			ev(state, {
 				kind: "animalDied",
@@ -1914,7 +1972,7 @@ function advanceNeoplasia(state) {
 			continue;
 		}
 		next.disabled = true;
-		log(state, `Неоплазия выключает свойство «${TRAITS[next.type].name}».`);
+		log(state, `Неоплазия выключает свойство «${TRAITS[next.type].name}».`, "bad");
 	}
 }
 /** Действие continueExtinction: убирает погибших, сбрасывает годовые флаги, добирает карты. */
@@ -1931,6 +1989,7 @@ function continueAfterExtinction(state) {
 		discardAnimal(state, a);
 	}
 	state.extinctionDeaths = [];
+	regeneratedThisYear.clear();
 	restoreRegenerated(state);
 	for (const a of allAnimals(state)) {
 		a.food = 0;
@@ -1946,35 +2005,48 @@ function continueAfterExtinction(state) {
 	}
 	drawCards(state);
 }
-/** Восстановление съеденного «регенерировавшего» животного картой из руки. */
+/**
+* Восстановление съеденных «регенерировавших» животных: владелец обязан
+* положить карту из руки (а если рука пуста — из колоды) как новое животное
+* на оставленные свойства. Добора карт за такое животное нет.
+*/
 function restoreRegenerated(state) {
 	const pend = state.pendingRegeneration;
-	if (!pend) return;
+	if (!pend?.length) return;
 	state.pendingRegeneration = null;
-	const p = player(state, pend.ownerId);
-	const card = p.hand.pop() ?? state.deck.pop();
-	if (!card) return;
-	const animal = {
-		id: nid(state, "a"),
-		ownerId: p.id,
-		cardId: card.id,
-		traits: [],
-		food: 0,
-		blueFood: 0,
-		fatTokens: 0,
-		hibernating: false,
-		hibernatedLastYear: false,
-		receivedFoodThisYear: false,
-		poisoned: false,
-		seed: card.id.length * 17 + p.id * 13
-	};
-	p.animals.push(animal);
-	ev(state, {
-		kind: "regenerated",
-		ownerId: p.id
-	});
-	log(state, `${p.name} восстанавливает регенерировавшее животное.`, "good");
+	for (const item of pend) {
+		const p = player(state, item.ownerId);
+		const card = p.hand.pop() ?? state.deck.pop();
+		if (!card) continue;
+		const animal = {
+			id: nid(state, "a"),
+			ownerId: p.id,
+			cardId: card.id,
+			traits: [],
+			food: 0,
+			blueFood: 0,
+			fatTokens: 0,
+			hibernating: false,
+			hibernatedLastYear: false,
+			receivedFoodThisYear: false,
+			poisoned: false,
+			seed: card.id.length * 17 + p.id * 13,
+			...state.modules.continents ? { zoneId: "laurasia" } : {}
+		};
+		p.animals.push(animal);
+		regeneratedThisYear.set(p.id, (regeneratedThisYear.get(p.id) ?? 0) + 1);
+		ev(state, {
+			kind: "regenerated",
+			ownerId: p.id
+		});
+		log(state, `${p.name} восстанавливает регенерировавшее животное.`, "good");
+	}
 }
+/**
+* Сколько животных игрок восстановил регенерацией в этом вымирании: добор
+* «выжившие + 1» их не учитывает. Живёт внутри одного применения действия.
+*/
+var regeneratedThisYear = /* @__PURE__ */ new Map();
 function drawCards(state) {
 	const start = state.firstPlayerId;
 	const n = state.players.length;
@@ -1983,7 +2055,7 @@ function drawCards(state) {
 	for (let k = 0; k < n; k++) {
 		const idx = (start + k) % n;
 		const p = state.players[idx];
-		let want = p.animals.length + 1;
+		let want = Math.max(1, p.animals.length - (regeneratedThisYear.get(p.id) ?? 0) + 1);
 		if (p.animals.length === 0 && p.hand.length === 0) {
 			if (state.modules.continents) {
 				for (let i = 0; i < 10; i++) {

@@ -15,6 +15,7 @@ import type { SeatInfo } from "@/lib/net/shared";
 export type UiIntent =
   | { kind: "none" }
   | { kind: "playAnimal"; cardId: string }
+  | { kind: "placeAnimal"; cardId: string }
   | { kind: "playTrait"; cardId: string; face: number }
   | { kind: "playPair"; cardId: string; face: number; first?: string }
   | { kind: "hunt"; carnivoreId?: string }
@@ -37,7 +38,7 @@ export interface NetUiState {
 
 export interface NetCreateConfig {
   name: string;
-  capacity: 2 | 3 | 4;
+  capacity: 2 | 3 | 4 | 5 | 6 | 7 | 8;
   botSeats: number;
   difficulty: Difficulty;
   /** Включённые дополнения стола (пока «Континенты»). */

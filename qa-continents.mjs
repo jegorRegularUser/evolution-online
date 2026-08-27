@@ -19,6 +19,10 @@ async function track(page, label) {
     if (m.type() === "error") note(`${label}/console`, m.text());
   });
   page.on("pageerror", (e) => note(`${label}/pageerror`, String(e)));
+  // Ответы 4xx/5xx показываем с URL — «Failed to load resource» без адреса бесполезен.
+  page.on("response", (r) => {
+    if (r.status() >= 400) note(`${label}/http${r.status()}`, r.url());
+  });
   page.on("requestfailed", (r) => {
     const u = r.url();
     if (u.startsWith("http://127.0.0.1") || u.includes("fonts.g")) return;
@@ -84,13 +88,12 @@ async function autoStep(page) {
   if (await animalBtn.isEnabled().catch(() => false)) {
     if (Math.random() < 0.55) {
       await animalBtn.click();
-      // Если открылось меню выбора континента — жмём «Лавразия».
-      const zoneBtn = page
-        .locator("[data-hand-row] button", { hasText: /Лавразия|Гондвана/ })
-        .first();
-      if ((await zoneBtn.count()) > 0 && (await zoneBtn.isVisible().catch(() => false))) {
-        await zoneBtn.click();
-        return "animal+zone";
+      // Дальше нужно выбрать территорию кликом по своей полосе континента.
+      const zone = Math.random() < 0.5 ? "laurasia" : "gondwana";
+      const strip = page.locator(`[data-player-section] [data-zone="${zone}"][role="button"]`).first();
+      if ((await strip.count()) > 0) {
+        await strip.click().catch(() => {});
+        return `animal+${zone}`;
       }
       return "animal";
     }

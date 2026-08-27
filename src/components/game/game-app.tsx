@@ -314,13 +314,28 @@ function Table() {
   }
 
   const opponents = state.players.filter((p) => p.id !== human.id);
-  // Рассадка вокруг поля: 1 соперник — напротив, 2 — по бокам, 3 — сверху и по бокам.
-  const seats =
-    opponents.length === 1
-      ? { top: [opponents[0]!], left: [], right: [] }
-      : opponents.length === 2
-        ? { top: [], left: [opponents[0]!], right: [opponents[1]!] }
-        : { top: [opponents[0]!], left: [opponents[1]!], right: [opponents[2]!] };
+  /**
+   * Рассадка вокруг поля. Верх и «низ» (ряд над своим табло) — по одной строке,
+   * делённой пополам между двумя соперниками; бока — по колонке до двух.
+   * Так восемь мест раскладываются без наложений: 2 сверху, 2 снизу, 2+2 по бокам.
+   */
+  const seats = useMemo(() => {
+    const top: Player[] = [];
+    const left: Player[] = [];
+    const right: Player[] = [];
+    const bottom: Player[] = [];
+    if (opponents.length === 1) {
+      top.push(opponents[0]!);
+    } else if (opponents.length === 2) {
+      left.push(opponents[0]!);
+      right.push(opponents[1]!);
+    } else {
+      // Порядок раскладки: верх, бока, снова верх/бока, затем нижний ряд.
+      const slots: Player[][] = [top, left, right, top, left, right, bottom, bottom];
+      opponents.forEach((p, i) => slots[Math.min(i, slots.length - 1)]!.push(p));
+    }
+    return { top, left, right, bottom };
+  }, [opponents]);
   const wideSeats = seats.left.length > 0 || seats.right.length > 0;
 
   const lastLog = state.log[state.log.length - 1]?.text;
@@ -331,7 +346,11 @@ function Table() {
     <>
       <div
         aria-hidden
-        className="pointer-events-none fixed inset-0 -z-10 bg-cover bg-center opacity-[0.09]"
+        className="paper-desk pointer-events-none fixed inset-0 -z-10 opacity-[0.14]"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-0 -z-10 bg-cover bg-center opacity-[0.07]"
         style={{ backgroundImage: `url(${BG.valley})` }}
       />
       <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-border bg-bg/90 px-3 py-2.5 backdrop-blur-sm sm:px-5">
@@ -381,24 +400,31 @@ function Table() {
         className={cn(
           "flex flex-1 flex-col gap-3 px-3 py-3 sm:px-5",
           wideSeats
-            ? "lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(330px,400px)_minmax(0,1fr)] lg:grid-rows-[auto_1fr_auto] lg:gap-4 lg:[grid-template-areas:'top_top_top''left_felt_right''human_human_human']"
+            ? "lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(330px,400px)_minmax(0,1fr)] lg:grid-rows-[auto_1fr_auto_auto] lg:gap-4 lg:[grid-template-areas:'top_top_top''left_felt_right''bottom_bottom_bottom''human_human_human']"
             : "lg:mx-auto lg:w-full lg:max-w-4xl",
           state.phase === "extinction" ? "extinction-glow" : "",
         )}
       >
-        {seats.top.map((p) => (
-          <div key={p.id} style={{ gridArea: "top" }}>
-            <PlayerSection
-              p={p}
-              actorId={actor?.id ?? null}
-              thinking={thinking && thinkingWho === p.id}
-              interactions={getInteraction}
-              dying={dying}
-              freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
-              continents={Boolean(state.modules.continents)}
-            />
+        {/* Верхний ряд: до двух соперников в одну строку, по половине ширины. */}
+        {seats.top.length ? (
+          <div
+            style={wideSeats ? { gridArea: "top" } : undefined}
+            className={cn("grid gap-3", seats.top.length > 1 && "lg:grid-cols-2")}
+          >
+            {seats.top.map((p) => (
+              <PlayerSection
+                key={p.id}
+                p={p}
+                actorId={actor?.id ?? null}
+                thinking={thinking && thinkingWho === p.id}
+                interactions={getInteraction}
+                dying={dying}
+                freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
+                continents={Boolean(state.modules.continents)}
+              />
+            ))}
           </div>
-        ))}
+        ) : null}
 
         <div style={wideSeats ? { gridArea: "left" } : undefined} className={cn(wideSeats && "lg:min-w-0")}>
           {seats.left.map((p) => (
@@ -429,7 +455,7 @@ function Table() {
           deaths={state.extinctionDeaths.length}
         />
 
-        <div style={wideSeats ? { gridArea: "right" } : undefined}>
+        <div style={wideSeats ? { gridArea: "right" } : undefined} className={cn(wideSeats && "lg:min-w-0")}>
           {seats.right.map((p) => (
             <PlayerSection
               key={p.id}
@@ -443,6 +469,27 @@ function Table() {
             />
           ))}
         </div>
+
+        {/* Нижний ряд соперников (столы 7–8 мест) — тоже одной строкой пополам. */}
+        {seats.bottom.length ? (
+          <div
+            style={wideSeats ? { gridArea: "bottom" } : undefined}
+            className={cn("grid gap-3", seats.bottom.length > 1 && "lg:grid-cols-2")}
+          >
+            {seats.bottom.map((p) => (
+              <PlayerSection
+                key={p.id}
+                p={p}
+                actorId={actor?.id ?? null}
+                thinking={thinking && thinkingWho === p.id}
+                interactions={getInteraction}
+                dying={dying}
+                freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
+                continents={Boolean(state.modules.continents)}
+              />
+            ))}
+          </div>
+        ) : null}
 
         <PlayerSection
           p={human}
@@ -482,6 +529,7 @@ function Table() {
             disabled={!isHumanTurn || Boolean(state.pendingAttack)}
             continents={Boolean(state.modules.continents)}
             onPlayAnimal={(cardId, zoneId) => dispatch({ type: "devPlayAnimal", cardId, zoneId })}
+            onPlaceAnimal={(cardId) => setIntent({ kind: "placeAnimal", cardId })}
             onPickTrait={(cardId, face) => {
               const card = human.hand.find((c) => c.id === cardId);
               const trait = card?.faces[face] as TraitId | undefined;
@@ -682,11 +730,15 @@ const PlayerSection = memo(function PlayerSection({
   style?: React.CSSProperties;
 }) {
   const dispatch = useGameStore((s) => s.dispatch);
+  const intent = useGameStore((s) => s.intent);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   // Ссылка на перетаскиваемое для drop по зоне (замыкание зон не тянет стейт).
   const dragIdRef = useRef<string | null>(null);
   const active = actorId === p.id;
+  /** Карта, ожидающая выбора континента (интент «выставить животное»). */
+  const placingAnimal =
+    isHuman && active && intent.kind === "placeAnimal" ? (intent.cardId as string) : undefined;
 
   /**
    * Разметка пар этого табло. У животного бывает две пары плюс симбионт,
@@ -736,7 +788,7 @@ const PlayerSection = memo(function PlayerSection({
         t.type === "symbiosis" ? `симбионт ${self} → ${partner}` : `${self} ↔ ${partner}`,
       );
     }
-    return { colorOf, marks, plateNote };
+    return { colorOf, marks, plateNote, numberOf };
   }, [p.animals]);
 
   const cardProps = (a: Animal) => ({
@@ -857,7 +909,7 @@ const PlayerSection = memo(function PlayerSection({
       style={style}
       data-player-section={p.id}
       className={cn(
-        "mb-3 rounded-[var(--radius-lg)] border bg-surface p-3 transition-[border-color,box-shadow] duration-[var(--motion-quick)] lg:mb-0",
+        "paper-sheet mb-3 rounded-[var(--radius-lg)] border bg-surface p-3 transition-[border-color,box-shadow] duration-[var(--motion-quick)] lg:mb-0",
         active ? "border-accent/70 shadow-[0_0_0_1px_var(--color-accent),var(--shadow-card)]" : "border-border",
       )}
     >
@@ -877,26 +929,41 @@ const PlayerSection = memo(function PlayerSection({
       </div>
       {continents ? (
         // «Континенты»: территории игрока — две полосы континентов и океан.
+        // Нумерация сквозная по всему табло (pairs.numberOf), не с нуля в каждой зоне.
         <div className="flex flex-col gap-2">
           {TERRITORIES.map((t) => {
             const animals = p.animals.filter((a) => (a.zoneId ?? "laurasia") === t.id);
+            const pickable =
+              isHuman &&
+              placingAnimal !== undefined &&
+              t.id !== "ocean" &&
+              active;
             return (
               <TerritoryRow
                 key={t.id}
                 zone={t.id}
                 name={t.name}
                 count={animals.length}
+                tall={placingAnimal !== undefined || animals.length > 0}
+                pickable={pickable}
+                onPickZone={
+                  pickable
+                    ? () => dispatch({ type: "devPlayAnimal", cardId: placingAnimal!, zoneId: t.id })
+                    : undefined
+                }
                 dropHint={isHuman}
                 onDropZone={
-                  isHuman
+                  isHuman && dragIdRef.current
                     ? () => dispatch({ type: "reorderAnimal", animalId: dragIdRef.current!, toZoneId: t.id })
                     : undefined
                 }
               >
                 {animals.length === 0 ? (
-                  <span className="px-1 text-[11px] text-subtle">{t.id === "ocean" ? "пусто (нужна водоплавающая)" : "пусто"}</span>
+                  <span className="px-1 text-[11px] text-subtle">
+                    {t.id === "ocean" ? "пусто (нужна водоплавающая)" : "пусто"}
+                  </span>
                 ) : null}
-                {animals.map((a, i) => renderCard(a, i + 1))}
+                {animals.map((a) => renderCard(a, pairs.numberOf.get(a.id) ?? 1))}
               </TerritoryRow>
             );
           })}
@@ -918,6 +985,9 @@ function TerritoryRow({
   children,
   dropHint,
   onDropZone,
+  tall,
+  pickable,
+  onPickZone,
 }: {
   zone: TerritoryId;
   name: string;
@@ -925,24 +995,52 @@ function TerritoryRow({
   children: React.ReactNode;
   dropHint?: boolean;
   onDropZone?: () => void;
+  /** Полоса с животными или ожидающая размещения — заметной высоты. */
+  tall?: boolean;
+  /** Животное ожидает выбора континента: полоса кликабельна. */
+  pickable?: boolean;
+  onPickZone?: () => void;
 }) {
   return (
     <div
       data-zone={zone}
+      role={pickable ? "button" : undefined}
+      aria-label={pickable ? `Разместить на ${name}` : undefined}
+      onClick={pickable ? onPickZone : undefined}
+      onKeyDown={
+        pickable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onPickZone?.();
+              }
+            }
+          : undefined
+      }
+      tabIndex={pickable ? 0 : undefined}
       onDragOver={dropHint ? (e) => e.preventDefault() : undefined}
       onDrop={onDropZone}
       className={cn(
-        "relative flex min-h-[52px] flex-wrap items-stretch gap-2 rounded-[var(--radius-md)] border border-dashed px-2 py-2",
+        "relative flex flex-wrap items-stretch gap-2 rounded-[var(--radius-md)] border border-dashed px-2 transition-all duration-[var(--motion-quick)]",
+        zone === "ocean" && "water-strip",
+        tall ? "min-h-[188px] py-2" : "min-h-[52px] py-2",
         zone === "ocean" ? "border-water/40 bg-water/10" : "border-border-strong/25 bg-bg/40",
+        pickable &&
+          "cursor-pointer border-solid border-accent ring-2 ring-accent/50 hover:bg-accent/15",
       )}
     >
+      {pickable ? (
+        <span className="absolute inset-x-0 top-1/2 -translate-y-1/2 text-center text-xs font-medium text-accent">
+          нажмите, чтобы разместить на «{name}»
+        </span>
+      ) : null}
       <img
         src={TERRITORY_ART[zone]}
         alt=""
         aria-hidden
         className="pointer-events-none absolute inset-0 h-full w-full rounded-[var(--radius-md)] object-cover opacity-[0.08]"
       />
-      <span className="absolute -top-1.5 left-2 rounded-full border border-border bg-surface px-1.5 text-[9px] font-medium uppercase tracking-[0.14em] text-muted">
+      <span className="absolute -top-1.5 left-2 z-10 rounded-full border border-border bg-surface px-1.5 text-[9px] font-medium uppercase tracking-[0.14em] text-muted">
         {name} · {count}
       </span>
       {children}
@@ -1043,7 +1141,13 @@ function TerritoryBanks({
               t.id === "ocean" ? "border-water/50 bg-water/15" : "border-border bg-bg/45",
             )}
           >
-            <img src={TERRITORY_ART[t.id]} alt="" className="h-7 w-full rounded-[4px] object-cover opacity-80" />
+            {/* Квадратная миниатюра тайла территории: квадраты/вертикаль кадрируются по центру. */}
+            <img
+              src={TERRITORY_ART[t.id]}
+              alt=""
+              aria-hidden
+              className="size-14 shrink-0 rounded-[var(--radius-sm)] border border-ink/20 object-cover shadow-[var(--shadow-card)]"
+            />
             <div className="flex items-center gap-1">
               {Array.from({ length: Math.min(n, 6) }).map((_, i) => (
                 <img key={`${i}-${n}`} src={TOKEN.meat} alt="" className="token-pop size-3 rounded-full" />
@@ -1138,6 +1242,7 @@ function DevDock({
   disabled,
   continents,
   onPlayAnimal,
+  onPlaceAnimal,
   onPickTrait,
   onPass,
 }: {
@@ -1147,6 +1252,8 @@ function DevDock({
   /** «Континенты»: карта-животное кладётся с выбором континента. */
   continents?: boolean;
   onPlayAnimal: (id: string, zoneId?: TerritoryId) => void;
+  /** «Континенты»: вместо немедленного хода — режим выбора территории кликом. */
+  onPlaceAnimal?: (id: string) => void;
   onPickTrait: (id: string, face: number) => void;
   onPass: () => void;
 }) {
@@ -1156,15 +1263,17 @@ function DevDock({
         <p className="text-xs text-muted">
           {disabled
             ? "Ход соперника — карты остаются у вас"
-            : intent.kind === "playTrait"
-              ? "Выберите животное для свойства"
-              : intent.kind === "playPair" && !("first" in intent && intent.first)
-                ? "Парное свойство: выберите первое животное"
-                : intent.kind === "playPair"
-                  ? "Второе животное пары"
-                  : continents
-                    ? "Карта как животное (выберите континент) или свойство"
-                    : "Карта как животное или свойство"}
+            : intent.kind === "placeAnimal"
+              ? "Выберите территорию на столе — животное разместится туда"
+              : intent.kind === "playTrait"
+                ? "Выберите животное для свойства"
+                : intent.kind === "playPair" && !("first" in intent && intent.first)
+                  ? "Парное свойство: выберите первое животное"
+                  : intent.kind === "playPair"
+                    ? "Второе животное пары"
+                    : continents
+                      ? "Карта как животное (затем клик по континенту) или свойство"
+                      : "Карта как животное или свойство"}
         </p>
         <Button variant="secondary" size="sm" onClick={onPass} disabled={disabled}>
           Пас
@@ -1172,51 +1281,25 @@ function DevDock({
       </div>
       <div data-hand-row className="flex gap-2 overflow-x-auto pb-1">
         {human.hand.map((card) => (
-          <div key={card.id} className="relative shrink-0">
-            <HandCard
-              card={card}
-              disabled={disabled}
-              selected={intent.kind !== "none" && "cardId" in intent && intent.cardId === card.id}
-              selectedFace={"face" in intent && intent.cardId === card.id ? (intent.face as number) : null}
-              onSelect={(face) => {
-                if (face === "animal" && continents) {
-                  // Выбор континента через меню над картой.
-                  const el = document.getElementById(`zone-menu-${card.id}`);
-                  el?.classList.toggle("hidden");
-                } else if (face === "animal") {
-                  onPlayAnimal(card.id);
-                } else {
-                  onPickTrait(card.id, face);
-                }
-              }}
-            />
-            {continents ? (
-              <div id={`zone-menu-${card.id}`} className="absolute inset-x-0 top-8 z-30 hidden flex-col gap-1 p-1">
-                <button
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => {
-                    document.getElementById(`zone-menu-${card.id}`)?.classList.add("hidden");
-                    onPlayAnimal(card.id, "laurasia");
-                  }}
-                  className="rounded-[var(--radius-xs)] bg-parchment px-1 py-1 text-[10px] font-semibold text-ink shadow-[var(--shadow-card)] hover:bg-parchment-2"
-                >
-                  ↑ Лавразия
-                </button>
-                <button
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => {
-                    document.getElementById(`zone-menu-${card.id}`)?.classList.add("hidden");
-                    onPlayAnimal(card.id, "gondwana");
-                  }}
-                  className="rounded-[var(--radius-xs)] bg-parchment px-1 py-1 text-[10px] font-semibold text-ink shadow-[var(--shadow-card)] hover:bg-parchment-2"
-                >
-                  ↓ Гондвана
-                </button>
-              </div>
-            ) : null}
-          </div>
+          <HandCard
+            key={card.id}
+            card={card}
+            disabled={disabled}
+            selected={
+              (intent.kind !== "none" && "cardId" in intent && intent.cardId === card.id) ||
+              (intent.kind === "placeAnimal" && intent.cardId === card.id)
+            }
+            selectedFace={"face" in intent && intent.cardId === card.id ? (intent.face as number) : null}
+            onSelect={(face) => {
+              if (face === "animal" && continents && onPlaceAnimal) {
+                onPlaceAnimal(card.id);
+              } else if (face === "animal") {
+                onPlayAnimal(card.id);
+              } else {
+                onPickTrait(card.id, face);
+              }
+            }}
+          />
         ))}
       </div>
     </div>

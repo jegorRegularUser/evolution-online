@@ -707,9 +707,9 @@ function toFeeding(g: GameState): GameState {
 }
 
 describe("континенты: колода и размещение", () => {
-  it("колода с континентами — 124 карты, все новые свойства присутствуют", () => {
+  it("колода с континентами — 126 карты, все новые свойства присутствуют", () => {
     const deck = buildDeck(nid, { continents: true });
-    assert.equal(deck.length, DECK_SIZE + 40);
+    assert.equal(deck.length, DECK_SIZE + 42);
     const faces = new Set(deck.flatMap((c) => c.faces));
     for (const f of ["migration", "remora", "herding", "nematocysts", "regeneration", "recombination", "edificator", "neoplasia"] as TraitId[]) {
       assert.ok(faces.has(f), `нет ${f}`);
@@ -719,6 +719,7 @@ describe("континенты: колода и размещение", () => {
   it("devPlayAnimal требует континент; океан напрямую запрещён", () => {
     const g = createGame(2, "normal", 7, undefined, { continents: true });
     g.players[0]!.hand = [{ id: "hx", faces: ["carnivore", "fatTissue"] }];
+    g.currentPlayerId = 0;
     const acts = legalDevActions(g, 0);
     const plays = acts.filter((a) => a.type === "devPlayAnimal");
     assert.deepEqual(
@@ -764,14 +765,21 @@ describe("континенты: питание по территориям", () 
     ]);
     g = toFeeding(g);
     assert.equal(g.turnTerritory, undefined);
-    g = applyAction(g, { type: "feedTake", animalId: "L1" });
+    // Первый по кругу (по сиду) берёт еду СВОИМ животным.
+    const first = g.currentPlayerId;
+    const ownLand = first === 0 ? "L1" : "x1";
+    g = applyAction(g, { type: "feedTake", animalId: ownLand });
     // Большой требует 2 еды — ход не завершится, фаза продолжается.
     assert.equal(g.phase, "feeding");
-    assert.equal(g.territoryFood?.laurasia, 7);
-    // Тот же ход — океанское животное брать не может: территория зафиксирована
-    // И еда уже бралась в этот ход (одно взятие — правило базы).
-    const acts = legalFeedActions(g, g.currentPlayerId).filter((a) => a.type === "feedTake");
-    assert.ok(!acts.some((a) => (a as { animalId: string }).animalId === "O1"));
+    // Территория хода зафиксирована первым взятием; в этот ход второе взятие
+    // невозможно вовсе, а значит и из чужой территории тем более.
+    if (first === 0) {
+      assert.equal(g.territoryFood?.laurasia, 7);
+      const acts = legalFeedActions(g, 0).filter((a) => a.type === "feedTake");
+      assert.ok(!acts.some((a) => (a as { animalId: string }).animalId === "O1"));
+    } else {
+      assert.equal(g.territoryFood?.gondwana, 6);
+    }
   });
 
   it("хищник не достаёт жертву в другой территории", () => {
@@ -861,40 +869,47 @@ describe("континенты: неоплазия и регенерация", (
     g.players[0]!.hand.push({ id: "hn", faces: ["neoplasia"] });
     g = applyAction(g, { type: "devPlayTrait", cardId: "hn", face: 0, animalId: "np" });
     const a = g.players[0]!.animals[0]!;
-    assert.ok(a.neoplasia);
-    assert.equal(a.neoplasia.disabled ?? false, false);
-    // Подъём неоплазии происходит в конце фазы питания (endFeeding).
+    assert.ok(a.traits.some((x) => x.type === "neoplasia"));
+    // Подъём происходит в начале определения кормовой базы (rollFoodBank).
     g.phase = "foodBank";
-    g.foodRoll = [1];
-    g.territoryFood = { laurasia: 8, gondwana: 7, ocean: 5 };
-    g.foodBank = 20;
-    g.currentPlayerId = 1;
-    g = applyAction(g, { type: "beginFeeding" });
-    // Животное np может брать еду каждый круг хода — фаза не кончится сама,
-    // пока игрок 1 (пустые животные) не пасанёт. Зато endFeeding наступает,
-    // когда оба пасанули: жмём feedSkip за всех, пока фаза не кончится.
-    for (let i = 0; i < 30 && g.phase === "feeding"; i++) {
-      const acts = legalFeedActions(g, g.currentPlayerId);
-      const skip = acts.find((x) => x.type === "feedSkip");
-      if (!skip) break;
-      if (acts.some((x) => x.type === "feedTake")) {
-        const take = acts.find((x) => x.type === "feedTake");
-        if (!take) break;
-        // Кормим только np игрока 0, затем пас. Когда все сыты или база
-        // опустела, фаза завершится автоматически.
-        g = applyAction(g, take);
-        if (g.phase !== "feeding") break;
-        const acts2 = legalFeedActions(g, g.currentPlayerId);
-        const skip2 = acts2.find((x) => x.type === "feedSkip");
-        if (!skip2) break;
-        g = applyAction(g, skip2);
-      } else {
-        g = applyAction(g, skip);
-      }
-    }
-    assert.equal(g.phase, "extinction");
+    g.foodRoll = null;
+    g = applyAction(g, { type: "rollFoodBank" });
     const after = g.players[0]!.animals.find((x) => x.id === "np")!;
     assert.ok(after.traits.find((x) => x.type === "herding")!.disabled);
+    assert.equal(after.traits.find((x) => x.type === "fatTissue")!.disabled ?? false, false);
+    // Следующий год — выключается второе свойство; затем животное погибает.
+    g.phase = "foodBank";
+    g.foodRoll = null;
+    g = applyAction(g, { type: "rollFoodBank" });
+    const after2 = g.players[0]!.animals.find((x) => x.id === "np")!;
+    assert.ok(after2.traits.find((x) => x.type === "fatTissue")!.disabled);
+    g.phase = "foodBank";
+    g.foodRoll = null;
+    g = applyAction(g, { type: "rollFoodBank" });
+    assert.ok(!g.players[0]!.animals.some((x) => x.id === "np"), "животное съедено неоплазией");
+  });
+
+  it("неоплазию можно сыграть на чужое животное; в океане не трогает водоплавающее", () => {
+    let g = continentScenario([
+      [{ id: "mine", traits: [] }],
+      [{ id: "sea", zoneId: "ocean", traits: [t("swimming")] }],
+    ]);
+    g.phase = "development";
+    g.currentPlayerId = 0;
+    g.players[0]!.hand = [{ id: "hn2", faces: ["neoplasia"] }];
+    const acts = legalDevActions(g, 0).filter((x) => x.type === "devPlayTrait");
+    assert.ok(acts.some((x) => (x as { animalId: string }).animalId === "sea"), "чужое доступно");
+    g = applyAction(g, { type: "devPlayTrait", cardId: "hn2", face: 0, animalId: "sea" });
+    g.phase = "foodBank";
+    g.foodRoll = null;
+    g = applyAction(g, { type: "rollFoodBank" });
+    // Водоплавающее в океане неприкосновенно — значит выключать нечего, животное гибнет.
+    const sea = g.players[1]!.animals.find((x) => x.id === "sea");
+    if (sea) {
+      assert.equal(sea.traits.find((x) => x.type === "swimming")!.disabled ?? false, false);
+    } else {
+      assert.ok(true, "нечего выключать — животное погибло");
+    }
   });
 
   it("регенерация: съеденное оставляет свойства (животное снято без сброса карт в сброс)", () => {

@@ -118,12 +118,14 @@ export const TraitChip = memo(function TraitChip({
       className={cn(
         "anim-chip-in relative inline-flex h-6 items-center gap-1 rounded-[var(--radius-xs)] px-1.5 text-[11px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
         disabled
-          ? "bg-ink/5 text-ink-soft line-through decoration-ink-soft/60"
-          : type === "carnivore" || type === "parasite"
-            ? "bg-clay/15 text-clay"
-            : type === "fatTissue"
-              ? "bg-food-yellow/20 text-ink"
-              : "bg-ink/8 text-ink",
+          ? "bg-virus/15 text-virus line-through decoration-virus/60"
+          : def.virusLike
+            ? "bg-virus/20 text-virus ring-1 ring-inset ring-virus/50"
+            : type === "carnivore"
+              ? "bg-clay/15 text-clay"
+              : type === "fatTissue"
+                ? "bg-food-yellow/20 text-ink"
+                : "bg-ink/8 text-ink",
         fresh && !disabled && "chip-fresh",
       )}
     >
@@ -133,6 +135,11 @@ export const TraitChip = memo(function TraitChip({
         <TraitGlyph id={type} className="size-3.5" />
       )}
       {def.short}
+      {def.extraFood > 0 ? (
+        <span className="text-[9px] font-semibold text-clay" title={`+${def.extraFood} к потребности в еде`}>
+          +{def.extraFood}
+        </span>
+      ) : null}
       {mark ? (
         <span className="text-[9px] font-semibold" style={{ color: mark.color }}>
           {mark.note}

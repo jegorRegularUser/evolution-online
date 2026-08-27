@@ -54,7 +54,17 @@ export function territoryOf(state: GameState, a: Animal): TerritoryId | undefine
 }
 
 /**
- * Паралич стрекательными клетками: хищник теряет ВСЕ свойства до конца фазы
+ * Водность животного. В «Континентах» океан сам делает животное водным:
+ * пока оно в океане, свойство «водоплавающее» неотчуждаемо (его не снять
+ * ни неоплазией, ни рекомбинацией, ни параличом). На континенте водность —
+ * только по карте свойства.
+ */
+export function isAquatic(state: GameState, animal: Animal): boolean {
+  if (state.modules.continents && animal.zoneId === "ocean") return true;
+  return hasTrait(animal, "swimming");
+}
+
+/** Паралич стрекательными клетками: хищник теряет ВСЕ свойства до конца фазы
  * питания (остаётся базовая потребность 1), в океане ещё и водоплавающее.
  */
 export function isParalyzed(state: GameState, animalId: string): boolean {
@@ -146,10 +156,16 @@ export function canAttack(state: GameState, carnivore: Animal, prey: Animal): bo
   }
 
   if (livingSymbiontProtects(state, prey)) return false;
+  // Симметричное водное правило: водный хищник ест только водных и наоборот.
+  // Водность считается с учётом океана (там она перманентна).
   const aquaticRule = [...carnivore.traits, ...prey.traits].some(
     (t) => isActive(t) && TRAITS[t.type].symmetricAquatic,
   );
-  if (aquaticRule && hasTrait(carnivore, "swimming") !== hasTrait(prey, "swimming")) return false;
+  const zoneAquatic =
+    state.modules.continents && (carnivore.zoneId === "ocean" || prey.zoneId === "ocean");
+  if ((aquaticRule || zoneAquatic) && isAquatic(state, carnivore) !== isAquatic(state, prey)) {
+    return false;
+  }
   for (const t of prey.traits) {
     if (!isActive(t)) continue;
     const rule = TRAITS[t.type].protection;

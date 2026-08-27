@@ -2,13 +2,13 @@ import { o as __toESM } from "../_runtime.mjs";
 import { n as require_react } from "../_libs/@radix-ui/react-compose-refs+[...].mjs";
 import { l as require_react_dom, y as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
 import { n as TSS_SERVER_FUNCTION, r as getServerFnById, t as createServerFn } from "./ssr.mjs";
-import { S as pollInput, _ as joinRoomInput, a as botsInput, b as legalFeedActions, c as chooseAIAction, d as createRoomInput, f as currentActor, g as isFed, h as hasTrait, i as applyAction, l as codeTokenInput, m as foodNeeded, n as TRAITS, o as canAttack, p as findAnimal, r as actionInput, s as canReceiveFood, u as createGame, v as legalDefenseActions, x as player, y as legalDevActions } from "./ai-AwW7_vaR.mjs";
+import { S as pollInput, _ as joinRoomInput, a as botsInput, b as legalFeedActions, c as chooseAIAction, d as createRoomInput, f as currentActor, g as isFed, h as hasTrait, i as applyAction, l as codeTokenInput, m as foodNeeded, n as TRAITS, o as canAttack, p as findAnimal, r as actionInput, s as canReceiveFood, u as createGame, v as legalDefenseActions, x as player, y as legalDevActions } from "./ai-DXMkXM_9.mjs";
 import { a as Play, c as LogOut, d as Check, f as Bot, i as Plus, l as List, o as Pause, p as BookOpen, r as RotateCcw, s as Minus, t as Users, u as Copy } from "../_libs/lucide-react.mjs";
 import { t as Slot } from "../_libs/radix-ui__react-slot.mjs";
 import { n as clsx, t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { t as twMerge } from "../_libs/tailwind-merge.mjs";
 import { t as create } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-CUSa7Dj1.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-DUBneZb9.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 var import_react_dom = require_react_dom();
@@ -70,8 +70,8 @@ var TERRITORIES = [
 */
 /**
 * Арт карт свойств. У mimicry арт — гравюра на чёрном (см. DARK_ART).
-* Свойства «Континентов» пока без генерированных картинок — UI рисует
-* векторный глиф, когда значения нет (см. hasTraitArt).
+* Свойства «Континентов» имеют собственные картинки; если какой-то ключ
+* временно без арта, UI рисует векторный глиф (см. hasTraitArt).
 */
 var TRAIT_ART = {
 	carnivore: "/img/trait/carnivore.jpg",
@@ -92,10 +92,21 @@ var TRAIT_ART = {
 	communication: "/img/trait/communication.jpg",
 	poisonous: "/img/trait/poisonous.jpg",
 	hibernation: "/img/trait/hibernation.jpg",
-	mimicry: "/img/trait/mimicry.jpg"
+	mimicry: "/img/trait/mimicry.jpg",
+	migration: "/img/trait/migration.jpg",
+	remora: "/img/trait/remora.jpg",
+	herding: "/img/trait/herding.jpg",
+	nematocysts: "/img/trait/nematocysts.jpg",
+	regeneration: "/img/trait/regeneration.jpg",
+	recombination: "/img/trait/recombination.jpg",
+	edificator: "/img/trait/edificator.jpg",
+	neoplasia: "/img/trait/neoplasia.jpg"
 };
-/** Арты с чёрным фоном: в пергаментных карточках кладутся на тёмную плашку. */
-var DARK_ART = /* @__PURE__ */ new Set(["mimicry"]);
+/**
+* Арты с чёрным фоном рисуются на тёмной плашке. Сейчас все карты сделаны
+* в одном пергаментном стиле, поэтому набор пуст — исключения добавляются сюда.
+*/
+var DARK_ART = /* @__PURE__ */ new Set();
 /** Медальон вида по рациону и телосложению. */
 function speciesArt(opts) {
 	if (opts.swimming) return "/img/species/aquatic.jpg";
@@ -120,7 +131,14 @@ var BG = {
 	extinction: "/img/bg/extinction.jpg",
 	victory: "/img/bg/victory.jpg",
 	bankBowl: "/img/bg/bank-bowl.jpg",
-	cardBack: "/img/meta/card-back.jpg"
+	cardBack: "/img/meta/card-back.jpg",
+	/** Бумажная текстура: подложка всего стола («всё лежит на бумаге»). */
+	paper: "/img/bg/texture-paper.jpg",
+	/** Сукно: центральное поле кормовой базы. */
+	felt: "/img/bg/texture-felt.jpg",
+	/** Вода: полоса океана в табло игрока. */
+	water: "/img/bg/texture-water.jpg",
+	ocean: "/img/bg/ocean.jpg"
 };
 var LOGO = "/img/meta/logo-emblem.png";
 /** Иконка фазы года (гравюра на чёрном). */
@@ -132,9 +150,9 @@ var PHASE_ICON = {
 };
 /** Арты территорий «Континентов»: фон полос и миниатюры банков. */
 var TERRITORY_ART = {
-	laurasia: "/img/world/continent-eurasia.jpg",
-	gondwana: "/img/world/continent-africa.jpg",
-	ocean: "/img/bg/ocean.jpg"
+	laurasia: "/img/world/laurasia.jpg",
+	gondwana: "/img/world/gondwana.jpg",
+	ocean: "/img/world/ocean.jpg"
 };
 var createSsrRpc = (functionId) => {
 	const url = "/_serverFn/" + functionId;
@@ -978,12 +996,28 @@ function TraitTooltip({ def, pair, pairNote, pairColor, disabled, anchorRect, id
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "px-2.5 pb-2",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "flex items-center gap-1.5 text-[11px] font-semibold",
+				className: "flex flex-wrap items-center gap-1.5 text-[11px] font-semibold",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "text-fg",
+						className: cn("text-fg", def.virusLike && "text-virus"),
 						children: def.name
 					}),
+					def.extraFood > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "rounded-full bg-clay/20 px-1.5 text-[9px] uppercase tracking-wide text-clay",
+						children: [
+							"+",
+							def.extraFood,
+							" к еде"
+						]
+					}) : null,
+					def.scoreBonus > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "rounded-full bg-good/20 px-1.5 text-[9px] uppercase tracking-wide text-good",
+						children: [
+							"+",
+							def.scoreBonus,
+							" очк."
+						]
+					}) : null,
 					pair ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "flex items-center gap-1 text-[9px] uppercase tracking-wider text-muted",
 						style: pairColor ? { color: pairColor } : void 0,
@@ -1164,7 +1198,7 @@ var TraitChip = (0, import_react.memo)(function TraitChip({ type, pair, mark, di
 			backgroundColor: `${mark.color}1f`,
 			boxShadow: `inset 0 0 0 1px ${mark.color}80`
 		} : void 0,
-		className: cn("anim-chip-in relative inline-flex h-6 items-center gap-1 rounded-[var(--radius-xs)] px-1.5 text-[11px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent/60", disabled ? "bg-ink/5 text-ink-soft line-through decoration-ink-soft/60" : type === "carnivore" || type === "parasite" ? "bg-clay/15 text-clay" : type === "fatTissue" ? "bg-food-yellow/20 text-ink" : "bg-ink/8 text-ink", fresh && !disabled && "chip-fresh"),
+		className: cn("anim-chip-in relative inline-flex h-6 items-center gap-1 rounded-[var(--radius-xs)] px-1.5 text-[11px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent/60", disabled ? "bg-virus/15 text-virus line-through decoration-virus/60" : def.virusLike ? "bg-virus/20 text-virus ring-1 ring-inset ring-virus/50" : type === "carnivore" ? "bg-clay/15 text-clay" : type === "fatTissue" ? "bg-food-yellow/20 text-ink" : "bg-ink/8 text-ink", fresh && !disabled && "chip-fresh"),
 		children: [
 			mark && !disabled ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "size-2 shrink-0 rounded-full",
@@ -1174,6 +1208,11 @@ var TraitChip = (0, import_react.memo)(function TraitChip({ type, pair, mark, di
 				className: "size-3.5"
 			}),
 			def.short,
+			def.extraFood > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "text-[9px] font-semibold text-clay",
+				title: `+${def.extraFood} к потребности в еде`,
+				children: ["+", def.extraFood]
+			}) : null,
 			mark ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "text-[9px] font-semibold",
 				style: { color: mark.color },
@@ -1484,11 +1523,15 @@ function NetMenuPanel() {
 					className: "mb-1.5 text-xs text-muted",
 					children: "Мест за столом"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "grid grid-cols-3 gap-2",
+					className: "grid grid-cols-4 gap-2 sm:grid-cols-7",
 					children: [
 						2,
 						3,
-						4
+						4,
+						5,
+						6,
+						7,
+						8
 					].map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						onClick: () => {
@@ -1793,11 +1836,15 @@ function MenuScreen({ onStart, onRules }) {
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "size-4" }), "Игроков за столом"]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "grid grid-cols-3 gap-2",
+							className: "grid grid-cols-4 gap-2 sm:grid-cols-7",
 							children: [
 								2,
 								3,
-								4
+								4,
+								5,
+								6,
+								7,
+								8
 							].map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								onClick: () => setPlayers(n),
@@ -1949,7 +1996,7 @@ function RulesPanel({ onClose }) {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
 								className: "text-fg",
 								children: "Территории."
-							}), " Животные живут на Лавразии, в Гондване и в Океане. Выкладывая животное, выбираете континент; в Океан животное попадает только со свойством «Водоплавающее». Потеряло водоплавающее — возвращается на континент."] }),
+							}), " Животные живут на Лавразии, в Гондване и в Океане. Выкладывая животное, выбираете континент кликом по нему; в Океан животное попадает только со свойством «Водоплавающее». В океане водность перманентна: её не снять ни неоплазией, ни рекомбинацией, ни параличом — только миграция выводит животное на континент."] }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
 								className: "text-fg",
 								children: "Кормовые базы."
@@ -1962,10 +2009,18 @@ function RulesPanel({ onClose }) {
 								className: "text-fg",
 								children: "Миграция."
 							}), " Объявите миграцию вместо обычного хода: ни еды, ни других свойств. Мигрирующие животные (в любом числе) переезжают: океан ↔ континенты, континент → континент напрямую нельзя. Сухопутное в океан не идёт. С мигрантом едут прилипалы — свои и чужие, даже с континента на континент."] }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
-								className: "text-fg",
-								children: "Новые свойства."
-							}), " Стадность: пока хищников в локации не больше, чем стадных, стадных нельзя есть. Стрекательные клетки: атаковавший хищник теряет все свойства до конца года (потребность 1), в океане ещё и водоплавающее — выброшен на континент. Регенерация: съеденное хищником животное оставляет свойства — владелец восстанавливает их новым животным из руки. Рекомбинация (парная): партнёры обмениваются по одному свойству. Неоплазия: каждый год выключает соседнее непарное свойство, а когда выключать нечего — убивает носителя."] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+									className: "text-fg",
+									children: "Новые свойства."
+								}),
+								" Стадность: пока стадных в локации больше, чем хищников, их нельзя есть. Стрекательные клетки: атаковавший хищник теряет все свойства до конца года (потребность 1), в океане ещё и выбрасывается на континент. Регенерация: съеденное хищником животное оставляет свойства — в вымирание владелец кладёт на них карту из руки как новое животное (добора за него нет). Рекомбинация (парная): партнёры обмениваются по одному свойству. ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "text-virus",
+									children: "Неоплазия"
+								}),
+								" — вирус: играется на любое животное, своё или чужое, и каждый год в начале определения кормовой базы поднимается, выключая очередное непарное свойство (выключенное не работает, но очки даёт); когда выключать нечего — животное немедленно погибает. Вирусные свойства (паразит, неоплазия) помечены фиолетовым."
+							] }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
 								className: "text-fg",
 								children: "Спасение."
@@ -2320,19 +2375,40 @@ function Table() {
 		});
 	}
 	const opponents = state.players.filter((p) => p.id !== human.id);
-	const seats = opponents.length === 1 ? {
-		top: [opponents[0]],
-		left: [],
-		right: []
-	} : opponents.length === 2 ? {
-		top: [],
-		left: [opponents[0]],
-		right: [opponents[1]]
-	} : {
-		top: [opponents[0]],
-		left: [opponents[1]],
-		right: [opponents[2]]
-	};
+	/**
+	* Рассадка вокруг поля. Верх и «низ» (ряд над своим табло) — по одной строке,
+	* делённой пополам между двумя соперниками; бока — по колонке до двух.
+	* Так восемь мест раскладываются без наложений: 2 сверху, 2 снизу, 2+2 по бокам.
+	*/
+	const seats = (0, import_react.useMemo)(() => {
+		const top = [];
+		const left = [];
+		const right = [];
+		const bottom = [];
+		if (opponents.length === 1) top.push(opponents[0]);
+		else if (opponents.length === 2) {
+			left.push(opponents[0]);
+			right.push(opponents[1]);
+		} else {
+			const slots = [
+				top,
+				left,
+				right,
+				top,
+				left,
+				right,
+				bottom,
+				bottom
+			];
+			opponents.forEach((p, i) => slots[Math.min(i, slots.length - 1)].push(p));
+		}
+		return {
+			top,
+			left,
+			right,
+			bottom
+		};
+	}, [opponents]);
 	const wideSeats = seats.left.length > 0 || seats.right.length > 0;
 	const lastLog = state.log[state.log.length - 1]?.text;
 	const dying = (0, import_react.useMemo)(() => new Set(state.extinctionDeaths), [state.extinctionDeaths]);
@@ -2340,7 +2416,11 @@ function Table() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			"aria-hidden": true,
-			className: "pointer-events-none fixed inset-0 -z-10 bg-cover bg-center opacity-[0.09]",
+			className: "paper-desk pointer-events-none fixed inset-0 -z-10 opacity-[0.14]"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			"aria-hidden": true,
+			className: "pointer-events-none fixed inset-0 -z-10 bg-cover bg-center opacity-[0.07]",
 			style: { backgroundImage: `url(${BG.valley})` }
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
@@ -2417,11 +2497,12 @@ function Table() {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
 			onClick: onBoardClick,
-			className: cn("flex flex-1 flex-col gap-3 px-3 py-3 sm:px-5", wideSeats ? "lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(330px,400px)_minmax(0,1fr)] lg:grid-rows-[auto_1fr_auto] lg:gap-4 lg:[grid-template-areas:'top_top_top''left_felt_right''human_human_human']" : "lg:mx-auto lg:w-full lg:max-w-4xl", state.phase === "extinction" ? "extinction-glow" : ""),
+			className: cn("flex flex-1 flex-col gap-3 px-3 py-3 sm:px-5", wideSeats ? "lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(330px,400px)_minmax(0,1fr)] lg:grid-rows-[auto_1fr_auto_auto] lg:gap-4 lg:[grid-template-areas:'top_top_top''left_felt_right''bottom_bottom_bottom''human_human_human']" : "lg:mx-auto lg:w-full lg:max-w-4xl", state.phase === "extinction" ? "extinction-glow" : ""),
 			children: [
-				seats.top.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					style: { gridArea: "top" },
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlayerSection, {
+				seats.top.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					style: wideSeats ? { gridArea: "top" } : void 0,
+					className: cn("grid gap-3", seats.top.length > 1 && "lg:grid-cols-2"),
+					children: seats.top.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlayerSection, {
 						p,
 						actorId: actor?.id ?? null,
 						thinking: thinking && thinkingWho === p.id,
@@ -2429,8 +2510,8 @@ function Table() {
 						dying,
 						freshSince: state.phase === "development" ? state.devStartPlaySeq : void 0,
 						continents: Boolean(state.modules.continents)
-					})
-				}, p.id)),
+					}, p.id))
+				}) : null,
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					style: wideSeats ? { gridArea: "left" } : void 0,
 					className: cn(wideSeats && "lg:min-w-0"),
@@ -2459,6 +2540,7 @@ function Table() {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					style: wideSeats ? { gridArea: "right" } : void 0,
+					className: cn(wideSeats && "lg:min-w-0"),
 					children: seats.right.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlayerSection, {
 						p,
 						actorId: actor?.id ?? null,
@@ -2469,6 +2551,19 @@ function Table() {
 						continents: Boolean(state.modules.continents)
 					}, p.id))
 				}),
+				seats.bottom.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					style: wideSeats ? { gridArea: "bottom" } : void 0,
+					className: cn("grid gap-3", seats.bottom.length > 1 && "lg:grid-cols-2"),
+					children: seats.bottom.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlayerSection, {
+						p,
+						actorId: actor?.id ?? null,
+						thinking: thinking && thinkingWho === p.id,
+						interactions: getInteraction,
+						dying,
+						freshSince: state.phase === "development" ? state.devStartPlaySeq : void 0,
+						continents: Boolean(state.modules.continents)
+					}, p.id))
+				}) : null,
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlayerSection, {
 					p: human,
 					isHuman: true,
@@ -2500,6 +2595,10 @@ function Table() {
 					type: "devPlayAnimal",
 					cardId,
 					zoneId
+				}),
+				onPlaceAnimal: (cardId) => setIntent({
+					kind: "placeAnimal",
+					cardId
 				}),
 				onPickTrait: (cardId, face) => {
 					const trait = human.hand.find((c) => c.id === cardId)?.faces[face];
@@ -2655,10 +2754,13 @@ function animalHighlight(state, animal, intent, isHumanTurn, feedActs, devActs) 
 /** Табло игрока со его животными; парные карты кладутся между животными. */
 var PlayerSection = (0, import_react.memo)(function PlayerSection({ p, isHuman, actorId, thinking, interactions, dying, freshSince, continents, style }) {
 	const dispatch = useGameStore((s) => s.dispatch);
+	const intent = useGameStore((s) => s.intent);
 	const [dragId, setDragId] = (0, import_react.useState)(null);
 	const [overId, setOverId] = (0, import_react.useState)(null);
 	const dragIdRef = (0, import_react.useRef)(null);
 	const active = actorId === p.id;
+	/** Карта, ожидающая выбора континента (интент «выставить животное»). */
+	const placingAnimal = isHuman && active && intent.kind === "placeAnimal" ? intent.cardId : void 0;
 	/**
 	* Разметка пар этого табло. У животного бывает две пары плюс симбионт,
 	* поэтому каждая парная карта получает свой цвет (по порядку выкладывания),
@@ -2700,7 +2802,8 @@ var PlayerSection = (0, import_react.memo)(function PlayerSection({ p, isHuman, 
 		return {
 			colorOf,
 			marks,
-			plateNote
+			plateNote,
+			numberOf
 		};
 	}, [p.animals]);
 	const cardProps = (a) => ({
@@ -2794,7 +2897,7 @@ var PlayerSection = (0, import_react.memo)(function PlayerSection({ p, isHuman, 
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		style,
 		"data-player-section": p.id,
-		className: cn("mb-3 rounded-[var(--radius-lg)] border bg-surface p-3 transition-[border-color,box-shadow] duration-[var(--motion-quick)] lg:mb-0", active ? "border-accent/70 shadow-[0_0_0_1px_var(--color-accent),var(--shadow-card)]" : "border-border"),
+		className: cn("paper-sheet mb-3 rounded-[var(--radius-lg)] border bg-surface p-3 transition-[border-color,box-shadow] duration-[var(--motion-quick)] lg:mb-0", active ? "border-accent/70 shadow-[0_0_0_1px_var(--color-accent),var(--shadow-card)]" : "border-border"),
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "mb-2 flex items-center justify-between text-sm",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
@@ -2816,12 +2919,20 @@ var PlayerSection = (0, import_react.memo)(function PlayerSection({ p, isHuman, 
 			className: "flex flex-col gap-2",
 			children: TERRITORIES.map((t) => {
 				const animals = p.animals.filter((a) => (a.zoneId ?? "laurasia") === t.id);
+				const pickable = isHuman && placingAnimal !== void 0 && t.id !== "ocean" && active;
 				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(TerritoryRow, {
 					zone: t.id,
 					name: t.name,
 					count: animals.length,
+					tall: placingAnimal !== void 0 || animals.length > 0,
+					pickable,
+					onPickZone: pickable ? () => dispatch({
+						type: "devPlayAnimal",
+						cardId: placingAnimal,
+						zoneId: t.id
+					}) : void 0,
 					dropHint: isHuman,
-					onDropZone: isHuman ? () => dispatch({
+					onDropZone: isHuman && dragIdRef.current ? () => dispatch({
 						type: "reorderAnimal",
 						animalId: dragIdRef.current,
 						toZoneId: t.id
@@ -2829,7 +2940,7 @@ var PlayerSection = (0, import_react.memo)(function PlayerSection({ p, isHuman, 
 					children: [animals.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "px-1 text-[11px] text-subtle",
 						children: t.id === "ocean" ? "пусто (нужна водоплавающая)" : "пусто"
-					}) : null, animals.map((a, i) => renderCard(a, i + 1))]
+					}) : null, animals.map((a) => renderCard(a, pairs.numberOf.get(a.id) ?? 1))]
 				}, t.id);
 			})
 		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -2840,13 +2951,31 @@ var PlayerSection = (0, import_react.memo)(function PlayerSection({ p, isHuman, 
 	});
 });
 /** Полоса одной территории в табло игрока («Континенты»). */
-function TerritoryRow({ zone, name, count, children, dropHint, onDropZone }) {
+function TerritoryRow({ zone, name, count, children, dropHint, onDropZone, tall, pickable, onPickZone }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		"data-zone": zone,
+		role: pickable ? "button" : void 0,
+		"aria-label": pickable ? `Разместить на ${name}` : void 0,
+		onClick: pickable ? onPickZone : void 0,
+		onKeyDown: pickable ? (e) => {
+			if (e.key === "Enter" || e.key === " ") {
+				e.preventDefault();
+				onPickZone?.();
+			}
+		} : void 0,
+		tabIndex: pickable ? 0 : void 0,
 		onDragOver: dropHint ? (e) => e.preventDefault() : void 0,
 		onDrop: onDropZone,
-		className: cn("relative flex min-h-[52px] flex-wrap items-stretch gap-2 rounded-[var(--radius-md)] border border-dashed px-2 py-2", zone === "ocean" ? "border-water/40 bg-water/10" : "border-border-strong/25 bg-bg/40"),
+		className: cn("relative flex flex-wrap items-stretch gap-2 rounded-[var(--radius-md)] border border-dashed px-2 transition-all duration-[var(--motion-quick)]", zone === "ocean" && "water-strip", tall ? "min-h-[188px] py-2" : "min-h-[52px] py-2", zone === "ocean" ? "border-water/40 bg-water/10" : "border-border-strong/25 bg-bg/40", pickable && "cursor-pointer border-solid border-accent ring-2 ring-accent/50 hover:bg-accent/15"),
 		children: [
+			pickable ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "absolute inset-x-0 top-1/2 -translate-y-1/2 text-center text-xs font-medium text-accent",
+				children: [
+					"нажмите, чтобы разместить на «",
+					name,
+					"»"
+				]
+			}) : null,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
 				src: TERRITORY_ART[zone],
 				alt: "",
@@ -2854,7 +2983,7 @@ function TerritoryRow({ zone, name, count, children, dropHint, onDropZone }) {
 				className: "pointer-events-none absolute inset-0 h-full w-full rounded-[var(--radius-md)] object-cover opacity-[0.08]"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "absolute -top-1.5 left-2 rounded-full border border-border bg-surface px-1.5 text-[9px] font-medium uppercase tracking-[0.14em] text-muted",
+				className: "absolute -top-1.5 left-2 z-10 rounded-full border border-border bg-surface px-1.5 text-[9px] font-medium uppercase tracking-[0.14em] text-muted",
 				children: [
 					name,
 					" · ",
@@ -2945,7 +3074,8 @@ function TerritoryBanks({ banks, active }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
 						src: TERRITORY_ART[t.id],
 						alt: "",
-						className: "h-7 w-full rounded-[4px] object-cover opacity-80"
+						"aria-hidden": true,
+						className: "size-14 shrink-0 rounded-[var(--radius-sm)] border border-ink/20 object-cover shadow-[var(--shadow-card)]"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "flex items-center gap-1",
@@ -3072,14 +3202,14 @@ function FoodBankChip({ count, visible }) {
 		})]
 	});
 }
-function DevDock({ human, intent, disabled, continents, onPlayAnimal, onPickTrait, onPass }) {
+function DevDock({ human, intent, disabled, continents, onPlayAnimal, onPlaceAnimal, onPickTrait, onPass }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "space-y-2",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "flex items-center justify-between gap-2",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "text-xs text-muted",
-				children: disabled ? "Ход соперника — карты остаются у вас" : intent.kind === "playTrait" ? "Выберите животное для свойства" : intent.kind === "playPair" && !("first" in intent && intent.first) ? "Парное свойство: выберите первое животное" : intent.kind === "playPair" ? "Второе животное пары" : continents ? "Карта как животное (выберите континент) или свойство" : "Карта как животное или свойство"
+				children: disabled ? "Ход соперника — карты остаются у вас" : intent.kind === "placeAnimal" ? "Выберите территорию на столе — животное разместится туда" : intent.kind === "playTrait" ? "Выберите животное для свойства" : intent.kind === "playPair" && !("first" in intent && intent.first) ? "Парное свойство: выберите первое животное" : intent.kind === "playPair" ? "Второе животное пары" : continents ? "Карта как животное (затем клик по континенту) или свойство" : "Карта как животное или свойство"
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
 				variant: "secondary",
 				size: "sm",
@@ -3090,41 +3220,16 @@ function DevDock({ human, intent, disabled, continents, onPlayAnimal, onPickTrai
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			"data-hand-row": true,
 			className: "flex gap-2 overflow-x-auto pb-1",
-			children: human.hand.map((card) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "relative shrink-0",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HandCard, {
-					card,
-					disabled,
-					selected: intent.kind !== "none" && "cardId" in intent && intent.cardId === card.id,
-					selectedFace: "face" in intent && intent.cardId === card.id ? intent.face : null,
-					onSelect: (face) => {
-						if (face === "animal" && continents) document.getElementById(`zone-menu-${card.id}`)?.classList.toggle("hidden");
-						else if (face === "animal") onPlayAnimal(card.id);
-						else onPickTrait(card.id, face);
-					}
-				}), continents ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					id: `zone-menu-${card.id}`,
-					className: "absolute inset-x-0 top-8 z-30 hidden flex-col gap-1 p-1",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						disabled,
-						onClick: () => {
-							document.getElementById(`zone-menu-${card.id}`)?.classList.add("hidden");
-							onPlayAnimal(card.id, "laurasia");
-						},
-						className: "rounded-[var(--radius-xs)] bg-parchment px-1 py-1 text-[10px] font-semibold text-ink shadow-[var(--shadow-card)] hover:bg-parchment-2",
-						children: "↑ Лавразия"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						disabled,
-						onClick: () => {
-							document.getElementById(`zone-menu-${card.id}`)?.classList.add("hidden");
-							onPlayAnimal(card.id, "gondwana");
-						},
-						className: "rounded-[var(--radius-xs)] bg-parchment px-1 py-1 text-[10px] font-semibold text-ink shadow-[var(--shadow-card)] hover:bg-parchment-2",
-						children: "↓ Гондвана"
-					})]
-				}) : null]
+			children: human.hand.map((card) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HandCard, {
+				card,
+				disabled,
+				selected: intent.kind !== "none" && "cardId" in intent && intent.cardId === card.id || intent.kind === "placeAnimal" && intent.cardId === card.id,
+				selectedFace: "face" in intent && intent.cardId === card.id ? intent.face : null,
+				onSelect: (face) => {
+					if (face === "animal" && continents && onPlaceAnimal) onPlaceAnimal(card.id);
+					else if (face === "animal") onPlayAnimal(card.id);
+					else onPickTrait(card.id, face);
+				}
 			}, card.id))
 		})]
 	});

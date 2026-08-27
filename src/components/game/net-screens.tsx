@@ -25,7 +25,7 @@ export function NetMenuPanel() {
   const [tab, setTab] = useState<"none" | "create" | "join">("none");
   const [name, setName] = useState(loadName());
   const [code, setCode] = useState("");
-  const [capacity, setCapacity] = useState<2 | 3 | 4>(2);
+  const [capacity, setCapacity] = useState<2 | 3 | 4 | 5 | 6 | 7 | 8>(2);
   // По умолчанию мест без ботов: стол создаётся открытым для приглашённых,
   // боты добавляются кнопкой в лобби.
   const [bots, setBots] = useState(0);
@@ -120,13 +120,13 @@ export function NetMenuPanel() {
         <>
           <div className="mb-3">
             <p className="mb-1.5 text-xs text-muted">Мест за столом</p>
-            <div className="grid grid-cols-3 gap-2">
-              {[2, 3, 4].map((n) => (
+            <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
+              {[2, 3, 4, 5, 6, 7, 8].map((n) => (
                 <button
                   key={n}
                   type="button"
                   onClick={() => {
-                    setCapacity(n as 2 | 3 | 4);
+                    setCapacity(n as 2 | 3 | 4 | 5 | 6 | 7 | 8);
                     setBots((b) => Math.min(b, n - 1));
                   }}
                   className={cn(

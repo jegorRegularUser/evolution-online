@@ -17,6 +17,10 @@ export interface TraitDef {
   description: string;
   isPair: boolean;
   opponentOnly: boolean;
+  /** Играется на любое животное — своё или чужое (неоплазия). */
+  anyTarget?: boolean;
+  /** Вирусная природа: в UI выделяется ядовито-фиолетовым (паразит, неоплазия). */
+  virusLike?: boolean;
   stackable: boolean;
   extraFood: number;
   scoreBonus: number;
@@ -227,6 +231,7 @@ export const TRAITS: Record<TraitId, TraitDef> = {
       "Только на чужое животное. +2 к потребности в еде. В конце игры даёт владельцу животного 2 дополнительных очка.",
     isPair: false,
     opponentOnly: true,
+    virusLike: true,
     stackable: false,
     extraFood: 2,
     scoreBonus: 2,
@@ -399,12 +404,14 @@ export const TRAITS: Record<TraitId, TraitDef> = {
     name: "Неоплазия",
     short: "Неоплазия",
     description:
-      "Только на непарные свойства. Кладётся под свойства животного и каждый год поднимается: выключает лежащее выше непарное свойство (оно перестаёт действовать, но очки даёт). Выключать нечего — животное немедленно погибает.",
+      "Играется на ЛЮБОЕ животное (своё или чужое), только на непарные свойства. Кладётся под свойства и каждый год в начале определения кормовой базы поднимается: выключает лежащее выше непарное свойство (оно перестаёт действовать, но очки даёт). Выключать нечего — животное немедленно погибает. «Водоплавающее» в океане неприкосновенно.",
     isPair: false,
     opponentOnly: false,
+    anyTarget: true,
     stackable: false,
     extraFood: 0,
     scoreBonus: 0,
+    virusLike: true,
     aiValue: -6,
   },
 };

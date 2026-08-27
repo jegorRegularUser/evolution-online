@@ -29,14 +29,21 @@ const DUALS: Array<[TraitId, TraitId, number]> = [
 /**
  * Карты «Континентов» (Правильные игры, 2012): 42 карты восьми новых свойств.
  * Миграция крупнее всех, прилипала идёт в комплекте к ней.
+ * Миграция, прилипала и часть паразитов идут с гранью «водоплавающее»:
+ * карта даёт выбор одного из двух свойств.
  */
 const CONTINENTS_SINGLES: Array<[TraitId, number]> = [
-  ["migration", 8],
-  ["remora", 6],
   ["herding", 4],
   ["nematocysts", 6],
   ["edificator", 6],
   ["regeneration", 4],
+];
+
+/** [лицо 1, лицо 2, количество] — две грани на выбор. */
+const CONTINENTS_DUALS: Array<[TraitId, TraitId, number]> = [
+  ["migration", "swimming", 8],
+  ["remora", "swimming", 6],
+  ["parasite", "swimming", 2],
 ];
 
 /** Рекомбинация — парная карта; неоплазия кладётся «под» свойства. */
@@ -50,6 +57,7 @@ export const DECK_SIZE = SINGLES.reduce((n, [, c]) => n + c, 0) + DUALS.reduce((
 export function continentsDeckSize(): number {
   return (
     CONTINENTS_SINGLES.reduce((n, [, c]) => n + c, 0) +
+    CONTINENTS_DUALS.reduce((n, [, , c]) => n + c, 0) +
     CONTINENTS_PAIRS.reduce((n, [, c]) => n + c, 0)
   );
 }
@@ -74,8 +82,13 @@ export function buildDeck(nextId: (prefix: string) => string, modules?: Partial<
         cards.push({ id: nextId("c"), faces: [trait] });
       }
     }
+    // Карты с гранью «водоплавающее»: игрок выбирает одну из двух граней.
+    for (const [a, b, n] of CONTINENTS_DUALS) {
+      for (let i = 0; i < n; i++) {
+        cards.push({ id: nextId("c"), faces: [a, b] });
+      }
+    }
     for (const [trait, n] of CONTINENTS_PAIRS) {
-      // Двусторонние карты не имеет смысла делать: у этих свойств по одной грани.
       for (let i = 0; i < n; i++) {
         cards.push({ id: nextId("c"), faces: [trait] });
       }

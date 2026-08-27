@@ -208,8 +208,11 @@ export interface GameState {
   turnTerritory?: TerritoryId;
   /** Территория, выбранная для будущей миграции (ход «миграция» ещё не завершён). */
   pendingMigration?: Array<{ animalId: string; to: TerritoryId }>;
-  /** Съеденное животное с «регенерацией»: свойства ждут восстановления картой из руки. */
-  pendingRegeneration?: { ownerId: number; cardIds: string[] } | null;
+  /**
+   * Съеденные животные со «регенерацией»: их свойства ждут восстановления —
+   * в вымирание владелец кладёт на них карту из руки как новое животное.
+   */
+  pendingRegeneration?: Array<{ ownerId: number; cardIds: string[] }> | null;
   currentPlayerId: number;
   firstPlayerId: number;
   phase: Phase;

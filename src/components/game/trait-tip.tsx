@@ -69,8 +69,18 @@ export function TraitTooltip({
         </div>
       )}
       <div className="px-2.5 pb-2">
-        <div className="flex items-center gap-1.5 text-[11px] font-semibold">
-          <span className="text-fg">{def.name}</span>
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
+          <span className={cn("text-fg", def.virusLike && "text-virus")}>{def.name}</span>
+          {def.extraFood > 0 ? (
+            <span className="rounded-full bg-clay/20 px-1.5 text-[9px] uppercase tracking-wide text-clay">
+              +{def.extraFood} к еде
+            </span>
+          ) : null}
+          {def.scoreBonus > 0 ? (
+            <span className="rounded-full bg-good/20 px-1.5 text-[9px] uppercase tracking-wide text-good">
+              +{def.scoreBonus} очк.
+            </span>
+          ) : null}
           {pair ? (
             <span
               className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-muted"

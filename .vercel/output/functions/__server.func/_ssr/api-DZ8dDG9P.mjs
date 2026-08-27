@@ -1,6 +1,6 @@
 import { n as TSS_SERVER_FUNCTION, t as createServerFn } from "./ssr.mjs";
-import { S as pollInput, _ as joinRoomInput, a as botsInput, b as legalFeedActions, c as chooseAIAction, d as createRoomInput, f as currentActor, i as applyAction, l as codeTokenInput, r as actionInput, t as PACE, u as createGame, v as legalDefenseActions, y as legalDevActions } from "./ai-AwW7_vaR.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/api-Cdy6LvRQ.js
+import { S as pollInput, _ as joinRoomInput, a as botsInput, b as legalFeedActions, c as chooseAIAction, d as createRoomInput, f as currentActor, i as applyAction, l as codeTokenInput, r as actionInput, t as PACE, u as createGame, v as legalDefenseActions, y as legalDevActions } from "./ai-DXMkXM_9.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/api-DZ8dDG9P.js
 var createServerRpc = (serverFnMeta, splitImportFn) => {
 	const url = "/_serverFn/" + serverFnMeta.id;
 	return Object.assign(splitImportFn, {
@@ -391,7 +391,7 @@ var NET_TABLES_DDL = `
 create table if not exists evo_rooms (
   code         text primary key,
   status       text not null default 'lobby',
-  capacity     int  not null check (capacity between 2 and 4),
+  capacity     int  not null check (capacity between 2 and 8),
   difficulty   text not null default 'normal',
   seed         bigint not null,
   state        jsonb,
@@ -402,7 +402,7 @@ create table if not exists evo_rooms (
 );
 create table if not exists evo_seats (
   room_code    text not null references evo_rooms(code) on delete cascade,
-  seat         int  not null check (seat between 0 and 3),
+  seat         int  not null check (seat between 0 and 7),
   name         text not null,
   token        text not null,
   is_ai        boolean not null default false,
@@ -410,6 +410,10 @@ create table if not exists evo_seats (
   primary key (room_code, seat)
 );
 alter table evo_rooms add column if not exists modules jsonb not null default '{}';
+alter table evo_rooms drop constraint if exists evo_rooms_capacity_check;
+alter table evo_rooms add constraint evo_rooms_capacity_check check (capacity between 2 and 8);
+alter table evo_seats drop constraint if exists evo_seats_seat_check;
+alter table evo_seats add constraint evo_seats_seat_check check (seat between 0 and 7);
 `;
 /**
 * Общий экземпляр для прод-сервера. @/lib/db импортируется динамически:
@@ -418,7 +422,7 @@ alter table evo_rooms add column if not exists modules jsonb not null default '{
 */
 function getRoomService() {
 	const g = globalThis;
-	g.__evoNetService__ ??= import("./db-CCV1ka02.mjs").then(async ({ getSql }) => {
+	g.__evoNetService__ ??= import("./db-CpEyk40J.mjs").then(async ({ getSql }) => {
 		const sql = await getSql();
 		await sql.query(NET_TABLES_DDL);
 		return createRoomService(sql);

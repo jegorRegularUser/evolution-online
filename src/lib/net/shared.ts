@@ -72,8 +72,16 @@ const CODE = z.string().trim().length(4);
 
 export const createRoomInput = z.object({
   name: NAME,
-  capacity: z.union([z.literal(2), z.literal(3), z.literal(4)]),
-  botSeats: z.number().int().min(0).max(3),
+  capacity: z.union([
+    z.literal(2),
+    z.literal(3),
+    z.literal(4),
+    z.literal(5),
+    z.literal(6),
+    z.literal(7),
+    z.literal(8),
+  ]),
+  botSeats: z.number().int().min(0).max(7),
   difficulty: z.enum(["easy", "normal", "hard"]) satisfies z.ZodType<Difficulty>,
   /** Включённые дополнения; ключи валидируются строго (белый список). */
   modules: z
@@ -86,7 +94,7 @@ export type CreateRoomInput = z.infer<typeof createRoomInput>;
 
 export const joinRoomInput = z.object({ code: CODE, name: NAME });
 export const codeTokenInput = z.object({ code: CODE, token: z.string().min(10) });
-export const botsInput = codeTokenInput.extend({ count: z.number().int().min(0).max(4) });
+export const botsInput = codeTokenInput.extend({ count: z.number().int().min(0).max(7) });
 export const actionInput = z.object({
   code: CODE,
   token: z.string().min(10),

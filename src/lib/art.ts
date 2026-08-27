@@ -46,8 +46,11 @@ export function hasTraitArt(id: TraitId): boolean {
   return Boolean(TRAIT_ART[id]);
 }
 
-/** Арты с чёрным фоном: в пергаментных карточках кладутся на тёмную плашку. */
-export const DARK_ART: ReadonlySet<TraitId> = new Set<TraitId>(["mimicry"]);
+/**
+ * Арты с чёрным фоном рисуются на тёмной плашке. Сейчас все карты сделаны
+ * в одном пергаментном стиле, поэтому набор пуст — исключения добавляются сюда.
+ */
+export const DARK_ART: ReadonlySet<TraitId> = new Set<TraitId>();
 
 /** Медальон вида по рациону и телосложению. */
 export function speciesArt(opts: { swimming?: boolean; carnivore?: boolean; bulky?: boolean }): string {
@@ -78,6 +81,13 @@ export const BG = {
   victory: "/img/bg/victory.jpg",
   bankBowl: "/img/bg/bank-bowl.jpg",
   cardBack: "/img/meta/card-back.jpg",
+  /** Бумажная текстура: подложка всего стола («всё лежит на бумаге»). */
+  paper: "/img/bg/texture-paper.jpg",
+  /** Сукно: центральное поле кормовой базы. */
+  felt: "/img/bg/texture-felt.jpg",
+  /** Вода: полоса океана в табло игрока. */
+  water: "/img/bg/texture-water.jpg",
+  ocean: "/img/bg/ocean.jpg",
 } as const;
 
 export const LOGO = "/img/meta/logo-emblem.png";
