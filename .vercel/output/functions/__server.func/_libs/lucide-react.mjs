@@ -281,6 +281,92 @@ var RotateCcw = createLucideIcon("rotate-ccw", [["path", {
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var Skull = createLucideIcon("skull", [
+	["path", {
+		d: "m12.5 17-.5-1-.5 1h1z",
+		key: "3me087"
+	}],
+	["path", {
+		d: "M15 22a1 1 0 0 0 1-1v-1a2 2 0 0 0 1.56-3.25 8 8 0 1 0-11.12 0A2 2 0 0 0 8 20v1a1 1 0 0 0 1 1z",
+		key: "1o5pge"
+	}],
+	["circle", {
+		cx: "15",
+		cy: "12",
+		r: "1",
+		key: "1tmaij"
+	}],
+	["circle", {
+		cx: "9",
+		cy: "12",
+		r: "1",
+		key: "1vctgf"
+	}]
+]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
+var Swords = createLucideIcon("swords", [
+	["polyline", {
+		points: "14.5 17.5 3 6 3 3 6 3 17.5 14.5",
+		key: "1hfsw2"
+	}],
+	["line", {
+		x1: "13",
+		x2: "19",
+		y1: "19",
+		y2: "13",
+		key: "1vrmhu"
+	}],
+	["line", {
+		x1: "16",
+		x2: "20",
+		y1: "16",
+		y2: "20",
+		key: "1bron3"
+	}],
+	["line", {
+		x1: "19",
+		x2: "21",
+		y1: "21",
+		y2: "19",
+		key: "13pww6"
+	}],
+	["polyline", {
+		points: "14.5 6.5 18 3 21 3 21 6 17.5 9.5",
+		key: "hbey2j"
+	}],
+	["line", {
+		x1: "5",
+		x2: "9",
+		y1: "14",
+		y2: "18",
+		key: "1hf58s"
+	}],
+	["line", {
+		x1: "7",
+		x2: "4",
+		y1: "17",
+		y2: "20",
+		key: "pidxm4"
+	}],
+	["line", {
+		x1: "3",
+		x2: "5",
+		y1: "19",
+		y2: "21",
+		key: "1pehsh"
+	}]
+]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var TriangleAlert = createLucideIcon("triangle-alert", [
 	["path", {
 		d: "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3",
@@ -322,4 +408,4 @@ var Users = createLucideIcon("users", [
 	}]
 ]);
 //#endregion
-export { Play as a, LogOut as c, Check as d, Bot as f, Plus as i, List as l, TriangleAlert as n, Pause as o, BookOpen as p, RotateCcw as r, Minus as s, Users as t, Copy as u };
+export { RotateCcw as a, Pause as c, List as d, Copy as f, BookOpen as h, Skull as i, Minus as l, Bot as m, TriangleAlert as n, Plus as o, Check as p, Swords as r, Play as s, Users as t, LogOut as u };

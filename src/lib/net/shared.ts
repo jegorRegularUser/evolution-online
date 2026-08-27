@@ -85,7 +85,11 @@ export const createRoomInput = z.object({
   difficulty: z.enum(["easy", "normal", "hard"]) satisfies z.ZodType<Difficulty>,
   /** Включённые дополнения; ключи валидируются строго (белый список). */
   modules: z
-    .object({ continents: z.boolean().optional() })
+    .object({
+      continents: z.boolean().optional(),
+      plants: z.boolean().optional(),
+      fungi: z.boolean().optional(),
+    })
     .partial()
     .default({})
     .optional(),

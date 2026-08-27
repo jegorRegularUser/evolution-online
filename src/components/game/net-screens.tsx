@@ -31,6 +31,9 @@ export function NetMenuPanel() {
   const [bots, setBots] = useState(0);
   const [difficulty, setDifficulty] = useState<Difficulty>("normal");
   const [continents, setContinents] = useState(false);
+  const [plants, setPlants] = useState(false);
+  const [fungi, setFungi] = useState(false);
+  const [mutations, setMutations] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -189,26 +192,88 @@ export function NetMenuPanel() {
           </div>
 
           <div className="mb-3">
-            <p className="mb-1.5 text-xs text-muted">Дополнение</p>
-            <button
-              type="button"
-              onClick={() => setContinents((v) => !v)}
-              aria-pressed={continents}
-              className={cn(
-                "flex w-full items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-sm",
-                continents ? "border-accent bg-accent/15 text-fg" : "border-border bg-bg text-fg hover:bg-surface-2",
-              )}
-            >
-              <span>Континенты — Лавразия, Гондвана и Океан</span>
-              <span
+            <p className="mb-1.5 text-xs text-muted">Дополнения</p>
+            <div className="grid gap-2">
+              <button
+                type="button"
+                onClick={() => setContinents((v) => !v)}
+                aria-pressed={continents}
                 className={cn(
-                  "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
-                  continents ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
+                  "flex w-full items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-sm",
+                  continents ? "border-accent bg-accent/15 text-fg" : "border-border bg-bg text-fg hover:bg-surface-2",
                 )}
               >
-                {continents ? "вкл" : "выкл"}
-              </span>
-            </button>
+                <span>Континенты — Лавразия, Гондвана и Океан</span>
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
+                    continents ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
+                  )}
+                >
+                  {continents ? "вкл" : "выкл"}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPlants((v) => !v)}
+                aria-pressed={plants}
+                title="Растения: еда на общих растениях, фаза роста, убежища и хищные растения. Совместимо с Континентами."
+                className={cn(
+                  "flex w-full items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-sm",
+                  plants ? "border-accent bg-accent/15 text-fg" : "border-border bg-bg text-fg hover:bg-surface-2",
+                )}
+              >
+                <span>Растения — общая кормовая база и убежища</span>
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
+                    plants ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
+                  )}
+                >
+                  {plants ? "вкл" : "выкл"}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFungi((v) => !v)}
+                aria-pressed={fungi}
+                title="Трава и грибы: еда на картах флоры, метки последствий, флора играет на победу. Совместимо с Континентами и Растениями."
+                className={cn(
+                  "flex w-full items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-sm",
+                  fungi ? "border-accent bg-accent/15 text-fg" : "border-border bg-bg text-fg hover:bg-surface-2",
+                )}
+              >
+                <span>Трава и грибы — флора и метки последствий</span>
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
+                    fungi ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
+                  )}
+                >
+                  {fungi ? "вкл" : "выкл"}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMutations((v) => !v)}
+                aria-pressed={mutations}
+                title="Случайные мутации: вместо руки — личная слепая колода, численность видов, вредные мутации. Совместимо со всеми дополнениями."
+                className={cn(
+                  "flex w-full items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-sm",
+                  mutations ? "border-accent bg-accent/15 text-fg" : "border-border bg-bg text-fg hover:bg-surface-2",
+                )}
+              >
+                <span>Случайные мутации — слепые колоды и вредные мутации</span>
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
+                    mutations ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
+                  )}
+                >
+                  {mutations ? "вкл" : "выкл"}
+                </span>
+              </button>
+            </div>
           </div>
 
           <Button
@@ -222,7 +287,12 @@ export function NetMenuPanel() {
                   capacity,
                   botSeats: bots,
                   difficulty,
-                  modules: continents ? { continents: true } : {},
+                  modules: {
+                    ...(continents ? { continents: true } : {}),
+                    ...(plants ? { plants: true } : {}),
+                    ...(fungi ? { fungi: true } : {}),
+                    ...(mutations ? { randomMutations: true } : {}),
+                  },
                 }),
               )
             }

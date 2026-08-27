@@ -47,6 +47,17 @@ export interface TraitDef {
   limitsRegeneration?: boolean;
   /** Эвристическая ценность для ИИ (защита/размещение). */
   aiValue: number;
+  /**
+   * «Растения»: свойство разыгрывается на общее растение, а не на животное.
+   * Вторая грань такой карты — обычное свойство животного.
+   */
+  plantTrait?: boolean;
+  /**
+   * «Случайные мутации»: вредная мутация (тёмная сторона карты). Разыгрывается
+   * как обычное свойство — отказаться нельзя, можно только объявить карту
+   * новым видом, пока у вида нет других свойств.
+   */
+  harmful?: boolean;
 }
 
 export const TRAITS: Record<TraitId, TraitDef> = {
@@ -414,6 +425,309 @@ export const TRAITS: Record<TraitId, TraitDef> = {
     virusLike: true,
     aiValue: -6,
   },
+  // ── Дополнение «Растения» (Правильные игры, 2016): свойства растений ──────
+  plantWater: {
+    id: "plantWater",
+    name: "Водное",
+    short: "Водное",
+    description:
+      "Свойство растения. Только водоплавающие животные могут получать пищу с такого растения.",
+    isPair: false,
+    opponentOnly: false,
+    plantTrait: true,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    aiValue: 2,
+  },
+  thorny: {
+    id: "thorny",
+    name: "Колючее",
+    short: "Колючее",
+    description:
+      "Свойство растения. Положите на растение 3 жетона убежища. Убежище защищает животное от хищников и хищных растений до конца фазы питания.",
+    isPair: false,
+    opponentOnly: false,
+    plantTrait: true,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    aiValue: 3,
+  },
+  rootVegetable: {
+    id: "rootVegetable",
+    name: "Корнеплод",
+    short: "Корнеплод",
+    description:
+      "Свойство растения. Только норные животные смогут добраться до его вкусных корешков.",
+    isPair: false,
+    opponentOnly: false,
+    plantTrait: true,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    aiValue: 2,
+  },
+  medicinal: {
+    id: "medicinal",
+    name: "Лекарственное",
+    short: "Лекарств.",
+    description:
+      "Свойство растения. Животное, откушавшее с него, считается накормленным, но все его свойства перестают действовать до конца фазы питания (действует только фишка убежища). Сытому с пустым жиром фишка уйдёт в жировой запас.",
+    isPair: false,
+    opponentOnly: false,
+    plantTrait: true,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    aiValue: 2,
+  },
+  plantParasite: {
+    id: "plantParasite",
+    name: "Растение-Паразит",
+    short: "Паразит-раст.",
+    description:
+      "Играется на растение-хозяина и само считается отдельным растением со своими свойствами — даже со своими паразитами. Ходом питания можно перекинуть с хозяина на паразита 1 фишку (не последнюю). Паразит выживает без фишек, но погибает вместе с хозяином. В максимум растений не идёт.",
+    isPair: false,
+    opponentOnly: false,
+    plantTrait: true,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    aiValue: 2,
+  },
+  micorrhiza: {
+    id: "micorrhiza",
+    name: "Микориза",
+    short: "Микориза",
+    description:
+      "Свойство двух растений сразу (кладётся между ними). В вымирание связка выживает, если хотя бы на одном растении осталась пища; в конце фазы роста каждое растение без фишек получает по одной. Растение может быть связано с несколькими.",
+    isPair: false,
+    opponentOnly: false,
+    plantTrait: true,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    aiValue: 3,
+  },
+  tree: {
+    id: "tree",
+    name: "Дерево",
+    short: "Дерево",
+    description:
+      "Свойство растения. Только большие животные могут брать с него пищу. Положите на растение 1 жетон убежища.",
+    isPair: false,
+    opponentOnly: false,
+    plantTrait: true,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    aiValue: 2,
+  },
+  nutritious: {
+    id: "nutritious",
+    name: "Питательное",
+    short: "Питат.",
+    description:
+      "Свойство растения. Животное, получившее с него фишку, дополнительно получает ещё одну. Хищник может брать еду с питательного растения.",
+    isPair: false,
+    opponentOnly: false,
+    plantTrait: true,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    aiValue: 4,
+  },
+  honeyPlant: {
+    id: "honeyPlant",
+    name: "Медонос",
+    short: "Медонос",
+    description:
+      "Свойство растения. Если ваше животное получило с него фишку, выберите игрока, у которого в руке больше карт, чем у вас, и возьмите у него одну случайную карту. Нет такого игрока — карта не даётся.",
+    isPair: false,
+    opponentOnly: false,
+    plantTrait: true,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    aiValue: 3,
+  },
+  // ── Дополнение «Трава и грибы» (Правильные игры, 2019): свойства животных ──
+  transparent: {
+    id: "transparent",
+    name: "Прозрачное",
+    short: "Прозр.",
+    description:
+      "Пока на этом животном нет красных и синих фишек, хищник не может его атаковать (жировой запас не в счёт).",
+    isPair: false,
+    opponentOnly: false,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    aiValue: 4,
+  },
+  insectivore: {
+    id: "insectivore",
+    name: "Насекомоядное",
+    short: "Насеком.",
+    description:
+      "Съев животное без свойств (в том числе животное с меткой «Сон»), хищник получает 1 синюю фишку вместо двух — и карта «Хищник» разворачивается: сможет атаковать снова в следующих раундах фазы питания.",
+    isPair: false,
+    opponentOnly: false,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    aiValue: 3,
+  },
+  // ── Дополнение «Случайные мутации» (Правильные игры, 2013) ────────────────
+  obligateCarnivore: {
+    id: "obligateCarnivore",
+    name: "Облигатный хищник",
+    short: "Облигат",
+    description:
+      "Раз в ход может атаковать другой вид. Успешная атака сразу делает его накормленным. Не может получать красные и синие фишки из кормовой базы, с растений и с помощью других свойств. +1 к потребности в еде. Не сочетается с «Хищником» и «Падальщиком».",
+    isPair: false,
+    opponentOnly: false,
+    stackable: false,
+    extraFood: 1,
+    scoreBonus: 1,
+    aiValue: 5,
+  },
+  budding: {
+    id: "budding",
+    name: "Почкование",
+    short: "Почков.",
+    description:
+      "В начале каждого своего хода в фазе развития вид получает новое животное из личной колоды. Ограничение численности «не выше числа видов» почкование игнорирует.",
+    isPair: false,
+    opponentOnly: false,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    aiValue: 4,
+  },
+  metabolicSyndrome: {
+    id: "metabolicSyndrome",
+    name: "Метаболический синдром",
+    short: "Метабол.",
+    description:
+      "Вредная мутация: слишком быстрый обмен веществ. Каждое животное вида требует +2 фишки еды. Даёт 2 дополнительных очка в конце игры.",
+    isPair: false,
+    opponentOnly: false,
+    stackable: false,
+    extraFood: 2,
+    scoreBonus: 2,
+    harmful: true,
+    aiValue: -6,
+  },
+  barkBeetle: {
+    id: "barkBeetle",
+    name: "Короед",
+    short: "Короед",
+    description:
+      "Вредная мутация. Пока животное не накормлено, жетон убежища, взятый им с растения, не защищает: он заменяется на синюю фишку еды, а убежище возвращается на растение. У накормленного животного (и облигатного хищника) убежище работает как обычно.",
+    isPair: false,
+    opponentOnly: false,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    harmful: true,
+    aiValue: -2,
+  },
+  extremophile: {
+    id: "extremophile",
+    name: "Экстрофил",
+    short: "Экстрофил",
+    description:
+      "Вредная мутация. Чтобы добавить животное в этот вид, сбросьте дополнительную карту из личной колоды. Если в колоде осталась одна карта — животное добавить нельзя.",
+    isPair: false,
+    opponentOnly: false,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    harmful: true,
+    aiValue: -2,
+  },
+  developmentDefects: {
+    id: "developmentDefects",
+    name: "Дефекты развития",
+    short: "Дефекты",
+    description:
+      "Вредная мутация. Хищник, атакующий этот вид, может игнорировать одно из его свойств (в онлайн-версии гасится сильнейшая защита или защита, мешающая атаке).",
+    isPair: false,
+    opponentOnly: false,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    harmful: true,
+    aiValue: -3,
+  },
+  simplification: {
+    id: "simplification",
+    name: "Упрощение",
+    short: "Упрощ.",
+    description:
+      "Вредная мутация. Сбросьте последнее свойство, сыгранное на этот вид: оно и сама карта «Упрощение» выкладываются как два новых вида животных.",
+    isPair: false,
+    opponentOnly: false,
+    stackable: false,
+    extraFood: 0,
+    scoreBonus: 0,
+    harmful: true,
+    aiValue: -2,
+  },
 };
 
 export const TRAIT_ORDER: TraitId[] = Object.keys(TRAITS) as TraitId[];
+
+/** Свойства из дополнения «Континенты»; всё прочее — базовая игра. */
+export const CONTINENTS_TRAIT_IDS: ReadonlySet<TraitId> = new Set([
+  "migration",
+  "remora",
+  "herding",
+  "nematocysts",
+  "regeneration",
+  "recombination",
+  "edificator",
+  "neoplasia",
+]);
+
+/** Свойства растений из дополнения «Растения». */
+export const PLANTS_TRAIT_IDS: ReadonlySet<TraitId> = new Set([
+  "plantWater",
+  "thorny",
+  "rootVegetable",
+  "medicinal",
+  "plantParasite",
+  "micorrhiza",
+  "tree",
+  "nutritious",
+  "honeyPlant",
+]);
+
+/** Свойства животных из дополнения «Трава и грибы». */
+export const FUNGI_TRAIT_IDS: ReadonlySet<TraitId> = new Set([
+  "transparent",
+  "insectivore",
+]);
+
+/** Свойства из дополнения «Случайные мутации». */
+export const MUTATIONS_TRAIT_IDS: ReadonlySet<TraitId> = new Set([
+  "obligateCarnivore",
+  "budding",
+  "metabolicSyndrome",
+  "barkBeetle",
+  "extremophile",
+  "developmentDefects",
+  "simplification",
+]);
+
+/** Свойства-мутанты, дающие виду статус хищника (для проверок атак и питания). */
+export const CARNIVORE_LIKE: ReadonlySet<TraitId> = new Set(["carnivore", "obligateCarnivore"]);
+
+/** Свойства, несовместимые друг с другом на одном животном (пары «мясной» специализации). */
+export const CARNIVORE_EXCLUSIVE: ReadonlySet<TraitId> = new Set([
+  "carnivore",
+  "obligateCarnivore",
+  "scavenger",
+]);

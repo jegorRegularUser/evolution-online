@@ -2,23 +2,28 @@ import { BookOpen, List, Pause } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { TRAITS } from "@/game/traits";
-import type { Animal, GameAction, GameSpeed, GameState, Player, TerritoryId, TraitId } from "@/game/types";
+import type { Animal, FloraCard, GameAction, GameSpeed, GameState, Plant, Player, TerritoryId, TraitId } from "@/game/types";
 import { TERRITORIES } from "@/game/types";
 import { currentActor, legalDefenseActions, legalDevActions, legalFeedActions } from "@/game/engine";
-import { canAttack, canReceiveFood, findAnimal, foodNeeded, hasTrait, player } from "@/game/queries";
+import { canAttack, canPlantAttackTarget, canReceiveFood, canRageAttack, findAnimal, foodNeeded, hasTrait, player } from "@/game/queries";
 import { cn } from "@/lib/utils";
-import { BG, LOGO, PHASE_ICON, TERRITORY_ART, TOKEN } from "@/lib/art";
+import { BG, LOGO, PHASE_ICON, TERRITORY_ART } from "@/lib/art";
 import { loadSpeed, useGameStore, type UiIntent } from "@/store/game-store";
 import { AnimalCard, HandCard, PAIR_COLORS, PairPlate, type PairMark } from "./cards";
-import { Die } from "./icons";
+import { FloraStrip } from "./cards-flora";
+import { PlantStrip } from "./cards-plants";
+import { Dice3D } from "./dice-3d";
+import { FoodCube } from "./icons";
 import { LobbyScreen } from "./net-screens";
 import { GameOverScreen, MenuScreen, RulesPanel } from "./screens";
+import { EventSpotlight } from "./spotlight";
 
 const PHASE_LABEL: Record<string, string> = {
   development: "Развитие",
   foodBank: "Кормовая база",
   feeding: "Питание",
   extinction: "Вымирание",
+  growth: "Рост",
   gameOver: "Итог",
 };
 
@@ -82,6 +87,8 @@ function useActionFx(state: GameState | null): FxBadge[] {
       return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + 6) };
     };
     const animalEl = (id: string) => document.querySelector(`[data-animal-id="${id}"]`);
+    const plantEl = (id: string) => document.querySelector(`[data-plant-id="${id}"]`);
+    const floraEl = (id: string) => document.querySelector(`[data-flora-id="${id}"]`);
     const sectionEl = (id: number) => document.querySelector(`[data-player-section="${id}"]`);
 
     const created: FxBadge[] = [];
@@ -136,6 +143,48 @@ function useActionFx(state: GameState | null): FxBadge[] {
         }
         case "bankBurned":
           push(anchorOf(document.querySelector(".felt")), `−${e.amount} база`, "bad");
+          break;
+        // ── «Растения» ──
+        case "plantFoodTaken":
+          push(anchorOf(animalEl(e.animalId)), "+1 с растения", "good");
+          break;
+        case "shelterTaken":
+          push(anchorOf(animalEl(e.animalId)), "в убежище", "good");
+          break;
+        case "plantAttack":
+          shakeEl(animalEl(e.preyId));
+          push(anchorOf(animalEl(e.preyId)), e.counter ? "растение контратакует!" : "хищное растение!", "attack");
+          break;
+        case "plantGrew":
+          push(anchorOf(plantEl(e.plantId)), `рост ${e.from}→${e.to}`, "good");
+          break;
+        case "plantGrazed":
+          push(anchorOf(plantEl(e.plantId)), "− топтун", "bad");
+          break;
+        case "plantDied":
+          push(anchorOf(plantEl(e.plantId)), "☠ растение", "bad");
+          break;
+        case "cardStolen":
+          push(anchorOf(sectionEl(e.toPlayerId)), "+1 карта (медонос)", "info");
+          break;
+        // ── «Трава и грибы» ──
+        case "floraFoodTaken":
+          push(anchorOf(animalEl(e.animalId)), "+1 с флоры", "good");
+          break;
+        case "floraGrew":
+          push(anchorOf(floraEl(e.floraId)), `гриб ${e.from}→${e.to}`, "info");
+          break;
+        case "floraGrazed":
+          push(anchorOf(floraEl(e.floraId)), "− топтун", "bad");
+          break;
+        case "floraDied":
+          push(anchorOf(floraEl(e.floraId)), "☠ флора", "bad");
+          break;
+        case "markGained":
+          push(anchorOf(animalEl(e.animalId)), `метка: ${e.mark === "poison" ? "яд" : e.mark}`, "bad");
+          break;
+        case "handLost":
+          push(anchorOf(sectionEl(e.playerId)), "рука сброшена (прозрение)", "bad");
           break;
         case "cardsDrawn": {
           for (let i = 0; i < e.counts.length; i++) {
@@ -270,7 +319,9 @@ function Table() {
 
   const human = player(state, state.humanId);
   const actor = currentActor(state);
-  const isHumanTurn = actor?.id === human.id;
+  // «Трава и грибы»: раунд безумца проводит сосед справа — стол человека
+  // в этот раунд не интерактивен.
+  const isHumanTurn = actor?.id === human.id && state.madTurn !== human.id;
 
   const feedActs = useMemo(
     () => (state.phase === "feeding" && isHumanTurn && !state.pendingAttack ? legalFeedActions(state, human.id) : []),
@@ -304,6 +355,137 @@ function Table() {
     return map;
   }, [state, intent, isHumanTurn, feedActs, devActs]);
   const getInteraction = useCallback((a: Animal) => interactions.get(a.id) ?? NO_INTERACTION, [interactions]);
+
+  // ── «Растения»: подсветка легальных целей среди растений ──
+  const plantsOn = Boolean(state.modules.plants);
+  const fungiOn = Boolean(state.modules.fungi);
+  const plantHighlights = useMemo(() => {
+    const set = new Set<string>();
+    if (!plantsOn) return set;
+    if (state.phase === "development") {
+      if (intent.kind === "playPlantTrait") {
+        for (const a of devActs) {
+          if (a.type === "devPlayPlantTrait" && a.cardId === intent.cardId && a.face === intent.face) set.add(a.plantId);
+        }
+      } else if (intent.kind === "playPlantPair") {
+        for (const a of devActs) {
+          if (a.type !== "devPlayPlantPair" || a.cardId !== intent.cardId || a.face !== intent.face) continue;
+          if (intent.first ? a.a === intent.first : true) set.add(intent.first ? a.b : a.a);
+        }
+      } else if (intent.kind === "mutatePlant") {
+        // «Случайные мутации»: карта может лечь свойством на любое растение.
+        for (const a of devActs) {
+          if (a.type === "devMutate" && a.intent === "plant" && a.plantId) set.add(a.plantId);
+        }
+      }
+    } else if (state.phase === "feeding" && isHumanTurn) {
+      if ((intent.kind === "takePlant" || intent.kind === "takeFlora") && intent.animalId) {
+        for (const a of feedActs) if (a.type === "feedTakePlant" && a.animalId === intent.animalId) set.add(a.plantId);
+      } else if (intent.kind === "shelter" && intent.animalId) {
+        for (const a of feedActs) if (a.type === "feedShelter" && a.animalId === intent.animalId) set.add(a.plantId);
+      } else if (intent.kind === "plantAttack") {
+        if (intent.plantId) set.add(intent.plantId);
+        else for (const a of feedActs) if (a.type === "feedPlantAttack") set.add(a.plantId);
+      } else if (intent.kind === "parasitize") {
+        for (const a of feedActs) if (a.type === "feedParasitize") set.add(a.parasiteId);
+      } else if (intent.kind === "graze" && intent.animalId) {
+        for (const a of feedActs) {
+          if (a.type === "feedGraze" && a.animalId === intent.animalId && a.plantId) set.add(a.plantId);
+        }
+      }
+    }
+    return set;
+  }, [plantsOn, state.phase, intent, devActs, feedActs, isHumanTurn]);
+
+  // ── «Трава и грибы»: подсветка легальных целей среди флоры ──
+  const floraHighlights = useMemo(() => {
+    const set = new Set<string>();
+    if (!fungiOn) return set;
+    if (state.phase !== "feeding" || !isHumanTurn) return set;
+    if ((intent.kind === "takeFlora" || intent.kind === "takePlant") && intent.animalId) {
+      for (const a of feedActs) {
+        if (a.type === "feedTakeFlora" && a.animalId === intent.animalId) set.add(a.floraId);
+      }
+    } else if (intent.kind === "graze" && intent.animalId) {
+      for (const a of feedActs) {
+        if (a.type === "feedGraze" && a.animalId === intent.animalId && a.floraId) set.add(a.floraId);
+      }
+    }
+    return set;
+  }, [fungiOn, state.phase, intent, feedActs, isHumanTurn]);
+
+  function onPlantClick(plant: Plant) {
+    if (!isHumanTurn || state.pendingAttack) return;
+    const dispatchAct = (a: GameAction) => dispatch(a);
+    if (state.phase === "development") {
+      if (intent.kind === "playPlantTrait") {
+        const ok = devActs.some(
+          (a) => a.type === "devPlayPlantTrait" && a.cardId === intent.cardId && a.face === intent.face && a.plantId === plant.id,
+        );
+        if (ok) dispatchAct({ type: "devPlayPlantTrait", cardId: intent.cardId!, face: intent.face!, plantId: plant.id });
+        return;
+      }
+      if (intent.kind === "playPlantPair") {
+        if (!intent.first) {
+          setIntent({ ...intent, first: plant.id });
+          return;
+        }
+        const ok = devActs.some(
+          (a) => a.type === "devPlayPlantPair" && a.cardId === intent.cardId && a.face === intent.face && a.a === intent.first && a.b === plant.id,
+        );
+        if (ok) dispatchAct({ type: "devPlayPlantPair", cardId: intent.cardId!, face: intent.face!, a: intent.first, b: plant.id });
+        return;
+      }
+      // «Случайные мутации»: объявлено свойство растения — карта вскроется на нём.
+      if (intent.kind === "mutatePlant") {
+        const ok = devActs.some((a) => a.type === "devMutate" && a.intent === "plant" && a.plantId === plant.id);
+        if (ok) dispatchAct({ type: "devMutate", intent: "plant", plantId: plant.id });
+      }
+      return;
+    }
+    if (state.phase !== "feeding") return;
+    if ((intent.kind === "takePlant" || intent.kind === "takeFlora") && intent.animalId) {
+      const ok = feedActs.some((a) => a.type === "feedTakePlant" && a.animalId === intent.animalId && a.plantId === plant.id);
+      if (ok) dispatchAct({ type: "feedTakePlant", animalId: intent.animalId, plantId: plant.id });
+      return;
+    }
+    if (intent.kind === "shelter" && intent.animalId) {
+      const ok = feedActs.some((a) => a.type === "feedShelter" && a.animalId === intent.animalId && a.plantId === plant.id);
+      if (ok) dispatchAct({ type: "feedShelter", animalId: intent.animalId, plantId: plant.id });
+      return;
+    }
+    if (intent.kind === "plantAttack") {
+      if (!intent.plantId) {
+        const has = feedActs.some((a) => a.type === "feedPlantAttack" && a.plantId === plant.id);
+        if (has) setIntent({ kind: "plantAttack", plantId: plant.id });
+      }
+      return;
+    }
+    if (intent.kind === "parasitize") {
+      const act = feedActs.find((a) => a.type === "feedParasitize" && a.parasiteId === plant.id);
+      if (act && act.type === "feedParasitize") dispatchAct(act);
+      return;
+    }
+    if (intent.kind === "graze" && intent.animalId) {
+      const ok = feedActs.some((a) => a.type === "feedGraze" && a.animalId === intent.animalId && a.plantId === plant.id);
+      if (ok) dispatchAct({ type: "feedGraze", animalId: intent.animalId, plantId: plant.id });
+    }
+  }
+
+  /** «Трава и грибы»: клик по карте флоры — еда или топтун. */
+  function onFloraClick(flora: FloraCard) {
+    if (!isHumanTurn || state.pendingAttack) return;
+    if (state.phase !== "feeding") return;
+    if ((intent.kind === "takeFlora" || intent.kind === "takePlant") && intent.animalId) {
+      const ok = feedActs.some((a) => a.type === "feedTakeFlora" && a.animalId === intent.animalId && a.floraId === flora.id);
+      if (ok) dispatch({ type: "feedTakeFlora", animalId: intent.animalId, floraId: flora.id });
+      return;
+    }
+    if (intent.kind === "graze" && intent.animalId) {
+      const ok = feedActs.some((a) => a.type === "feedGraze" && a.animalId === intent.animalId && a.floraId === flora.id);
+      if (ok) dispatch({ type: "feedGraze", animalId: intent.animalId, floraId: flora.id });
+    }
+  }
 
   function onBoardClick(e: React.MouseEvent) {
     const target = (e.target as HTMLElement).closest("[data-animal-id]");
@@ -399,12 +581,49 @@ function Table() {
         onClick={onBoardClick}
         className={cn(
           "flex flex-1 flex-col gap-3 px-3 py-3 sm:px-5",
-          wideSeats
-            ? "lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(330px,400px)_minmax(0,1fr)] lg:grid-rows-[auto_1fr_auto_auto] lg:gap-4 lg:[grid-template-areas:'top_top_top''left_felt_right''bottom_bottom_bottom''human_human_human']"
-            : "lg:mx-auto lg:w-full lg:max-w-4xl",
+          wideSeats && (plantsOn || fungiOn) &&
+            // Литеральные классы: динамическую сборку Tailwind не видит в исходнике.
+            "lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(330px,400px)_minmax(0,1fr)] lg:grid-rows-[auto_1fr_auto_auto] lg:gap-4 lg:[grid-template-areas:'plants_plants_plants''top_top_top''left_felt_right''bottom_bottom_bottom''human_human_human']",
+          wideSeats && !plantsOn && !fungiOn &&
+            "lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(330px,400px)_minmax(0,1fr)] lg:grid-rows-[auto_1fr_auto_auto] lg:gap-4 lg:[grid-template-areas:'top_top_top''left_felt_right''bottom_bottom_bottom''human_human_human']",
+          !wideSeats && "lg:mx-auto lg:w-full lg:max-w-4xl",
           state.phase === "extinction" ? "extinction-glow" : "",
         )}
       >
+        {/* «Растения»/«Трава и грибы»: общий стол растений и флоры; с «Континентами» — по континентам. */}
+        {plantsOn || fungiOn ? (
+          <div style={wideSeats ? { gridArea: "plants" } : undefined} className="flex flex-col gap-2">
+            {state.modules.continents ? (
+              (["gondwana", "laurasia"] as TerritoryId[]).map((z) => (
+                <div key={z} className="flex flex-col gap-2">
+                  {plantsOn ? (
+                    <PlantStrip
+                      state={state}
+                      zone={z}
+                      highlights={plantHighlights}
+                      onPlantClick={onPlantClick}
+                      freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
+                    />
+                  ) : null}
+                  {fungiOn ? <FloraStrip state={state} zone={z} highlights={floraHighlights} onFloraClick={onFloraClick} /> : null}
+                </div>
+              ))
+            ) : (
+              <>
+                {plantsOn ? (
+                  <PlantStrip
+                    state={state}
+                    highlights={plantHighlights}
+                    onPlantClick={onPlantClick}
+                    freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
+                  />
+                ) : null}
+                {fungiOn ? <FloraStrip state={state} highlights={floraHighlights} onFloraClick={onFloraClick} /> : null}
+              </>
+            )}
+          </div>
+        ) : null}
+
         {/* Верхний ряд: до двух соперников в одну строку, по половине ширины. */}
         {seats.top.length ? (
           <div
@@ -453,6 +672,25 @@ function Table() {
           lastLog={lastLog}
           actorName={actor?.name}
           deaths={state.extinctionDeaths.length}
+          plantsInfo={
+            plantsOn
+              ? {
+                  count: (state.plants ?? []).length,
+                  food: (state.plants ?? []).reduce((s, p) => s + p.food, 0),
+                  shelters: (state.plants ?? []).reduce((s, p) => s + p.shelters, 0),
+                  deck: state.plantDeckCount ?? state.plantDeck?.length ?? 0,
+                }
+              : undefined
+          }
+          floraInfo={
+            fungiOn
+              ? {
+                  count: (state.flora ?? []).length,
+                  food: (state.flora ?? []).reduce((s, f) => s + f.food, 0),
+                  deck: state.floraDeckCount ?? state.floraDeck?.length ?? 0,
+                }
+              : undefined
+          }
         />
 
         <div style={wideSeats ? { gridArea: "right" } : undefined} className={cn(wideSeats && "lg:min-w-0")}>
@@ -523,27 +761,50 @@ function Table() {
 
       <footer className="sticky bottom-0 z-20 border-t border-border bg-bg/95 px-3 py-3 backdrop-blur-sm sm:px-5">
         {state.phase === "development" ? (
-          <DevDock
-            human={human}
-            intent={intent}
-            disabled={!isHumanTurn || Boolean(state.pendingAttack)}
-            continents={Boolean(state.modules.continents)}
-            onPlayAnimal={(cardId, zoneId) => dispatch({ type: "devPlayAnimal", cardId, zoneId })}
-            onPlaceAnimal={(cardId) => setIntent({ kind: "placeAnimal", cardId })}
-            onPickTrait={(cardId, face) => {
-              const card = human.hand.find((c) => c.id === cardId);
-              const trait = card?.faces[face] as TraitId | undefined;
-              if (!trait) return;
-              if (TRAITS[trait].isPair) setIntent({ kind: "playPair", cardId, face });
-              else setIntent({ kind: "playTrait", cardId, face });
-            }}
-            onPass={() => dispatch({ type: "devPass" })}
-          />
+          state.modules.randomMutations ? (
+            <MutateDock
+              human={human}
+              intent={intent}
+              disabled={!isHumanTurn || Boolean(state.pendingAttack)}
+              continents={Boolean(state.modules.continents)}
+              canPlant={Boolean(state.modules.plants)}
+              onNewAnimal={(zoneId) => dispatch({ type: "devMutate", intent: "newAnimal", zoneId })}
+              onTrait={() => setIntent({ kind: "mutateTrait" })}
+              onPop={() => setIntent({ kind: "mutatePop" })}
+              onPlant={() => setIntent({ kind: "mutatePlant" })}
+              onPass={() => dispatch({ type: "devPass" })}
+            />
+          ) : (
+            <DevDock
+              human={human}
+              intent={intent}
+              disabled={!isHumanTurn || Boolean(state.pendingAttack)}
+              continents={Boolean(state.modules.continents)}
+              onPlayAnimal={(cardId, zoneId) => dispatch({ type: "devPlayAnimal", cardId, zoneId })}
+              onPlaceAnimal={(cardId) => setIntent({ kind: "placeAnimal", cardId })}
+              onPickTrait={(cardId, face) => {
+                const card = human.hand.find((c) => c.id === cardId);
+                const trait = card?.faces[face] as TraitId | undefined;
+                if (!trait) return;
+                const def = TRAITS[trait];
+                if (def.plantTrait) {
+                  // Свойство растения кладётся на растение стола (микориза — на два).
+                  if (trait === "micorrhiza") setIntent({ kind: "playPlantPair", cardId, face });
+                  else setIntent({ kind: "playPlantTrait", cardId, face });
+                  return;
+                }
+                if (def.isPair) setIntent({ kind: "playPair", cardId, face });
+                else setIntent({ kind: "playTrait", cardId, face });
+              }}
+              onPass={() => dispatch({ type: "devPass" })}
+            />
+          )
         ) : state.phase === "feeding" && isHumanTurn && !state.pendingAttack ? (
           <FeedDock
             acts={feedActs}
             intentKind={intent.kind}
             bank={state.foodBank}
+            rageTurn={state.rageTurn ?? null}
             onIntent={setIntent}
             onEndTurn={() => dispatch({ type: "feedEndTurn" })}
             onSkip={() => dispatch({ type: "feedSkip" })}
@@ -551,16 +812,22 @@ function Table() {
         ) : (
           <div className="flex h-14 items-center justify-center text-sm text-muted">
             {state.phase === "foodBank"
-              ? state.foodRoll
-                ? "Кубики брошены — кормовая база определяется…"
-                : "Бросок кормовой базы…"
+              ? plantsOn || fungiOn
+                ? "Кормовая база Океана определяется…"
+                : state.foodRoll
+                  ? "Кубики брошены — кормовая база определяется…"
+                  : "Бросок кормовой базы…"
               : state.phase === "extinction"
                 ? "Вымирание: ненакормленные животные погибают…"
-                : mode === "net" && actor && actor.id !== human.id
-                  ? `${actor.name} ходит…`
-                  : thinking
-                    ? `${actor?.name ?? "Соперник"} думает…`
-                    : "Ожидание"}
+                : state.phase === "growth"
+                  ? "Рост: растения разрастаются, добавляются новые…"
+                  : state.madTurn === (actor?.id ?? -2)
+                    ? `Безумие: раунд ${actor?.name ?? ""} проводит сосед справа…`
+                    : mode === "net" && actor && actor.id !== human.id
+                      ? `${actor.name} ходит…`
+                      : thinking
+                        ? `${actor?.name ?? "Соперник"} думает…`
+                        : "Ожидание"}
           </div>
         )}
       </footer>
@@ -570,6 +837,8 @@ function Table() {
           {b.text}
         </div>
       ))}
+
+      <EventSpotlight />
 
       {state.pendingAttack && state.pendingAttack.waitingFor === human.id ? (
         <DefenseDock acts={defActs} onPick={(a) => dispatch(a)} />
@@ -595,6 +864,19 @@ function handleAnimalClick(
   if (state.pendingAttack) return;
 
   if (state.phase === "development") {
+    // ── «Случайные мутации»: клик по своему виду разыгрывает карту колоды ──
+    if (intent.kind === "mutateTrait") {
+      const ok = devActs.some((a) => a.type === "devMutate" && a.intent === "trait" && a.animalId === animal.id);
+      if (ok) dispatch({ type: "devMutate", intent: "trait", animalId: animal.id });
+      return;
+    }
+    if (intent.kind === "mutatePop") {
+      const ok = devActs.some(
+        (a) => a.type === "devMutate" && a.intent === "population" && a.animalId === animal.id,
+      );
+      if (ok) dispatch({ type: "devMutate", intent: "population", animalId: animal.id });
+      return;
+    }
     if (intent.kind === "playTrait") {
       const ok = devActs.some(
         (a) => a.type === "devPlayTrait" && a.cardId === intent.cardId && a.face === intent.face && a.animalId === animal.id,
@@ -619,9 +901,53 @@ function handleAnimalClick(
 
   if (state.phase !== "feeding") return;
 
+  // ── «Растения»/«Трава и грибы»: еда со стола — животное, затем растение или флора ──
+  if (intent.kind === "takePlant" || intent.kind === "takeFlora") {
+    if (intent.animalId) return;
+    const acts = feedActs.filter(
+      (a) =>
+        (a.type === "feedTakePlant" || a.type === "feedTakeFlora" || a.type === "feedTake") &&
+        a.animalId === animal.id,
+    );
+    if (acts.length === 1) {
+      dispatch(acts[0]!);
+    } else if (acts.length > 1) {
+      setIntent({ kind: state.modules.fungi ? "takeFlora" : "takePlant", animalId: animal.id });
+    }
+    return;
+  }
+  // ── «Растения»: убежище — животное, затем растение ──
+  if (intent.kind === "shelter") {
+    if (intent.animalId) return;
+    const acts = feedActs.filter((a) => a.type === "feedShelter" && a.animalId === animal.id);
+    if (acts.length === 1) {
+      dispatch(acts[0]!);
+    } else if (acts.length > 1) {
+      setIntent({ kind: "shelter", animalId: animal.id });
+    }
+    return;
+  }
+  // ── «Растения»: хищное растение выбрано — кликаем по жертве ──
+  if (intent.kind === "plantAttack" && intent.plantId) {
+    const ok = feedActs.some((a) => a.type === "feedPlantAttack" && a.plantId === intent.plantId && a.preyId === animal.id);
+    if (ok) dispatch({ type: "feedPlantAttack", plantId: intent.plantId, preyId: animal.id });
+    return;
+  }
+  if (intent.kind === "graze") {
+    // С растениями топтун топчет растение: сначала животное, потом растение.
+    if (intent.animalId) return;
+    const acts = feedActs.filter((a) => a.type === "feedGraze" && a.animalId === animal.id);
+    if (acts.length === 1) {
+      dispatch(acts[0]!);
+    } else if (acts.length > 1) {
+      setIntent({ ...intent, animalId: animal.id });
+    }
+    return;
+  }
   if (intent.kind === "hunt") {
     if (!intent.carnivoreId) {
-      if (animal.ownerId === human.id && hasTrait(animal, "carnivore")) {
+      const rageOk = state.rageTurn ? animal.id === state.rageTurn.animalId : false;
+      if (animal.ownerId === human.id && (rageOk || hasTrait(animal, "carnivore"))) {
         setIntent({ kind: "hunt", carnivoreId: animal.id });
       }
       return;
@@ -651,11 +977,6 @@ function handleAnimalClick(
     if (act && act.type === "feedConvertFat") dispatch(act);
     return;
   }
-  if (intent.kind === "graze") {
-    const ok = feedActs.some((a) => a.type === "feedGraze" && a.animalId === animal.id);
-    if (ok) dispatch({ type: "feedGraze", animalId: animal.id });
-    return;
-  }
   if (intent.kind === "take" || intent.kind === "none") {
     const ok = feedActs.some((a) => a.type === "feedTake" && a.animalId === animal.id);
     if (ok) dispatch({ type: "feedTake", animalId: animal.id });
@@ -676,6 +997,13 @@ function animalHighlight(
       (a) => a.type === "devPlayTrait" && a.cardId === intent.cardId && a.face === intent.face && a.animalId === animal.id,
     );
   }
+  // ── «Случайные мутации»: подсветка видов, принимающих карту из колоды ──
+  if (intent.kind === "mutateTrait") {
+    return devActs.some((a) => a.type === "devMutate" && a.intent === "trait" && a.animalId === animal.id);
+  }
+  if (intent.kind === "mutatePop") {
+    return devActs.some((a) => a.type === "devMutate" && a.intent === "population" && a.animalId === animal.id);
+  }
   if (intent.kind === "playPair") {
     if (!intent.first) return animal.ownerId === state.humanId;
     return devActs.some((a) => a.type === "devPlayPair" && a.a === intent.first && a.b === animal.id);
@@ -683,16 +1011,45 @@ function animalHighlight(
   if (state.phase !== "feeding") return false;
   if (intent.kind === "hunt" && intent.carnivoreId) {
     const car = findAnimal(state, intent.carnivoreId);
-    return Boolean(car && canAttack(state, car, animal));
+    // Бешеное животное атакует по правилам бешенства, а не хищника.
+    return Boolean(car && (state.rageTurn ? canRageAttack(state, car, animal) : canAttack(state, car, animal)));
   }
   if (intent.kind === "hunt" && !intent.carnivoreId) {
+    if (state.rageTurn) return Boolean(state.rageTurn.animalId === animal.id);
     return animal.ownerId === state.humanId && hasTrait(animal, "carnivore");
   }
   if (intent.kind === "pirate" && intent.pirateId) {
     return feedActs.some((a) => a.type === "feedPirate" && a.targetId === animal.id);
   }
+  // ── «Растения»/«Трава и грибы» ──
+  if ((intent.kind === "takePlant" || intent.kind === "takeFlora") && !intent.animalId) {
+    return feedActs.some(
+      (a) => (a.type === "feedTakePlant" || a.type === "feedTakeFlora" || a.type === "feedTake") && a.animalId === animal.id,
+    );
+  }
+  if ((intent.kind === "takePlant" || intent.kind === "takeFlora") && intent.animalId) {
+    return (
+      feedActs.some((a) => a.type === "feedTakePlant" && a.animalId === intent.animalId && animal.id === intent.animalId) ||
+      feedActs.some((a) => a.type === "feedTakeFlora" && a.animalId === intent.animalId && animal.id === intent.animalId)
+    );
+  }
+  if (intent.kind === "shelter" && !intent.animalId) {
+    return feedActs.some((a) => a.type === "feedShelter" && a.animalId === animal.id);
+  }
+  if (intent.kind === "plantAttack" && intent.plantId) {
+    const plant = state.plants?.find((p) => p.id === intent.plantId);
+    return Boolean(plant && canPlantAttackTarget(state, plant, animal));
+  }
+  if (intent.kind === "plantAttack" && !intent.plantId) {
+    return false; // сначала выбирается растение
+  }
+  if (intent.kind === "graze" && !intent.animalId) {
+    return feedActs.some((a) => a.type === "feedGraze" && a.animalId === animal.id);
+  }
   if (intent.kind === "take" || intent.kind === "none") {
-    return animal.ownerId === state.humanId && canReceiveFood(state, animal) && state.foodBank > 0;
+    // Подсветка ровно по легальности: после взятия еды в этом ходу цель гаснет
+    // (у «облигатного хищника» цели из базы нет вовсе).
+    return feedActs.some((a) => a.type === "feedTake" && a.animalId === animal.id);
   }
   if (intent.kind === "hibernate") {
     return feedActs.some((a) => a.type === "feedHibernate" && a.animalId === animal.id);
@@ -731,6 +1088,8 @@ const PlayerSection = memo(function PlayerSection({
 }) {
   const dispatch = useGameStore((s) => s.dispatch);
   const intent = useGameStore((s) => s.intent);
+  // «Случайные мутации»: рука скрыта — показываем счётчик слепой колоды.
+  const randomMutations = useGameStore((s) => Boolean(s.state?.modules.randomMutations));
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   // Ссылка на перетаскиваемое для drop по зоне (замыкание зон не тянет стейт).
@@ -924,7 +1283,10 @@ const PlayerSection = memo(function PlayerSection({
           ) : null}
         </span>
         <span className="text-xs text-muted">
-          рука {p.handCount ?? p.hand.length} · сброс {p.discardCount}
+          {randomMutations
+            ? `колода ${p.blindDeckCount ?? p.blindDeck?.length ?? 0}`
+            : `рука ${p.handCount ?? p.hand.length}`}{" "}
+          · сброс {p.discardCount}
         </span>
       </div>
       {continents ? (
@@ -1060,6 +1422,8 @@ function CenterField({
   lastLog,
   actorName,
   deaths,
+  plantsInfo,
+  floraInfo,
   style,
 }: {
   year: number;
@@ -1073,9 +1437,17 @@ function CenterField({
   lastLog?: string;
   actorName?: string;
   deaths: number;
+  /** «Растения»: сводка стола растений (без «Континентов»). */
+  plantsInfo?: { count: number; food: number; shelters: number; deck: number };
+  /** «Трава и грибы»: сводка стола флоры (без «Континентов»). */
+  floraInfo?: { count: number; food: number; deck: number };
   style?: React.CSSProperties;
 }) {
-  const showDice = phase === "foodBank" || phase === "feeding";
+  const plantsSolo = Boolean(plantsInfo) && !territoryFood;
+  const floraSolo = Boolean(floraInfo) && !territoryFood;
+  const tableSolo = plantsSolo || floraSolo;
+  // Без «Континентов» с растениями/флорой кубика нет вовсе: еда лежит на столе.
+  const showDice = (phase === "foodBank" || phase === "feeding") && !tableSolo;
   // Ключ по значениям кубиков: компонент перемонтируется только на новом броске,
   // поэтому анимация не переигрывается на каждом ходе игроков.
   const diceKey = foodRoll ? foodRoll.join("-") : "pending";
@@ -1102,14 +1474,52 @@ function CenterField({
 
       {showDice ? <DiceTray key={diceKey} roll={foodRoll} /> : null}
 
-      {phase === "extinction" ? (
+      {phase === "growth" ? (
+        <div className="relative animate-[fade-in_.3s_var(--ease-out)] rounded-full border border-leaf/60 bg-leaf/15 px-4 py-1.5 text-sm font-medium text-leaf">
+          Рост: растения разрастаются
+        </div>
+      ) : phase === "extinction" ? (
         <div className="relative animate-[fade-in_.3s_var(--ease-out)] rounded-full border border-danger/60 bg-danger/15 px-4 py-1.5 text-sm font-medium text-clay">
           Вымирание: погибает {deaths === 0 ? "никто" : `животных: ${deaths}`}
         </div>
-      ) : territoryFood ? (
+      ) : tableSolo ? (
+        <div
+          className="relative flex flex-col items-center gap-1"
+          title="Еда этого года лежит на столе — берите фишки с растений и карт флоры"
+        >
+          {plantsSolo && plantsInfo ? (
+            <div className="flex flex-col items-center gap-1" title="Еда этого года лежит на растениях — берите фишки с них">
+              <div className="flex items-center gap-1">
+                {Array.from({ length: Math.min(plantsInfo.food, 18) }).map((_, i) => (
+                  <FoodCube key={i} tone="green" className="token-pop size-3.5" />
+                ))}
+                {plantsInfo.food > 18 ? <span className="text-[10px] tabular-nums text-muted">+{plantsInfo.food - 18}</span> : null}
+              </div>
+              <span className="font-display text-xl tabular-nums leading-none">{plantsInfo.food}</span>
+              <span className="text-[10px] uppercase tracking-[0.18em] text-muted">
+                фишек на {plantsInfo.count} растениях · убежищ {plantsInfo.shelters}
+              </span>
+            </div>
+          ) : null}
+          {floraSolo && floraInfo ? (
+            <div className="flex flex-col items-center gap-1" title="Еда этого года — на травах и грибах">
+              <div className="flex items-center gap-1">
+                {Array.from({ length: Math.min(floraInfo.food, 18) }).map((_, i) => (
+                  <FoodCube key={i} tone="red" className="token-pop size-3.5" />
+                ))}
+                {floraInfo.food > 18 ? <span className="text-[10px] tabular-nums text-muted">+{floraInfo.food - 18}</span> : null}
+              </div>
+              <span className="font-display text-xl tabular-nums leading-none">{floraInfo.food}</span>
+              <span className="text-[10px] uppercase tracking-[0.18em] text-muted">
+                фишек на {floraInfo.count} травах и грибах
+              </span>
+            </div>
+          ) : null}
+        </div>
+      ) : territoryFood && !plantsInfo && !floraInfo ? (
         <TerritoryBanks banks={territoryFood} active={phase === "feeding"} />
       ) : (
-        <BankPile count={bank} active={phase === "feeding"} />
+        <BankPile count={bank} active={phase === "feeding"} oceanOnly={Boolean(plantsInfo || floraInfo)} />
       )}
 
       {actorName && (phase === "feeding" || phase === "development") ? (
@@ -1150,7 +1560,7 @@ function TerritoryBanks({
             />
             <div className="flex items-center gap-1">
               {Array.from({ length: Math.min(n, 6) }).map((_, i) => (
-                <img key={`${i}-${n}`} src={TOKEN.meat} alt="" className="token-pop size-3 rounded-full" />
+                <FoodCube key={`${i}-${n}`} tone="red" className="token-pop size-3" />
               ))}
               {n > 6 ? <span className="text-[10px] tabular-nums text-muted">+{n - 6}</span> : null}
               {n === 0 ? <span className="text-[10px] text-subtle">{active ? "пусто" : "—"}</span> : null}
@@ -1163,29 +1573,31 @@ function TerritoryBanks({
   );
 }
 
-function BankPile({ count, active }: { count: number; active: boolean }) {
+function BankPile({ count, active, oceanOnly }: { count: number; active: boolean; oceanOnly?: boolean }) {
   return (
-    <div className="relative flex flex-col items-center gap-1.5" title={active ? "Фишки кормовой базы — берите по одной в свой ход питания" : "Кормовая база"}>
+    <div className="relative flex flex-col items-center gap-1.5" title={active ? (oceanOnly ? "Кормовая база Океана — на континентах еда на растениях" : "Фишки кормовой базы — берите по одной в свой ход питания") : "Кормовая база"}>
       <div className="flex max-w-[260px] flex-wrap items-center justify-center gap-1">
         {count === 0 ? (
-          <span className="text-xs text-subtle">{active ? "база пуста" : "—"}</span>
+          <span className="text-xs text-subtle">{active ? (oceanOnly ? "океан пуст" : "база пуста") : "—"}</span>
         ) : (
           Array.from({ length: Math.min(count, 24) }).map((_, i) => (
-            <img key={`${i}-${count}`} src={TOKEN.meat} alt="" className="token-pop size-4 rounded-full" />
+            <FoodCube key={`${i}-${count}`} tone="red" className="token-pop size-4" />
           ))
         )}
         {count > 24 ? <span className="ml-1 text-xs tabular-nums text-muted">+{count - 24}</span> : null}
       </div>
       <span className="font-display text-xl tabular-nums leading-none">{count}</span>
-      <span className="text-[10px] uppercase tracking-[0.18em] text-muted">кормовая база</span>
+      <span className="text-[10px] uppercase tracking-[0.18em] text-muted">
+        {oceanOnly ? "кормовая база океана" : "кормовая база"}
+      </span>
     </div>
   );
 }
 
 /**
- * Кубики: крутятся ~0.9 с после броска, затем показывают выпавшие значения.
- * Компонент перемонтируется только со новым броском (ключ — значения кубиков),
- * поэтому эффект прокрутки срабатывает один раз.
+ * Кубики кормовой базы: настоящие 3D-кости кувыркаются ~0.9 с после броска,
+ * затем ложатся выпавшими гранями. Компонент перемонтируется только со новым
+ * броском (ключ — значения кубиков), поэтому бросок проигрывается один раз.
  */
 function DiceTray({ roll }: { roll: number[] | null }) {
   const [rolling, setRolling] = useState(Boolean(roll));
@@ -1203,9 +1615,8 @@ function DiceTray({ roll }: { roll: number[] | null }) {
 
   if (!roll) {
     return (
-      <div className="relative flex items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-bg/50 px-4 py-2.5">
-        <Die value={null} rolling className="size-9" />
-        <Die value={null} rolling className="size-9" />
+      <div className="relative flex items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-bg/50 px-4 py-2">
+        <Dice3D values={[null, null]} rolling dieSize={44} />
         <span className="text-xs uppercase tracking-[0.18em] text-muted">бросок…</span>
       </div>
     );
@@ -1213,10 +1624,8 @@ function DiceTray({ roll }: { roll: number[] | null }) {
 
   const total = roll.reduce((s, d) => s + d, 0);
   return (
-    <div className="relative flex items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-bg/50 px-4 py-2.5">
-      {roll.map((d, i) => (
-        <Die key={i} value={d} rolling={rolling} className={rolling ? "size-9" : "size-10"} />
-      ))}
+    <div className="relative flex items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-bg/50 px-4 py-2">
+      <Dice3D values={roll} rolling={rolling} dieSize={44} ariaLabel={`Кубики кормовой базы: ${roll.join(", ")}`} />
       <div className="flex flex-col">
         <span className={cn("font-display text-2xl leading-none tabular-nums", !rolling && "pop-in")}>
           {rolling ? "…" : total}
@@ -1232,6 +1641,139 @@ function FoodBankChip({ count, visible }: { count: number; visible: boolean }) {
     <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-border bg-surface px-2.5 py-1.5" title="Кормовая база">
       <span className="text-[10px] uppercase tracking-wider text-muted">База</span>
       <span className="font-display text-lg tabular-nums leading-none">{visible ? count : "—"}</span>
+    </div>
+  );
+}
+
+/**
+ * Док фазы развития «Случайных мутаций»: карты в слепой колоде — игрок
+ * сначала объявляет способ розыгрыша, потом движок вскрывает верхнюю карту.
+ */
+function MutateDock({
+  human,
+  intent,
+  disabled,
+  continents,
+  canPlant,
+  onNewAnimal,
+  onTrait,
+  onPop,
+  onPlant,
+  onPass,
+}: {
+  human: Player;
+  intent: UiIntent;
+  disabled?: boolean;
+  continents?: boolean;
+  canPlant?: boolean;
+  onNewAnimal: (zoneId?: TerritoryId) => void;
+  onTrait: () => void;
+  onPop: () => void;
+  onPlant: () => void;
+  onPass: () => void;
+}) {
+  const left = human.blindDeck?.length ?? human.blindDeckCount ?? 0;
+  const mutating = intent.kind === "mutateTrait" || intent.kind === "mutatePop" || intent.kind === "mutatePlant";
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted">
+          {disabled
+            ? "Ход соперника"
+            : mutating
+              ? intent.kind === "mutateTrait"
+                ? "Выберите свой вид из одного животного — карта вскроется на нём"
+                : intent.kind === "mutatePop"
+                  ? "Выберите вид — карта станет +1 животным"
+                  : "Выберите растение — карта вскроется свойством на нём"
+              : "Объявите розыгрыш верхней карты колоды — потом она вскроется"}
+        </p>
+        <span className="flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted">
+          <span className="text-[10px] uppercase tracking-wider">Колода</span>
+          <span className="font-display text-sm tabular-nums leading-none">{left}</span>
+        </span>
+      </div>
+      <div data-hand-row className="flex flex-wrap items-stretch gap-2">
+        {continents ? (
+          <>
+            <button
+              type="button"
+              disabled={disabled || !left}
+              onClick={() => onNewAnimal("laurasia")}
+              className="flex h-24 min-w-[150px] flex-1 flex-col items-center justify-center gap-1 rounded-[var(--radius-md)] border border-border bg-surface-2 px-3 py-2 text-sm font-medium text-fg transition-colors hover:bg-surface disabled:opacity-50"
+            >
+              <span className="font-display">Новый вид · Лавразия</span>
+              <span className="text-[10px] font-normal text-muted">карта ляжет животным</span>
+            </button>
+            <button
+              type="button"
+              disabled={disabled || !left}
+              onClick={() => onNewAnimal("gondwana")}
+              className="flex h-24 min-w-[150px] flex-1 flex-col items-center justify-center gap-1 rounded-[var(--radius-md)] border border-border bg-surface-2 px-3 py-2 text-sm font-medium text-fg transition-colors hover:bg-surface disabled:opacity-50"
+            >
+              <span className="font-display">Новый вид · Гондвана</span>
+              <span className="text-[10px] font-normal text-muted">карта ляжет животным</span>
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            disabled={disabled || !left}
+            onClick={() => onNewAnimal()}
+            className="flex h-24 min-w-[150px] flex-1 flex-col items-center justify-center gap-1 rounded-[var(--radius-md)] border border-border bg-surface-2 px-3 py-2 text-sm font-medium text-fg transition-colors hover:bg-surface disabled:opacity-50"
+          >
+            <span className="font-display">Новый вид</span>
+            <span className="text-[10px] font-normal text-muted">карта ляжет животным</span>
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={disabled || !left}
+          onClick={onTrait}
+          className={cn(
+            "flex h-24 min-w-[150px] flex-1 flex-col items-center justify-center gap-1 rounded-[var(--radius-md)] border px-3 py-2 text-sm font-medium transition-colors disabled:opacity-50",
+            intent.kind === "mutateTrait"
+              ? "border-accent bg-accent/15 text-fg"
+              : "border-border bg-surface-2 text-fg hover:bg-surface",
+          )}
+        >
+          <span className="font-display">Свойство</span>
+          <span className="text-[10px] font-normal text-muted">на вид из одного животного</span>
+        </button>
+        <button
+          type="button"
+          disabled={disabled || !left}
+          onClick={onPop}
+          className={cn(
+            "flex h-24 min-w-[150px] flex-1 flex-col items-center justify-center gap-1 rounded-[var(--radius-md)] border px-3 py-2 text-sm font-medium transition-colors disabled:opacity-50",
+            intent.kind === "mutatePop"
+              ? "border-accent bg-accent/15 text-fg"
+              : "border-border bg-surface-2 text-fg hover:bg-surface",
+          )}
+        >
+          <span className="font-display">+1 животное виду</span>
+          <span className="text-[10px] font-normal text-muted">численность ≤ числа видов</span>
+        </button>
+        {canPlant ? (
+          <button
+            type="button"
+            disabled={disabled || !left}
+            onClick={onPlant}
+            className={cn(
+              "flex h-24 min-w-[150px] flex-1 flex-col items-center justify-center gap-1 rounded-[var(--radius-md)] border px-3 py-2 text-sm font-medium transition-colors disabled:opacity-50",
+              intent.kind === "mutatePlant"
+                ? "border-leaf bg-leaf/15 text-fg"
+                : "border-border bg-surface-2 text-fg hover:bg-surface",
+            )}
+          >
+            <span className="font-display">Свойство растения</span>
+            <span className="text-[10px] font-normal text-muted">если в колоде есть такая грань</span>
+          </button>
+        ) : null}
+        <Button variant="secondary" size="sm" onClick={onPass} disabled={disabled}>
+          Пас
+        </Button>
+      </div>
     </div>
   );
 }
@@ -1265,15 +1807,23 @@ function DevDock({
             ? "Ход соперника — карты остаются у вас"
             : intent.kind === "placeAnimal"
               ? "Выберите территорию на столе — животное разместится туда"
-              : intent.kind === "playTrait"
-                ? "Выберите животное для свойства"
-                : intent.kind === "playPair" && !("first" in intent && intent.first)
-                  ? "Парное свойство: выберите первое животное"
-                  : intent.kind === "playPair"
-                    ? "Второе животное пары"
-                    : continents
-                      ? "Карта как животное (затем клик по континенту) или свойство"
-                      : "Карта как животное или свойство"}
+              : intent.kind === "playPlantTrait"
+                ? intent.kind === "playPlantTrait" && "cardId" in intent
+                  ? "Выберите растение для свойства"
+                  : ""
+                : intent.kind === "playPlantPair" && !("first" in intent && intent.first)
+                  ? "Микориза: выберите первое растение"
+                  : intent.kind === "playPlantPair"
+                    ? "Второе растение микоризы"
+                    : intent.kind === "playTrait"
+                      ? "Выберите животное для свойства"
+                      : intent.kind === "playPair" && !("first" in intent && intent.first)
+                        ? "Парное свойство: выберите первое животное"
+                        : intent.kind === "playPair"
+                          ? "Второе животное пары"
+                          : continents
+                            ? "Карта как животное (затем клик по континенту) или свойство"
+                            : "Карта как животное или свойство"}
         </p>
         <Button variant="secondary" size="sm" onClick={onPass} disabled={disabled}>
           Пас
@@ -1310,6 +1860,7 @@ function FeedDock({
   acts,
   intentKind,
   bank,
+  rageTurn,
   onIntent,
   onEndTurn,
   onSkip,
@@ -1317,12 +1868,20 @@ function FeedDock({
   acts: GameAction[];
   intentKind: string;
   bank: number;
-  onIntent: (i: { kind: "take" | "hunt" | "pirate" | "hibernate" | "fat" | "graze" | "none" }) => void;
+  /** «Трава и грибы»: ход бешенства — только обязательная атака. */
+  rageTurn?: { animalId: string } | null;
+  onIntent: (i: { kind: "take" | "takePlant" | "takeFlora" | "hunt" | "pirate" | "shelter" | "plantAttack" | "parasitize" | "hibernate" | "fat" | "graze" | "none" }) => void;
   onEndTurn: () => void;
   onSkip: () => void;
 }) {
   const dispatch = useGameStore((s) => s.dispatch);
   const takes = acts.filter((a): a is Extract<GameAction, { type: "feedTake" }> => a.type === "feedTake");
+  const plantTakes = acts.filter((a): a is Extract<GameAction, { type: "feedTakePlant" }> => a.type === "feedTakePlant");
+  const floraTakes = acts.filter((a): a is Extract<GameAction, { type: "feedTakeFlora" }> => a.type === "feedTakeFlora");
+  const foodActs: GameAction[] = [...takes, ...plantTakes, ...floraTakes];
+  const shelters = acts.filter((a): a is Extract<GameAction, { type: "feedShelter" }> => a.type === "feedShelter");
+  const plantAttacks = acts.filter((a): a is Extract<GameAction, { type: "feedPlantAttack" }> => a.type === "feedPlantAttack");
+  const parasitizes = acts.filter((a): a is Extract<GameAction, { type: "feedParasitize" }> => a.type === "feedParasitize");
   const canHunt = acts.some((a) => a.type === "feedHunt");
   const canPirate = acts.some((a) => a.type === "feedPirate");
   const sleeps = acts.filter((a): a is Extract<GameAction, { type: "feedHibernate" }> => a.type === "feedHibernate");
@@ -1330,21 +1889,82 @@ function FeedDock({
   const grazes = acts.filter((a): a is Extract<GameAction, { type: "feedGraze" }> => a.type === "feedGraze");
   const migrations = acts.filter((a): a is Extract<GameAction, { type: "feedMigrate" }> => a.type === "feedMigrate");
   const canSkip = acts.some((a) => a.type === "feedSkip");
+  const canSkipHint = !canSkip && (shelters.length > 0 || plantTakes.length > 0 || floraTakes.length > 0);
+  if (rageTurn) {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded-full border border-danger/60 bg-danger/15 px-3 py-1 text-xs font-medium text-clay">
+          Бешенство: животное обязано атаковать — выберите жертву
+        </span>
+        {canHunt ? (
+          <Button variant="danger" size="sm" onClick={() => onIntent({ kind: "hunt" })}>
+            Атака бешеного
+          </Button>
+        ) : (
+          <span className="text-xs text-subtle">Допустимой жертвы нет — заканчивайте ход</span>
+        )}
+        <Button variant="secondary" size="sm" onClick={onEndTurn}>
+          Закончить ход
+        </Button>
+      </div>
+    );
+  }
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <span className="mr-1 rounded-full border border-border bg-surface px-2.5 py-1 text-xs tabular-nums text-muted">
-        База: <span className="font-display text-sm text-fg">{bank}</span>
-      </span>
-      {takes.length ? (
+      {bank > 0 ? (
+        <span className="mr-1 rounded-full border border-border bg-surface px-2.5 py-1 text-xs tabular-nums text-muted">
+          Океан: <span className="font-display text-sm text-fg">{bank}</span>
+        </span>
+      ) : null}
+      {foodActs.length ? (
         <Button
-          variant={intentKind === "take" || intentKind === "none" ? "parchment" : "secondary"}
+          variant={intentKind === "take" || intentKind === "takePlant" || intentKind === "takeFlora" || intentKind === "none" ? "parchment" : "secondary"}
           size="sm"
           onClick={() => {
-            if (takes.length === 1) dispatch(takes[0]);
-            else onIntent({ kind: "take" });
+            if (foodActs.length === 1) dispatch(foodActs[0]!);
+            else onIntent({ kind: plantTakes.length || floraTakes.length ? (floraTakes.length && !plantTakes.length ? "takeFlora" : "takePlant") : "take" });
           }}
         >
           Взять еду
+        </Button>
+      ) : null}
+      {shelters.length ? (
+        <Button
+          variant={intentKind === "shelter" ? "parchment" : "secondary"}
+          size="sm"
+          title="Занять убежище растения: защита от хищников до конца фазы питания"
+          onClick={() => {
+            if (shelters.length === 1) dispatch(shelters[0]!);
+            else onIntent({ kind: "shelter" });
+          }}
+        >
+          Убежище
+        </Button>
+      ) : null}
+      {plantAttacks.length ? (
+        <Button
+          variant={intentKind === "plantAttack" ? "danger" : "secondary"}
+          size="sm"
+          title="Направить хищное растение на жертву (раз за фазу)"
+          onClick={() => {
+            if (plantAttacks.length === 1) dispatch(plantAttacks[0]!);
+            else onIntent({ kind: "plantAttack" });
+          }}
+        >
+          Хищное растение
+        </Button>
+      ) : null}
+      {parasitizes.length ? (
+        <Button
+          variant={intentKind === "parasitize" ? "parchment" : "secondary"}
+          size="sm"
+          title="Перекинуть фишку с растения-хозяина на растение-паразит"
+          onClick={() => {
+            if (parasitizes.length === 1) dispatch(parasitizes[0]!);
+            else onIntent({ kind: "parasitize" });
+          }}
+        >
+          На паразита
         </Button>
       ) : null}
       {canHunt ? (
@@ -1362,7 +1982,7 @@ function FeedDock({
           variant={intentKind === "hibernate" ? "parchment" : "secondary"}
           size="sm"
           onClick={() => {
-            if (sleeps.length === 1) dispatch(sleeps[0]);
+            if (sleeps.length === 1) dispatch(sleeps[0]!);
             else onIntent({ kind: "hibernate" });
           }}
         >
@@ -1374,7 +1994,7 @@ function FeedDock({
           variant={intentKind === "fat" ? "parchment" : "secondary"}
           size="sm"
           onClick={() => {
-            if (fats.length === 1) dispatch(fats[0]);
+            if (fats.length === 1) dispatch(fats[0]!);
             else onIntent({ kind: "fat" });
           }}
         >
@@ -1386,7 +2006,7 @@ function FeedDock({
           variant={intentKind === "graze" ? "parchment" : "secondary"}
           size="sm"
           onClick={() => {
-            if (grazes.length === 1) dispatch(grazes[0]);
+            if (grazes.length === 1) dispatch(grazes[0]!);
             else onIntent({ kind: "graze" });
           }}
         >
@@ -1424,6 +2044,10 @@ function FeedDock({
         <Button variant="ghost" size="sm" onClick={onSkip} title="Пас до конца фазы питания">
           Пас
         </Button>
+      ) : canSkipHint ? (
+        <span className="text-xs text-subtle" title="Пока хотя бы одно ваше животное способно получить еду или убежище, пасовать нельзя (правила «Растений»)">
+          Пас недоступен — есть доступная еда или убежища
+        </span>
       ) : null}
     </div>
   );

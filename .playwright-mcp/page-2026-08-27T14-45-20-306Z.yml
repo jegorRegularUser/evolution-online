@@ -1,0 +1,20 @@
+- generic [active] [ref=e1]:
+  - main [ref=e2]:
+    - generic [ref=e3]:
+      - heading "boardgamegeek.com" [level=1] [ref=e5]
+      - heading "Выполнение проверки безопасности" [level=2] [ref=e6]
+      - paragraph [ref=e7]: Этот веб-сайт использует сервис безопасности для защиты от вредоносных ботов. Эта страница отображается, пока веб-сайт проверяет, что вы не бот.
+  - contentinfo [ref=e14]:
+    - generic [ref=e16]:
+      - generic [ref=e18]:
+        - text: "Ray ID:"
+        - code [ref=e19]: a31bdc073beea2ca
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - text: Производительность и безопасность с
+          - link "Cloudflare, открывается в новой вкладке" [ref=e22] [cursor=pointer]:
+            - /url: https://www.cloudflare.com?utm_source=challenge&utm_campaign=m
+            - text: Cloudflare
+        - link "Конфиденциальность, открывается в новой вкладке" [ref=e24] [cursor=pointer]:
+          - /url: https://www.cloudflare.com/privacypolicy/
+          - text: Конфиденциальность

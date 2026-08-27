@@ -29,6 +29,8 @@
   --color-food-yellow: #c4a15a;
   --color-good: #6f8b5c;
   --color-water: #3d6a86;
+  /* Листовая зелень: растения, их свойства и убежища. */
+  --color-leaf: #5c8f3e;
   /* Ядовито-фиолетовый: вирусные свойства (паразит, неоплазия) и выключенные ими. */
   --color-virus: #8b46b0;
 
@@ -277,4 +279,31 @@
 }
 .anim-felt-flash {
   animation: felt-flash-kf 0.9s var(--ease-out);
+}
+
+/* ── Оверлей важных событий ──────────────────────────────────────────── */
+
+/* Фон: всё за карточкой замыливается и слегка затемняется. */
+.spotlight-backdrop {
+  background:
+    radial-gradient(90% 70% at 50% 30%, color-mix(in oklab, var(--color-bg) 38%, transparent), transparent 70%),
+    color-mix(in oklab, var(--color-bg) 62%, transparent);
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+  animation: fade-in 0.24s var(--ease-out);
+}
+
+@keyframes spotlight-in {
+  0% { opacity: 0; transform: scale(0.92) translateY(12px); }
+  60% { opacity: 1; }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes spotlight-out-kf {
+  to { opacity: 0; transform: scale(0.96) translateY(6px); }
+}
+.spotlight-card {
+  animation: spotlight-in 0.4s var(--ease-out);
+}
+.spotlight-out {
+  animation: spotlight-out-kf 0.28s var(--ease-out) forwards;
 }

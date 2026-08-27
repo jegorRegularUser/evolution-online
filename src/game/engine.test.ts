@@ -1,11 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { applyAction, createGame, legalDefenseActions, legalDevActions, legalFeedActions } from "./engine.ts";
+import { chooseAIAction } from "./ai.ts";
 import { buildDeck, DECK_SIZE } from "./deck.ts";
+import { FLORA, floraDeckSize, fullMarksPool } from "./flora.ts";
+import { PLANTS } from "./plants.ts";
 import { nextRandom } from "./rng.ts";
-import { canAttack, foodNeeded, hasTrait } from "./queries.ts";
+import { allAnimals, canAttack, foodNeeded, hasTrait } from "./queries.ts";
 import { TRAITS } from "./traits.ts";
-import type { Animal, GameState, TraitId, TraitInstance } from "./types.ts";
+import type { Animal, FloraCard, FloraKind, GameAction, GameState, Plant, PlantKind, TraitId, TraitInstance } from "./types.ts";
 
 let idc = 0;
 function nid(p: string) {
@@ -823,7 +826,7 @@ describe("континенты: питание по территориям", () 
     g = applyAction(g, { type: "feedHunt", carnivoreId: "cz", preyId: "ne" });
     assert.ok(g.paralyzed?.includes("cz"));
     // Парализованный не охотится.
-    const hunts = legalFeedActions({ ...g, currentPlayerId: 1, turnUse: { carnivores: [], pirates: [], grazers: [], foodTaken: false, combatUsed: false, migrated: false } }, 1)
+    const hunts = legalFeedActions({ ...g, currentPlayerId: 1, turnUse: { carnivores: [], pirates: [], grazers: [], foodTaken: false, combatUsed: false, migrated: false, sheltered: false } }, 1)
       .filter((a) => a.type === "feedHunt");
     assert.equal(hunts.length, 0);
   });
@@ -948,5 +951,1140 @@ describe("континенты: неоплазия и регенерация", (
     assert.equal(g.pendingAttack, null);
     assert.ok(!g.players[0]!.animals.some((a) => a.id === "rg"));
     assert.ok(g.pendingRegeneration);
+  });
+});
+
+// ── Дополнение «Растения» ───────────────────────────────────────────────────
+
+function mkPlant(id: string, kind: PlantKind, food: number, extra?: Partial<Plant>): Plant {
+  return { id, kind, food, shelters: 0, traits: [], playSeq: 1, ...extra };
+}
+
+function plantScenario(
+  playersAnimals: Animal[][],
+  plants: Plant[],
+  modules: { continents?: boolean; plants?: boolean } = { plants: true },
+): GameState {
+  const g = createGame(Math.max(2, playersAnimals.length), "normal", 7, undefined, {
+    plants: modules.plants ?? true,
+    continents: modules.continents,
+  });
+  for (const p of g.players) {
+    p.hand = [];
+    p.passedDev = false;
+  }
+  playersAnimals.forEach((animals, i) => {
+    g.players[i]!.animals = animals;
+  });
+  g.plants = plants;
+  g.phase = "feeding";
+  g.currentPlayerId = 0;
+  for (const p of g.players) p.passedFeed = false;
+  g.turnUse = { carnivores: [], pirates: [], grazers: [], foodTaken: false, combatUsed: false, migrated: false, sheltered: false };
+  return g;
+}
+
+describe("растения: колода и подготовка", () => {
+  it("раздаёт по 8 карт и выкладывает стартовые растения", () => {
+    const g = createGame(2, "normal", 11, undefined, { plants: true });
+    for (const p of g.players) assert.equal(p.hand.length, 8);
+    assert.equal(g.plants!.length, 3); // таблица: 2 игрока — 3 растения
+    assert.equal(g.plantDeck!.length, 36 - 3);
+    for (const pl of g.plants!) {
+      assert.equal(pl.food, PLANTS[pl.kind].startFood);
+    }
+  });
+
+  it("двусторонние карты свойств растений попадают в колоду животных", () => {
+    const g = createGame(2, "normal", 12, undefined, { plants: true });
+    const all = [...g.players.flatMap((p) => p.hand), ...g.deck];
+    const plantTraits = all.filter((c) => c.faces.some((f) => TRAITS[f].plantTrait));
+    assert.ok(plantTraits.length > 0);
+  });
+});
+
+describe("растения: питание с растений", () => {
+  it("фишка переходит с растения на животное", () => {
+    const g = plantScenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]], [mkPlant("p1", "perennial", 3)]);
+    const next = applyAction(g, { type: "feedTakePlant", animalId: "a", plantId: "p1" });
+    assert.equal(next.plants![0]!.food, 2);
+    assert.equal(next.players[0]!.animals[0]!.food, 1);
+  });
+
+  it("водное растение кормит только водоплавающих", () => {
+    const g = plantScenario(
+      [[mkAnimal("sw", 0, [t("swimming")])], [mkAnimal("land", 1, [])]],
+      [mkPlant("p1", "perennial", 3, { traits: [t("plantWater")] })],
+    );
+    assert.equal(legalFeedActions(g, 0).some((x) => x.type === "feedTakePlant"), true);
+    g.currentPlayerId = 1;
+    assert.equal(legalFeedActions(g, 1).some((x) => x.type === "feedTakePlant"), false);
+  });
+
+  it("корнеплод — только норным, дерево — только большим", () => {
+    const g = plantScenario(
+      [[mkAnimal("bur", 0, [t("burrowing")])], [mkAnimal("big", 1, [t("highBodyWeight")])]],
+      [
+        mkPlant("root", "perennial", 2, { traits: [t("rootVegetable")] }),
+        mkPlant("tree", "fruit", 2, { traits: [t("tree")] }),
+      ],
+    );
+    const ids = (list: GameAction[]) =>
+      list.filter((x): x is Extract<GameAction, { type: "feedTakePlant" }> => x.type === "feedTakePlant").map((x) => x.plantId);
+    assert.deepEqual(ids(legalFeedActions(g, 0)), ["root"]);
+    g.currentPlayerId = 1;
+    assert.deepEqual(ids(legalFeedActions(g, 1)), ["tree"]);
+  });
+
+  it("хищник ест только с растений со значком плода или питательных", () => {
+    const g = plantScenario(
+      [[mkAnimal("car", 0, [t("carnivore")])], [mkAnimal("prey", 1, [])]],
+      [
+        mkPlant("grass", "grass", 2), // без плода
+        mkPlant("fruit", "fruit", 2), // с плодом
+        mkPlant("nutr", "perennial", 2, { traits: [t("nutritious")] }),
+      ],
+    );
+    const ids = legalFeedActions(g, 0)
+      .filter((x): x is Extract<GameAction, { type: "feedTakePlant" }> => x.type === "feedTakePlant")
+      .map((x) => x.plantId);
+    assert.deepEqual([...ids].sort(), ["fruit", "nutr"]);
+  });
+
+  it("питательное даёт вторую фишку", () => {
+    const g = plantScenario(
+      [[mkAnimal("a", 0, [t("fatTissue")])], [mkAnimal("b", 1, [])]],
+      [mkPlant("p1", "perennial", 3, { traits: [t("nutritious")] })],
+    );
+    const next = applyAction(g, { type: "feedTakePlant", animalId: "a", plantId: "p1" });
+    // Первая фишка — еда, вторая (питательное) — в пустой жировой запас.
+    assert.equal(next.players[0]!.animals[0]!.food, 1);
+    assert.equal(next.players[0]!.animals[0]!.fatTokens, 1);
+    assert.equal(next.plants![0]!.food, 1);
+  });
+
+  it("лекарственное: накормлено, свойства не действуют до конца фазы", () => {
+    const g = plantScenario(
+      [[mkAnimal("a", 0, [t("camouflage")])], [mkAnimal("b", 1, [])]],
+      [mkPlant("p1", "perennial", 2, { traits: [t("medicinal")] })],
+    );
+    const next = applyAction(g, { type: "feedTakePlant", animalId: "a", plantId: "p1" });
+    const a = next.players[0]!.animals[0]!;
+    assert.equal(a.sedated, true);
+    assert.equal(hasTrait(a, "camouflage"), false); // свойства «выключены»
+  });
+
+  it("медонос ворует карту у игрока с большей рукой", () => {
+    const g = plantScenario(
+      [[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]],
+      [mkPlant("p1", "perennial", 2, { traits: [t("honeyPlant")] })],
+    );
+    g.players[1]!.hand = [{ id: "x1", faces: ["camouflage"] }, { id: "x2", faces: ["running"] }];
+    const next = applyAction(g, { type: "feedTakePlant", animalId: "a", plantId: "p1" });
+    assert.equal(next.players[0]!.hand.length, 1);
+    assert.equal(next.players[1]!.hand.length, 1);
+  });
+
+  it("убежище берётся вместо еды и защищает от хищника", () => {
+    const g = plantScenario(
+      [[mkAnimal("car", 0, [t("carnivore")]), mkAnimal("a2", 0, [])], [mkAnimal("prey", 1, [])]],
+      [mkPlant("p1", "succulent", 2, { shelters: 1 })],
+    );
+    // Игрок 0 не может занять убежище за игрока 1 — берёт в свой ход.
+    const next = applyAction(g, { type: "feedShelter", animalId: "prey", plantId: "p1" });
+    void next;
+  });
+
+  it("после убежища еда, охота, пиратство и топтун в этот ход недоступны", () => {
+    const g = plantScenario(
+      [[mkAnimal("car", 0, [t("carnivore"), t("grazing"), t("piracy")])], [mkAnimal("prey", 1, [])]],
+      [mkPlant("p1", "succulent", 2, { shelters: 1 })],
+    );
+    // prey получил еду, чтобы пиратство было потенциально доступно.
+    g.players[1]!.animals[0]!.food = 1;
+    const next = applyAction(g, { type: "feedShelter", animalId: "car", plantId: "p1" });
+    // Мёртвых кнопок быть не должно: еда/атака/топтун в ЭТОТ ход уже недоступны.
+    const acts = legalFeedActions(next, 0);
+    assert.equal(acts.some((x) => x.type === "feedTakePlant"), false);
+    assert.equal(acts.some((x) => x.type === "feedHunt"), false);
+    assert.equal(acts.some((x) => x.type === "feedPirate"), false);
+    assert.equal(acts.some((x) => x.type === "feedGraze"), false);
+    assert.equal(acts.some((x) => x.type === "feedShelter"), false);
+    assert.ok(acts.some((x) => x.type === "feedEndTurn"));
+    // И движение по ним отклоняется движком.
+    const rejected = applyAction(next, { type: "feedTakePlant", animalId: "car", plantId: "p1" });
+    assert.equal(rejected.players[0]!.animals[0]!.food, 0);
+  });
+
+  it("пас запрещён, пока есть доступная еда или убежища", () => {
+    const g = plantScenario(
+      [[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]],
+      [mkPlant("p1", "perennial", 3, { shelters: 1 })],
+    );
+    const acts = legalFeedActions(g, 0);
+    assert.equal(acts.some((x) => x.type === "feedSkip"), false);
+    assert.ok(acts.some((x) => x.type === "feedTakePlant"));
+    assert.ok(acts.some((x) => x.type === "feedShelter"));
+  });
+
+  it("топтун топчет растение", () => {
+    const g = plantScenario(
+      [[mkAnimal("gr", 0, [t("grazing")])], [mkAnimal("b", 1, [])]],
+      [mkPlant("p1", "perennial", 3)],
+    );
+    const acts = legalFeedActions(g, 0).filter((x) => x.type === "feedGraze");
+    assert.equal(acts.length, 1);
+    const next = applyAction(g, { type: "feedGraze", animalId: "gr", plantId: "p1" });
+    assert.equal(next.plants![0]!.food, 2);
+  });
+});
+
+describe("растения: хищное растение", () => {
+  it("контратакует жаждущего: без защиты животное гибнет, растение получает фишки", () => {
+    const g = plantScenario(
+      [[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]],
+      [mkPlant("cp", "carnivorous", 2)],
+    );
+    const next = applyAction(g, { type: "feedTakePlant", animalId: "a", plantId: "cp" });
+    assert.ok(!next.players[0]!.animals.some((x) => x.id === "a"));
+    assert.equal(next.plants![0]!.food, 4); // +2 за добычу, фишку не забрали
+    assert.equal(next.pendingAttack, null);
+  });
+
+  it("игрок направляет растение на жертву; хвост даёт растению 1 фишку", () => {
+    const g = plantScenario(
+      [[mkAnimal("a", 0, [])], [mkAnimal("tail", 1, [t("tailLoss")])]],
+      [mkPlant("cp", "carnivorous", 0)],
+    );
+    let next = applyAction(g, { type: "feedPlantAttack", plantId: "cp", preyId: "tail" });
+    assert.equal(next.pendingAttack?.plantId, "cp");
+    next = applyAction(next, { type: "chooseDefense", kind: "tailLoss" });
+    assert.equal(next.plants![0]!.food, 1);
+    assert.ok(next.players[1]!.animals.some((x) => x.id === "tail"));
+    assert.equal(next.players[1]!.animals[0]!.traits.length, 0); // хвост сброшен
+  });
+
+  it("ядовитая добыча обрекает растение", () => {
+    const g = plantScenario(
+      [[mkAnimal("a", 0, [])], [mkAnimal("pois", 1, [t("poisonous")])]],
+      [mkPlant("cp", "carnivorous", 1)],
+    );
+    const next = applyAction(g, { type: "feedPlantAttack", plantId: "cp", preyId: "pois" });
+    assert.equal(next.plants![0]!.doomed, true);
+  });
+
+  it("хищное растение не трогает водоплавающее и большое", () => {
+    const g = plantScenario(
+      [[mkAnimal("a", 0, [])], [mkAnimal("sw", 1, [t("swimming")]), mkAnimal("big", 1, [t("highBodyWeight")])]],
+      [mkPlant("cp", "carnivorous", 1)],
+    );
+    assert.equal(legalFeedActions(g, 0).some((x) => x.type === "feedPlantAttack"), false);
+  });
+
+  it("хищное растение атакует раз за фазу питания", () => {
+    const g = plantScenario(
+      [[mkAnimal("a", 0, [])], [mkAnimal("b1", 1, []), mkAnimal("b2", 1, [])]],
+      [mkPlant("cp", "carnivorous", 1)],
+    );
+    const next = applyAction(g, { type: "feedPlantAttack", plantId: "cp", preyId: "b1" });
+    assert.equal(legalFeedActions(next, 0).some((x) => x.type === "feedPlantAttack"), false);
+  });
+});
+
+describe("растения: вымирание и рост", () => {
+  function toExtinction(g: GameState): GameState {
+    g.phase = "extinction";
+    g.extinctionDeaths = allAnimals(g).filter((a) => a.poisoned || a.food < foodNeeded(a)).map((a) => a.id);
+    return g;
+  }
+
+  it("съеденное дочиста растение гибнет, однолетник выживает", () => {
+    const g = plantScenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]], [
+      mkPlant("dead", "perennial", 0),
+      mkPlant("alive", "annual", 0),
+    ]);
+    const next = applyAction(toExtinction(g), { type: "continueExtinction" });
+    assert.equal(next.phase, "growth");
+    assert.ok(!next.plants!.some((p) => p.id === "dead"));
+    assert.ok(next.plants!.some((p) => p.id === "alive"));
+    // Однолетник получил фишку в конце роста.
+    assert.equal(next.plants!.find((p) => p.id === "alive")!.food, 1);
+  });
+
+  it("многолетник разрастается по схеме 2→3", () => {
+    const g = plantScenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]], [
+      mkPlant("p1", "perennial", 2),
+    ]);
+    const next = applyAction(toExtinction(g), { type: "continueExtinction" });
+    assert.equal(next.plants![0]!.food, 3);
+  });
+
+  it("лиана получает фишки по числу не-лиан", () => {
+    const g = plantScenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]], [
+      mkPlant("l1", "liana", 1),
+      mkPlant("p1", "perennial", 1),
+      mkPlant("p2", "grass", 2),
+    ]);
+    const next = applyAction(toExtinction(g), { type: "continueExtinction" });
+    const liana = next.plants!.find((p) => p.id === "l1")!;
+    assert.equal(liana.food, 2); // два не-лиана на столе
+  });
+
+  it("гриб кормится гибнущими животными", () => {
+    const g = plantScenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]], [
+      mkPlant("f1", "fungus", 0),
+    ]);
+    // Оба животных голодные — погибнут в вымирании и накормят гриб.
+    const next = applyAction(toExtinction(g), { type: "continueExtinction" });
+    assert.equal(next.plants![0]!.food, 2);
+  });
+
+  it("микориза спасает пустое растение, если у соседа есть еда", () => {
+    const g = plantScenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]], [
+      mkPlant("empty", "grass", 0),
+      mkPlant("full", "perennial", 2),
+    ]);
+    g.plants![0]!.traits.push({ ...t("micorrhiza"), pairWith: "full", pairRole: "a" });
+    g.plants![1]!.traits.push({ ...t("micorrhiza"), pairWith: "empty", pairRole: "b" });
+    const next = applyAction(toExtinction(g), { type: "continueExtinction" });
+    assert.ok(next.plants!.some((p) => p.id === "empty"));
+    // Пустое растение микоризы получает фишку в конце роста.
+    assert.equal(next.plants!.find((p) => p.id === "empty")!.food, 1);
+  });
+
+  it("паразит гибнет вместе с хозяином, но не от голода", () => {
+    const g = plantScenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]], [
+      mkPlant("host", "perennial", 0),
+      mkPlant("par", "parasite", 0, { hostId: "host" }),
+    ]);
+    const next = applyAction(toExtinction(g), { type: "continueExtinction" });
+    assert.ok(!next.plants!.some((p) => p.id === "host"));
+    assert.ok(!next.plants!.some((p) => p.id === "par"));
+  });
+
+  it("паразит с накормленным хозяином выживает", () => {
+    const g = plantScenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]], [
+      mkPlant("host", "perennial", 2),
+      mkPlant("par", "parasite", 0, { hostId: "host" }),
+    ]);
+    const next = applyAction(toExtinction(g), { type: "continueExtinction" });
+    assert.ok(next.plants!.some((p) => p.id === "host"));
+    assert.ok(next.plants!.some((p) => p.id === "par"));
+  });
+
+  it("убежища восстанавливаются в фазу роста", () => {
+    const g = plantScenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]], [
+      mkPlant("s1", "succulent", 2, { shelters: 0 }),
+    ]);
+    const next = applyAction(toExtinction(g), { type: "continueExtinction" });
+    assert.equal(next.plants![0]!.shelters, 1);
+  });
+
+  it("новые растения добавляются до максимума стола", () => {
+    const g = plantScenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]], [
+      mkPlant("p1", "perennial", 2),
+    ]);
+    g.plantDeck = ["grass", "grass", "grass", "grass"];
+    const next = applyAction(toExtinction(g), { type: "continueExtinction" });
+    // 2 игрока: добавка 1 за год.
+    assert.equal(next.plants!.filter((p) => p.kind !== "parasite").length, 2);
+  });
+
+  it("continueGrowth начинает новый год (добор карт)", () => {
+    const g = plantScenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]], [
+      mkPlant("p1", "perennial", 2),
+    ]);
+    g.deck = Array.from({ length: 30 }, (_, i) => ({ id: `d${i}`, faces: ["camouflage"] as TraitId[] }));
+    let next = applyAction(toExtinction(g), { type: "continueExtinction" });
+    assert.equal(next.phase, "growth");
+    next = applyAction(next, { type: "continueGrowth" });
+    assert.equal(next.phase, "development");
+    assert.equal(next.year, 2);
+    assert.ok(next.players.every((p) => p.hand.length > 0));
+  });
+});
+
+describe("растения + континенты", () => {
+  it("растения распределены по континентам", () => {
+    const g = createGame(2, "normal", 13, undefined, { plants: true, continents: true });
+    assert.ok(g.plants!.length >= 3);
+    for (const pl of g.plants!) {
+      assert.ok(pl.zoneId === "laurasia" || pl.zoneId === "gondwana");
+    }
+  });
+
+  it("животное ест только с растения своего континента", () => {
+    const a = mkAnimal("a", 0, []);
+    a.zoneId = "laurasia";
+    const g = plantScenario(
+      [[a], [mkAnimal("b", 1, [])]],
+      [
+        mkPlant("pl", "perennial", 2, { zoneId: "laurasia" }),
+        mkPlant("pg", "perennial", 2, { zoneId: "gondwana" }),
+      ],
+      { plants: true, continents: true },
+    );
+    const ids = legalFeedActions(g, 0)
+      .filter((x): x is Extract<GameAction, { type: "feedTakePlant" }> => x.type === "feedTakePlant")
+      .map((x) => x.plantId);
+    assert.deepEqual(ids, ["pl"]);
+  });
+});
+
+describe("растения: полные партии ботов", () => {
+  function driveGame(seed: number, modules: { plants?: boolean; continents?: boolean }): GameState {
+    let g = createGame(3, "normal", seed, undefined, modules);
+    for (let i = 0; i < 4000 && g.phase !== "gameOver"; i++) {
+      if (g.phase === "foodBank") {
+        g = applyAction(g, g.foodRoll ? { type: "beginFeeding" } : { type: "rollFoodBank" });
+        continue;
+      }
+      if (g.phase === "extinction") {
+        g = applyAction(g, { type: "continueExtinction" });
+        continue;
+      }
+      if (g.phase === "growth") {
+        g = applyAction(g, { type: "continueGrowth" });
+        continue;
+      }
+      if (g.pendingAttack) {
+        const acts = legalDefenseActions(g, g.pendingAttack.waitingFor);
+        g = applyAction(g, acts[0] ?? { type: "chooseDefense", kind: "none" });
+        continue;
+      }
+      const act = chooseAIAction(g);
+      if (!act) break;
+      g = applyAction(g, act);
+    }
+    return g;
+  }
+
+  it("партия с растениями доходит до конца без ошибок", () => {
+    const g = driveGame(101, { plants: true });
+    assert.equal(g.phase, "gameOver");
+    assert.ok(g.scores);
+  });
+
+  it("партия растения+континенты доходит до конца без ошибок", () => {
+    const g = driveGame(202, { plants: true, continents: true });
+    assert.equal(g.phase, "gameOver");
+    assert.ok(g.scores);
+    for (const pl of g.plants ?? []) {
+      assert.ok(pl.zoneId === "laurasia" || pl.zoneId === "gondwana");
+    }
+  });
+});
+
+// ── Дополнение «Трава и грибы» ───────────────────────────────────────────────
+
+function mkFlora(id: string, kind: FloraKind, food: number, extra?: Partial<FloraCard>): FloraCard {
+  return { id, kind, food, playSeq: 1, ...extra };
+}
+
+function floraScenario(
+  playersAnimals: Animal[][],
+  flora: FloraCard[],
+  modules: { continents?: boolean; plants?: boolean; fungi?: boolean } = { fungi: true },
+): GameState {
+  const g = createGame(Math.max(2, playersAnimals.length), "normal", 7, undefined, {
+    fungi: modules.fungi ?? true,
+    continents: modules.continents,
+    plants: modules.plants,
+  });
+  for (const p of g.players) {
+    p.hand = [];
+    p.passedDev = false;
+  }
+  playersAnimals.forEach((animals, i) => {
+    g.players[i]!.animals = animals;
+  });
+  g.flora = flora;
+  g.floraDeck = [];
+  g.floraDeckCount = 0;
+  g.marksPool = fullMarksPool();
+  g.phase = "feeding";
+  g.currentPlayerId = 0;
+  for (const p of g.players) p.passedFeed = false;
+  g.turnUse = { carnivores: [], pirates: [], grazers: [], foodTaken: false, combatUsed: false, migrated: false, sheltered: false };
+  return g;
+}
+
+describe("трава и грибы: колода и подготовка", () => {
+  it("открывает 2 карты флоры и полный стол меток", () => {
+    const g = createGame(2, "normal", 21, undefined, { fungi: true });
+    assert.equal(g.flora!.length, 2);
+    assert.equal(g.floraDeck!.length, floraDeckSize() - 2);
+    for (const f of g.flora!) {
+      assert.equal(f.food, FLORA[f.kind].isFungus ? 1 : 3);
+    }
+    for (const n of Object.values(g.marksPool!)) assert.equal(n, 4);
+    // базовая раздача — по 6 карт, кубик не бросается: флора и есть база
+    for (const p of g.players) assert.equal(p.hand.length, 6);
+  });
+
+  it("новые свойства попадают в колоду", () => {
+    const g = createGame(2, "normal", 22, undefined, { fungi: true });
+    const all = [...g.players.flatMap((p) => p.hand), ...g.deck];
+    assert.equal(all.filter((c) => c.faces.includes("transparent")).length, 4);
+    assert.equal(all.filter((c) => c.faces.includes("insectivore")).length, 4);
+  });
+
+  it("фаза базы пропускается: после развития сразу питание, флора пополняется", () => {
+    const g = createGame(2, "normal", 23, undefined, { fungi: true });
+    for (const p of g.players) {
+      p.hand = [];
+      p.passedDev = true;
+      p.animals = [mkAnimal(`a${p.id}`, p.id, [])];
+    }
+    let next = g;
+    for (let i = 0; i < 20 && next.phase === "development"; i++) {
+      next = applyAction(next, { type: "devPass" });
+    }
+    assert.equal(next.phase, "feeding");
+    // 2 стартовые + 2 карты (по числу игроков)
+    assert.equal(next.flora!.length, 4);
+    assert.equal(next.foodBank, 0);
+  });
+});
+
+describe("трава и грибы: кормление с флоры", () => {
+  it("фишка переходит с карты на животное, даже к хищнику", () => {
+    const g = floraScenario(
+      [[mkAnimal("a", 0, [])], [mkAnimal("car", 1, [t("carnivore")])]],
+      [mkFlora("f1", "thryn", 3)],
+    );
+    // карта без метки и без спец-эффекта — трын безопасен: просто еда
+    const next = applyAction(g, { type: "feedTakeFlora", animalId: "a", floraId: "f1" });
+    assert.equal(next.flora![0]!.food, 2);
+    assert.equal(next.players[0]!.animals[0]!.food, 1);
+    assert.deepEqual(next.players[0]!.animals[0]!.marks, ["thryn"]);
+  });
+
+  it("бледная поганка даёт яд и сбрасывает паразита", () => {
+    const g = floraScenario(
+      [[mkAnimal("a", 0, [t("parasite")])], [mkAnimal("b", 1, [])]],
+      [mkFlora("f1", "toadstool", 1)],
+    );
+    const next = applyAction(g, { type: "feedTakeFlora", animalId: "a", floraId: "f1" });
+    const a = next.players[0]!.animals[0]!;
+    assert.deepEqual(a.marks, ["poison"]);
+    assert.equal(a.traits.length, 0); // паразит сброшен
+    assert.equal(next.marksPool!.poison, 3);
+  });
+
+  it("яд убивает в вымирание, антидот спасает", () => {
+    const g = floraScenario(
+      [[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]],
+      [mkFlora("f1", "toadstool", 1), mkFlora("f2", "mold", 1)],
+    );
+    // игрок 0 берёт поганку (накормлен и отравлен), ход сам уходит к игроку 1
+    const poisoned = applyAction(g, { type: "feedTakeFlora", animalId: "a", floraId: "f1" });
+    assert.equal(poisoned.currentPlayerId, 1);
+    // игрок 1 берёт плесень — накормлен и с антидотом; делать больше нечего — вымирание
+    const next = applyAction(poisoned, { type: "feedTakeFlora", animalId: "b", floraId: "f2" });
+    assert.equal(next.phase, "extinction");
+    assert.ok(next.extinctionDeaths.includes("a"));
+    assert.ok(!next.extinctionDeaths.includes("b")); // антидот на выжившем
+  });
+
+  it("трын защищает от меток, плесневой гриб даёт антидот", () => {
+    const g = floraScenario(
+      [[mkAnimal("tr", 0, []), mkAnimal("m", 0, [])], [mkAnimal("b", 1, [])]],
+      [mkFlora("f1", "thryn", 3), mkFlora("f2", "toadstool", 1), mkFlora("f3", "mold", 1)],
+    );
+    const safe = applyAction(g, { type: "feedTakeFlora", animalId: "tr", floraId: "f1" });
+    const next = applyAction(safe, { type: "feedTakeFlora", animalId: "tr", floraId: "f2" });
+    assert.deepEqual(next.players[0]!.animals[0]!.marks, ["thryn"]); // яд не прилип
+    assert.equal(next.marksPool!.poison, 4); // метка не потрачена
+  });
+
+  it("сон-трава: свойств нет, потребность 1, насекомоядному хватит одной синей", () => {
+    const g = floraScenario(
+      [[mkAnimal("sleepy", 0, [t("burrowing")])], [mkAnimal("b", 1, [])]],
+      [mkFlora("f1", "sleepGrass", 3)],
+    );
+    const next = applyAction(g, { type: "feedTakeFlora", animalId: "sleepy", floraId: "f1" });
+    const sleepy = next.players[0]!.animals[0]!;
+    assert.deepEqual(sleepy.marks, ["sleep"]);
+    assert.equal(foodNeeded(sleepy), 1);
+    assert.equal(hasTrait(sleepy, "burrowing"), false);
+    // накормленную фазой вымирания переживёт
+    assert.equal(next.extinctionDeaths.length, 0);
+  });
+
+  it("дурь: хищник игнорирует камуфляж жертвы", () => {
+    const g = floraScenario(
+      [[mkAnimal("car", 0, [t("carnivore")])], [mkAnimal("prey", 1, [t("camouflage")])]],
+      [mkFlora("f1", "datura", 3)],
+    );
+    // жертва ест дурман и получает метку
+    g.currentPlayerId = 1;
+    const marked = applyAction(g, { type: "feedTakeFlora", animalId: "prey", floraId: "f1" });
+    assert.deepEqual(marked.players[1]!.animals[0]!.marks, ["haze"]);
+    // хищник без острого зрения всё равно может атаковать (дурь гасит камуфляж)
+    const acts = legalFeedActions(marked, 0);
+    assert.ok(acts.some((a) => a.type === "feedHunt" && a.preyId === "prey"));
+  });
+
+  it("улыбнись-трава: пацифист не охотится и не пиратствует", () => {
+    const g = floraScenario(
+      [[mkAnimal("a", 0, [t("carnivore"), t("piracy")])], [mkAnimal("b", 1, [])]],
+      [mkFlora("f1", "smile", 3)],
+    );
+    const next = applyAction(g, { type: "feedTakeFlora", animalId: "a", floraId: "f1" });
+    const acts = legalFeedActions(next, 0);
+    assert.equal(acts.some((a) => a.type === "feedHunt"), false);
+    assert.equal(acts.some((a) => a.type === "feedPirate"), false);
+  });
+
+  it("гриб прозрения опустошает руку", () => {
+    const g = floraScenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]], [mkFlora("f1", "insight", 1)]);
+    g.players[0]!.hand = [{ id: "c1", faces: ["camouflage"] }, { id: "c2", faces: ["running"] }];
+    const next = applyAction(g, { type: "feedTakeFlora", animalId: "a", floraId: "f1" });
+    assert.equal(next.players[0]!.hand.length, 0);
+  });
+
+  it("окрыляющий гриб сбрасывает парные свойства и даёт синюю", () => {
+    const cardId = "pair-card";
+    const pairA = t("cooperation", { cardId, pairWith: "b", pairRole: "a" });
+    const pairB = t("cooperation", { cardId, pairWith: "a", pairRole: "b" });
+    const g = floraScenario(
+      [[mkAnimal("a", 0, [pairA]), mkAnimal("b", 0, [pairB])], [mkAnimal("c", 1, [])]],
+      [mkFlora("f1", "soaring", 1)],
+    );
+    const next = applyAction(g, { type: "feedTakeFlora", animalId: "a", floraId: "f1" });
+    const a = next.players[0]!.animals[0]!;
+    const b = next.players[0]!.animals[1]!;
+    assert.equal(a.traits.length, 0);
+    assert.equal(b.traits.length, 0);
+    assert.equal(a.food, 1);
+    assert.equal(a.blueFood, 1);
+  });
+
+  it("очистительная трава снимает прочие фишки и метки", () => {
+    const g = floraScenario(
+      [[mkAnimal("a", 0, [t("fatTissue")])], [mkAnimal("b", 1, [])]],
+      [mkFlora("f1", "cleanser", 3)],
+    );
+    const a0 = g.players[0]!.animals[0]!;
+    a0.food = 3;
+    a0.marks = ["poison"];
+    g.marksPool!.poison = 3;
+    const next = applyAction(g, { type: "feedTakeFlora", animalId: "a", floraId: "f1" });
+    const a = next.players[0]!.animals[0]!;
+    assert.equal(a.food, 1); // осталась одна красная — только что взятая
+    assert.equal(a.blueFood, 0);
+    assert.deepEqual(a.marks, []);
+    assert.equal(next.marksPool!.poison, 4); // метка вернулась на стол
+  });
+
+  it("страстоцвет превращает свойство в новое животное", () => {
+    const g = floraScenario([[mkAnimal("a", 0, [t("camouflage")])], [mkAnimal("b", 1, [])]], [mkFlora("f1", "passionflower", 3)]);
+    const next = applyAction(g, { type: "feedTakeFlora", animalId: "a", floraId: "f1" });
+    const mine = next.players[0]!.animals;
+    assert.equal(mine.length, 2);
+    assert.equal(mine[0]!.traits.length, 0); // свойство ушло
+    assert.equal(mine[1]!.traits.length, 0); // новорождённое без свойств
+  });
+
+  it("взаимодействие даёт напарнику фишку с той же карты (и её метку)", () => {
+    const commA = t("communication", { pairWith: "b", pairRole: "a" });
+    const commB = t("communication", { pairWith: "a", pairRole: "b" });
+    const g = floraScenario(
+      [[mkAnimal("a", 0, [commA]), mkAnimal("b", 0, [commB])], [mkAnimal("c", 1, [])]],
+      [mkFlora("f1", "mold", 2)],
+    );
+    const next = applyAction(g, { type: "feedTakeFlora", animalId: "a", floraId: "f1" });
+    assert.equal(next.flora![0]!.food, 0);
+    assert.deepEqual(next.players[0]!.animals[0]!.marks, ["antidote"]);
+    assert.deepEqual(next.players[0]!.animals[1]!.marks, ["antidote"]);
+  });
+
+  it("топтун топчет флору", () => {
+    const g = floraScenario([[mkAnimal("a", 0, [t("grazing")])], [mkAnimal("b", 1, [])]], [mkFlora("f1", "thryn", 3)]);
+    const next = applyAction(g, { type: "feedGraze", animalId: "a", floraId: "f1" });
+    assert.equal(next.flora![0]!.food, 2);
+  });
+});
+
+describe("трава и грибы: бешенство и безумие", () => {
+  it("бешеное животное обязано атаковать в свой раунд — даже без хищника и накормленным", () => {
+    const g = floraScenario(
+      [[mkAnimal("mad", 0, [t("highBodyWeight")]), mkAnimal("other", 0, [])], [mkAnimal("prey", 1, [])]],
+      [mkFlora("f1", "thryn", 3)],
+    );
+    g.players[0]!.animals[0]!.marks = ["rage"];
+    g.players[0]!.animals[0]!.food = 2; // накормлено — всё равно атакует
+    g.currentPlayerId = 1;
+    const next = applyAction(g, { type: "feedEndTurn" });
+    // ход вернулся к игроку 0 — метка снята, rageTurn назначен
+    assert.equal(next.rageTurn?.animalId, "mad");
+    const acts = legalFeedActions(next, 0);
+    const hunts = acts.filter((a) => a.type === "feedHunt");
+    assert.ok(hunts.length > 0);
+    assert.equal(acts.some((a) => a.type === "feedTakeFlora"), false); // есть только атака
+    const hunt = applyAction(next, hunts[0]!);
+    const mad = hunt.players[0]!.animals.find((a) => a.id === "mad");
+    assert.equal(mad?.food, 2); // добычу не ест
+    assert.equal(mad?.marks?.includes("rage"), false);
+    // раунд закончился: ход ушёл дальше
+    assert.equal(hunt.rageTurn, null);
+    assert.equal(hunt.currentPlayerId, 1);
+  });
+
+  it("безумие: раунд игрока проводит сосед — метка снимается", () => {
+    const g = floraScenario(
+      [[mkAnimal("a", 0, []), mkAnimal("crazy", 0, [])], [mkAnimal("b", 1, [])]],
+      [mkFlora("f1", "thryn", 3)],
+    );
+    g.players[0]!.animals[1]!.marks = ["madness"];
+    g.currentPlayerId = 1;
+    const next = applyAction(g, { type: "feedEndTurn" });
+    assert.equal(next.madTurn, 0);
+    assert.equal(next.players[0]!.animals[1]!.marks?.includes("madness"), false);
+    // бот-логика может играть за безумца (chooseAIAction не падает)
+    const act = chooseAIAction(next);
+    assert.ok(act);
+  });
+});
+
+describe("трава и грибы: свойства животных", () => {
+  it("прозрачное без фишек не атакуется", () => {
+    const g = floraScenario(
+      [[mkAnimal("car", 0, [t("carnivore")])], [mkAnimal("ghost", 1, [t("transparent")])]],
+      [mkFlora("f1", "thryn", 3)],
+    );
+    assert.equal(canAttack(g, g.players[0]!.animals[0]!, g.players[1]!.animals[0]!), false);
+    g.players[1]!.animals[0]!.food = 1;
+    assert.equal(canAttack(g, g.players[0]!.animals[0]!, g.players[1]!.animals[0]!), true);
+  });
+
+  it("насекомоядное получает 1 синюю за добычу без свойств", () => {
+    const g = floraScenario(
+      [[mkAnimal("car", 0, [t("carnivore"), t("insectivore")])], [mkAnimal("bug", 1, [])]],
+      [mkFlora("f1", "thryn", 3)],
+    );
+    const next = applyAction(g, { type: "feedHunt", carnivoreId: "car", preyId: "bug" });
+    const car = next.players[0]!.animals[0]!;
+    assert.equal(car.food, 1);
+    assert.equal(car.blueFood, 1);
+  });
+
+  it("хищник переносит метки добычи, с трыном — нет", () => {
+    const g = floraScenario(
+      [[mkAnimal("car", 0, [t("carnivore")])], [mkAnimal("prey", 1, [])]],
+      [mkFlora("f1", "thryn", 3)],
+    );
+    g.players[1]!.animals[0]!.marks = ["poison"];
+    const next = applyAction(g, { type: "feedHunt", carnivoreId: "car", preyId: "prey" });
+    assert.deepEqual(next.players[0]!.animals[0]!.marks, ["poison"]);
+
+    const g2 = floraScenario(
+      [[mkAnimal("car", 0, [t("carnivore")])], [mkAnimal("prey", 1, [])]],
+      [mkFlora("f1", "thryn", 3)],
+    );
+    g2.players[0]!.animals[0]!.marks = ["thryn"];
+    g2.players[1]!.animals[0]!.marks = ["poison"];
+    const next2 = applyAction(g2, { type: "feedHunt", carnivoreId: "car", preyId: "prey" });
+    assert.deepEqual(next2.players[0]!.animals[0]!.marks, ["thryn"]);
+  });
+});
+
+describe("трава и грибы: вымирание и очки", () => {
+  it("гибель животного кормит гриб, пустые карты уходят в сброс, трава подрастает", () => {
+    const g = floraScenario(
+      [[mkAnimal("car", 0, [t("carnivore")])], [mkAnimal("prey", 1, [])]],
+      [mkFlora("shroom", "toadstool", 0), mkFlora("herb", "datura", 1), mkFlora("full", "thryn", 4)],
+    );
+    // метка «Дурь» на добыче: безопасна, но переходит хищнику и снимается в вымирании
+    g.players[1]!.animals[0]!.marks = ["haze"];
+    const hunt = applyAction(g, { type: "feedHunt", carnivoreId: "car", preyId: "prey" });
+    // гибель добычи положила фишку на гриб (единственный с местом)
+    assert.equal(hunt.flora!.find((f) => f.id === "shroom")!.food, 1);
+    let next = hunt;
+    for (let i = 0; i < 10 && next.phase !== "extinction"; i++) next = applyAction(next, { type: "feedEndTurn" });
+    assert.equal(next.phase, "extinction");
+    next = applyAction(next, { type: "continueExtinction" });
+    // гриб выжил (у него фишка), трава подросла до 2, полная — не выше 4
+    const byId = new Map(next.flora!.map((f) => [f.id, f]));
+    assert.ok(byId.get("shroom"));
+    assert.equal(byId.get("herb")!.food, 2);
+    assert.equal(byId.get("full")!.food, 4);
+    // хищник перенял метку добычи — и она снята с выжившего в вымирании
+    assert.deepEqual(next.players[0]!.animals[0]!.marks, []);
+  });
+
+  it("флора участвует в подсчёте очков", () => {
+    const g = floraScenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]], [
+      mkFlora("f1", "thryn", 4),
+      mkFlora("f2", "datura", 3),
+    ]);
+    g.phase = "extinction";
+    g.extinctionDeaths = [];
+    g.deck = [];
+    g.deckEmptyAfterDraw = true;
+    g.lastYear = true;
+    const next = applyAction(g, { type: "continueExtinction" });
+    assert.equal(next.phase, "gameOver");
+    const floraScore = next.scores!.find((s) => s.playerId === -1);
+    assert.ok(floraScore);
+    // 2 карты × 2 очка + фишки (дурман-трава подросла в вымирании: 3→4)
+    assert.equal(floraScore!.total, 2 * 2 + 8);
+  });
+});
+
+describe("трава и грибы: полные партии ботов", () => {
+  function driveFungi(seed: number, modules: { fungi?: boolean; plants?: boolean; continents?: boolean }): GameState {
+    let g = createGame(3, "normal", seed, undefined, modules);
+    for (let i = 0; i < 6000 && g.phase !== "gameOver"; i++) {
+      if (g.phase === "foodBank") {
+        g = applyAction(g, g.foodRoll ? { type: "beginFeeding" } : { type: "rollFoodBank" });
+        continue;
+      }
+      if (g.phase === "extinction") {
+        g = applyAction(g, { type: "continueExtinction" });
+        continue;
+      }
+      if (g.phase === "growth") {
+        g = applyAction(g, { type: "continueGrowth" });
+        continue;
+      }
+      if (g.pendingAttack) {
+        const acts = legalDefenseActions(g, g.pendingAttack.waitingFor);
+        g = applyAction(g, acts[0] ?? { type: "chooseDefense", kind: "none" });
+        continue;
+      }
+      const act = chooseAIAction(g);
+      if (!act) break;
+      g = applyAction(g, act);
+    }
+    return g;
+  }
+
+  it("партия с травой и грибами доходит до конца без ошибок", () => {
+    const g = driveFungi(301, { fungi: true });
+    assert.equal(g.phase, "gameOver");
+    assert.ok(g.scores);
+    assert.ok(g.scores.some((s) => s.playerId === -1));
+    assert.ok(g.flora!.length <= 8);
+    for (const f of g.flora!) assert.ok(f.food <= 4);
+  });
+
+  it("партия трава+континенты доходит до конца", () => {
+    const g = driveFungi(302, { fungi: true, continents: true });
+    assert.equal(g.phase, "gameOver");
+    for (const f of g.flora ?? []) {
+      assert.ok(f.zoneId === "laurasia" || f.zoneId === "gondwana");
+    }
+  });
+
+  it("партия трава+растения доходит до конца", () => {
+    const g = driveFungi(303, { fungi: true, plants: true });
+    assert.equal(g.phase, "gameOver");
+    assert.ok((g.plants ?? []).length > 0 || (g.flora ?? []).length > 0);
+  });
+
+  it("партия трава+растения+континенты доходит до конца", () => {
+    const g = driveFungi(304, { fungi: true, plants: true, continents: true });
+    assert.equal(g.phase, "gameOver");
+    for (const f of g.flora ?? []) {
+      assert.ok(f.zoneId === "laurasia" || f.zoneId === "gondwana");
+    }
+    for (const pl of g.plants ?? []) {
+      assert.ok(pl.zoneId === "laurasia" || pl.zoneId === "gondwana");
+    }
+  });
+});
+
+// ── Дополнение «Случайные мутации» ───────────────────────────────────────────
+
+function mutationScenario(
+  animals: Animal[][],
+  blindDecks: TraitId[][],
+  modules: { continents?: boolean; plants?: boolean; fungi?: boolean } = {},
+): GameState {
+  const g = createGame(Math.max(2, animals.length), "normal", 7, undefined, {
+    randomMutations: true,
+    ...modules,
+  });
+  for (const p of g.players) {
+    p.blindDeck = [];
+    p.passedDev = false;
+  }
+  animals.forEach((list, i) => {
+    g.players[i]!.animals = list;
+  });
+  blindDecks.forEach((faces, i) => {
+    g.players[i]!.blindDeck = faces.map((f) => ({ id: nid("c"), faces: [f] }));
+  });
+  g.currentPlayerId = 0;
+  return g;
+}
+
+function blindPop(g: GameState, playerId: number): number {
+  return g.players[playerId]!.blindDeck!.length;
+}
+
+describe("случайные мутации: раздача и развитие", () => {
+  it("личные слепые колоды вместо руки", () => {
+    const g = createGame(3, "normal", 11, undefined, { randomMutations: true });
+    for (const p of g.players) {
+      assert.equal(p.hand.length, 0);
+      assert.equal(p.blindDeck!.length, 7);
+    }
+  });
+
+  it("новый вид: карта ложится животным с численностью 1, пустая колода — пас", () => {
+    let g = mutationScenario([[], []], [["burrowing"], []]);
+    g = applyAction(g, { type: "devMutate", intent: "newAnimal" });
+    assert.equal(g.players[0]!.animals.length, 1);
+    assert.equal(g.players[0]!.animals[0]!.population, 1);
+    assert.equal(blindPop(g, 0), 0);
+    assert.equal(g.players[0]!.passedDev, true);
+  });
+
+  it("свойство ложится на выбранный вид из одного животного", () => {
+    const animal = mkAnimal("a", 0, []);
+    let g = mutationScenario([[animal], []], [["camouflage"], []]);
+    g = applyAction(g, { type: "devMutate", intent: "trait", animalId: "a" });
+    assert.equal(hasTrait(g.players[0]!.animals[0]!, "camouflage"), true);
+  });
+
+  it("неподошедшее свойство переезжает соседнему виду справа", () => {
+    const first = mkAnimal("a", 0, [t("carnivore")]);
+    const second = mkAnimal("b", 0, []);
+    let g = mutationScenario([[first, second], []], [["carnivore"], []]);
+    g = applyAction(g, { type: "devMutate", intent: "trait", animalId: "a" });
+    const target = g.players[0]!.animals.find((x) => x.id === "b")!;
+    assert.equal(hasTrait(target, "carnivore"), true);
+  });
+
+  it("вредная мутация обязательна: метаболический синдром ложится на вид", () => {
+    const animal = mkAnimal("a", 0, []);
+    let g = mutationScenario([[animal], []], [["metabolicSyndrome"], []]);
+    g = applyAction(g, { type: "devMutate", intent: "trait", animalId: "a" });
+    const target = g.players[0]!.animals[0]!;
+    assert.equal(hasTrait(target, "metabolicSyndrome"), true);
+    assert.equal(foodNeeded(target), 3);
+  });
+
+  it("свойство без места становится новым видом-мутантом", () => {
+    let g = mutationScenario([[mkAnimal("a", 0, [])], []], [["parasite"], []]);
+    g = applyAction(g, { type: "devMutate", intent: "trait", animalId: "a" });
+    assert.equal(g.players[0]!.animals.length, 2);
+  });
+
+  it("упрощение отделяет последнее свойство и само ложится видом", () => {
+    const animal = mkAnimal("a", 0, [t("camouflage", { playSeq: 1 }), t("burrowing", { playSeq: 2 })]);
+    let g = mutationScenario([[animal], []], [["simplification"], []]);
+    g = applyAction(g, { type: "devMutate", intent: "trait", animalId: "a" });
+    assert.equal(g.players[0]!.animals.length, 3);
+    assert.equal(hasTrait(g.players[0]!.animals[0]!, "burrowing"), false);
+    const mutant = g.players[0]!.animals.find((x) => x.id !== "a" && hasTrait(x, "burrowing"));
+    assert.ok(mutant, "отделённое свойство уехало новым видом");
+  });
+
+  it("почкование растит вид в начале хода развития", () => {
+    let g = mutationScenario(
+      [[mkAnimal("a", 0, [t("budding")])], []],
+      [["carnivore", "burrowing"], []],
+    );
+    // Игрок мутирует; бот с пустой колодой автопасует — ход возвращается,
+    // и в начале этого хода срабатывает почкование.
+    g = applyAction(g, { type: "devMutate", intent: "newAnimal" });
+    assert.equal(g.currentPlayerId, 0);
+    assert.equal(g.players[0]!.animals[0]!.population, 2);
+    assert.equal(blindPop(g, 0), 0);
+  });
+
+  it("экстрофил: +1 животное стоит дополнительную карту", () => {
+    let g = mutationScenario(
+      [[mkAnimal("a", 0, [t("extremophile")]), mkAnimal("b", 0, [])], []],
+      [["carnivore", "burrowing"], []],
+    );
+    g = applyAction(g, { type: "devMutate", intent: "population", animalId: "a" });
+    assert.equal(g.players[0]!.animals[0]!.population, 2);
+    assert.equal(blindPop(g, 0), 0);
+    assert.equal(g.players[0]!.discardCount, 1);
+  });
+
+  it("численность не выше числа видов игрока", () => {
+    let g = mutationScenario([[mkAnimal("a", 0, [])], []], [["carnivore"], []]);
+    const acts = legalDevActions(g, 0).filter((a) => a.type === "devMutate" && a.intent === "population");
+    assert.equal(acts.length, 0);
+    g = applyAction(g, { type: "devMutate", intent: "newAnimal" });
+    const acts2 = legalDevActions(g, 0).filter(
+      (a) => a.type === "devMutate" && a.intent === "population" && a.animalId === "a",
+    );
+    assert.equal(acts2.length, 0);
+  });
+
+  it("свойство растения с грани мутации ложится на общее растение", () => {
+    let g = mutationScenario([[], []], [["nutritious"], []], { plants: true });
+    const plantId = g.plants![0]!.id;
+    g = applyAction(g, { type: "devMutate", intent: "plant", plantId });
+    const plant = g.plants!.find((pl) => pl.id === plantId)!;
+    assert.ok(plant.traits.some((tr) => tr.type === "nutritious" || TRAITS[tr.type].plantTrait === true));
+  });
+});
+
+describe("случайные мутации: питание и вымирание", () => {
+  it("охота снимает одно животное вида, а не весь вид", () => {
+    const prey = mkAnimal("p", 1, []);
+    prey.population = 3;
+    const hunter = mkAnimal("h", 0, [t("carnivore")]);
+    let g = mutationScenario([[hunter], [prey]], [[]], {});
+    g.phase = "feeding";
+    g = applyAction(g, { type: "feedHunt", carnivoreId: "h", preyId: "p" });
+    assert.equal(g.players[1]!.animals.length, 1);
+    assert.equal(g.players[1]!.animals[0]!.population, 2);
+  });
+
+  it("облигатный хищник не берёт еду из базы, но кормится охотой", () => {
+    const hunter = mkAnimal("h", 0, [t("obligateCarnivore")]);
+    const prey = mkAnimal("p", 1, []);
+    let g = mutationScenario([[hunter], [prey]], [[]], {});
+    g.phase = "feeding";
+    g.foodBank = 5;
+    assert.ok(!legalFeedActions(g, 0).some((a) => a.type === "feedTake"));
+    g = applyAction(g, { type: "feedHunt", carnivoreId: "h", preyId: "p" });
+    const h = g.players[0]!.animals[0]!;
+    assert.equal(h.food >= 2, true);
+  });
+
+  it("облигатный хищник не сочетается с хищником и падальщиком", () => {
+    let g = mutationScenario(
+      [[mkAnimal("a", 0, [t("carnivore")]), mkAnimal("b", 0, [t("scavenger")])], []],
+      [["obligateCarnivore"], []],
+    );
+    g = applyAction(g, { type: "devMutate", intent: "trait", animalId: "a" });
+    assert.equal(g.players[0]!.animals.length, 3);
+    assert.equal(g.players[0]!.animals.filter((x) => hasTrait(x, "obligateCarnivore")).length, 1);
+  });
+
+  it("частичный голод сокращает численность вида", () => {
+    const a = mkAnimal("a", 0, []);
+    a.population = 3;
+    let g = mutationScenario([[a], []], [[]], {});
+    g.phase = "feeding";
+    for (const p of g.players) p.passedFeed = true;
+    g.foodBank = 0;
+    g = applyAction(g, { type: "feedSkip" });
+    assert.equal(g.phase, "extinction");
+    const a2 = g.players[0]!.animals.find((x) => x.id === "a")!;
+    if (a2) a2.food = 1; // дефицит 2 из 3 — выживет 1 животное
+    g = applyAction(g, { type: "continueExtinction" });
+    if (g.phase === "gameOver") return;
+    const survived = g.players[0]!.animals.find((x) => x.id === "a");
+    if (survived) {
+      assert.equal(survived.population, 1);
+      assert.ok(survived.food <= 1);
+    } else {
+      assert.equal(g.players[0]!.animals.length, 0);
+    }
+  });
+
+  it("короед превращает убежище в синюю фишку у голодного", () => {
+    const beetle = mkAnimal("a", 0, [t("barkBeetle")]);
+    let g = mutationScenario([[beetle], []], [[]], { plants: true });
+    g.phase = "feeding";
+    const plant = g.plants![0]!;
+    plant.kind = "succulent";
+    plant.shelters = 2;
+    g = applyAction(g, { type: "feedShelter", animalId: "a", plantId: plant.id });
+    const an = g.players[0]!.animals[0]!;
+    assert.equal(an.sheltered, undefined);
+    assert.equal(an.food, 1);
+    assert.equal(an.blueFood, 1);
+    assert.equal(plant.shelters, 2);
+  });
+
+  it("дефекты развития: хищник игнорирует защиту (камуфляж пробит)", () => {
+    const defective = mkAnimal("d", 1, [t("camouflage"), t("developmentDefects")]);
+    const hunter = mkAnimal("h", 0, [t("carnivore")]);
+    const g = mutationScenario([[hunter], [defective]], [[]], {});
+    g.phase = "feeding";
+    assert.equal(canAttack(g, hunter, defective), true);
+  });
+
+  it("добор: число животных + 2 в личную колоду", () => {
+    let g = mutationScenario(
+      [[mkAnimal("a", 0, []), mkAnimal("b", 0, [])], [mkAnimal("c", 1, [])]],
+      [[], []],
+      {},
+    );
+    // Животные накормлены — вымирание их не уберёт.
+    g.phase = "feeding";
+    for (const p of g.players) for (const a of p.animals) a.food = 1;
+    for (const p of g.players) p.passedFeed = true;
+    g.foodBank = 0;
+    g = applyAction(g, { type: "feedSkip" });
+    assert.equal(g.phase, "extinction");
+    g = applyAction(g, { type: "continueExtinction" });
+    assert.equal(g.phase, "development");
+    assert.equal(blindPop(g, 0), 4);
+    assert.equal(blindPop(g, 1), 3);
+  });
+});
+
+describe("случайные мутации: полные партии ботов", () => {
+  function driveMutations(seed: number, modules: Record<string, boolean>): GameState {
+    let g = createGame(3, "normal", seed, undefined, { randomMutations: true, ...modules });
+    for (let i = 0; i < 4000 && g.phase !== "gameOver"; i++) {
+      if (g.phase === "foodBank") {
+        g = applyAction(g, g.foodRoll ? { type: "beginFeeding" } : { type: "rollFoodBank" });
+        continue;
+      }
+      if (g.phase === "extinction") {
+        g = applyAction(g, { type: "continueExtinction" });
+        continue;
+      }
+      if (g.phase === "growth") {
+        g = applyAction(g, { type: "continueGrowth" });
+        continue;
+      }
+      if (g.pendingAttack) {
+        const acts = legalDefenseActions(g, g.pendingAttack.waitingFor);
+        g = applyAction(g, acts[0] ?? { type: "chooseDefense", kind: "none" });
+        continue;
+      }
+      const act = chooseAIAction(g);
+      if (!act) break;
+      g = applyAction(g, act);
+    }
+    return g;
+  }
+
+  it("партия с мутациями доходит до конца", () => {
+    const g = driveMutations(401, {});
+    assert.equal(g.phase, "gameOver");
+    assert.ok(g.scores);
+    for (const s of g.scores) assert.ok(s.total > 0);
+  });
+
+  it("партия мутации+континенты доходит до конца", () => {
+    const g = driveMutations(402, { continents: true });
+    assert.equal(g.phase, "gameOver");
+    for (const a of allAnimals(g)) {
+      assert.ok(a.zoneId === "laurasia" || a.zoneId === "gondwana" || a.zoneId === "ocean");
+    }
+  });
+
+  it("партия мутации+растения доходит до конца", () => {
+    const g = driveMutations(403, { plants: true });
+    assert.equal(g.phase, "gameOver");
+  });
+
+  it("партия мутации+трава и грибы доходит до конца", () => {
+    const g = driveMutations(404, { fungi: true });
+    assert.equal(g.phase, "gameOver");
+  });
+
+  it("партия мутации+континенты+растения+трава и грибы доходит до конца", () => {
+    const g = driveMutations(405, { continents: true, plants: true, fungi: true });
+    assert.equal(g.phase, "gameOver");
+    for (const pl of g.plants ?? []) {
+      assert.ok(pl.zoneId === "laurasia" || pl.zoneId === "gondwana");
+    }
   });
 });

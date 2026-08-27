@@ -1,4 +1,4 @@
-import type { TraitId } from "@/game/types";
+import type { FloraKind, PlantKind, TraitId } from "@/game/types";
 
 /**
  * Реестр арт-ассетов (public/img, собираются scripts/build-art.mjs из assets/).
@@ -39,6 +39,27 @@ export const TRAIT_ART: Partial<Record<TraitId, string>> = {
   recombination: "/img/trait/recombination.jpg",
   edificator: "/img/trait/edificator.jpg",
   neoplasia: "/img/trait/neoplasia.jpg",
+  // Дополнение «Растения»
+  plantWater: "/img/trait/plantWater.jpg",
+  thorny: "/img/trait/thorny.jpg",
+  rootVegetable: "/img/trait/rootVegetable.jpg",
+  medicinal: "/img/trait/medicinal.jpg",
+  plantParasite: "/img/trait/plantParasite.jpg",
+  micorrhiza: "/img/trait/micorrhiza.jpg",
+  tree: "/img/trait/tree.jpg",
+  nutritious: "/img/trait/nutritious.jpg",
+  honeyPlant: "/img/trait/honeyPlant.jpg",
+  // Дополнение «Трава и грибы» (арта пока нет — UI рисует глифы)
+  // transparent: "/img/trait/transparent.jpg",
+  // insectivore: "/img/trait/insectivore.jpg",
+  // Дополнение «Случайные мутации» (арта пока нет — UI рисует глифы)
+  // obligateCarnivore: "/img/trait/obligateCarnivore.jpg",
+  // budding: "/img/trait/budding.jpg",
+  // metabolicSyndrome: "/img/trait/metabolicSyndrome.jpg",
+  // barkBeetle: "/img/trait/barkBeetle.jpg",
+  // extremophile: "/img/trait/extremophile.jpg",
+  // developmentDefects: "/img/trait/developmentDefects.jpg",
+  // simplification: "/img/trait/simplification.jpg",
 };
 
 /** Есть ли сгенерированная картинка свойства; нет — UI рисует векторный глиф. */
@@ -105,4 +126,37 @@ export const TERRITORY_ART: Record<"laurasia" | "gondwana" | "ocean", string> = 
   laurasia: "/img/world/laurasia.jpg",
   gondwana: "/img/world/gondwana.jpg",
   ocean: "/img/world/ocean.jpg",
+};
+
+/** Арты видов растений «Растений» (4:3, верх карточки растения). */
+export const PLANT_ART: Partial<Record<PlantKind, string>> = {
+  liana: "/img/plant/liana.jpg",
+  fungus: "/img/plant/fungus.jpg",
+  carnivorous: "/img/plant/carnivorous.jpg",
+  annual: "/img/plant/annual.jpg",
+  legume: "/img/plant/legume.jpg",
+  perennial: "/img/plant/perennial.jpg",
+  grass: "/img/plant/grass.jpg",
+  succulent: "/img/plant/succulent.jpg",
+  fruit: "/img/plant/fruit.jpg",
+  parasite: "/img/plant/parasite.jpg",
+};
+
+/**
+ * Арты карт флоры «Травы и грибов» (4:3). Пока картинок нет — карточка
+ * рисует векторный глиф (гриб/травинка) и цветную рамку происхождения.
+ */
+export const FLORA_ART: Partial<Record<FloraKind, string>> = {
+  // toadstool: "/img/flora/toadstool.jpg",
+  // mold: "/img/flora/mold.jpg",
+  // madCap: "/img/flora/madCap.jpg",
+  // flyAgaric: "/img/flora/flyAgaric.jpg",
+  // insight: "/img/flora/insight.jpg",
+  // soaring: "/img/flora/soaring.jpg",
+  // sleepGrass: "/img/flora/sleepGrass.jpg",
+  // thryn: "/img/flora/thryn.jpg",
+  // datura: "/img/flora/datura.jpg",
+  // smile: "/img/flora/smile.jpg",
+  // cleanser: "/img/flora/cleanser.jpg",
+  // passionflower: "/img/flora/passionflower.jpg",
 };

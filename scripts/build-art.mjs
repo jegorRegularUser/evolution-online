@@ -3,11 +3,12 @@
 // Запуск: node scripts/build-art.mjs
 import sharp from "sharp";
 import { readdir, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 
 const SRC = "assets";
 // Новые партии складываются в подпапки assets/; сканируем все известные.
-const SRC_DIRS = [SRC, `${SRC}/continents`];
+const SRC_DIRS = [SRC, `${SRC}/continents`, `${SRC}/plants`];
 const OUT = "public/img";
 
 // kind: см. processKind ниже
@@ -125,6 +126,27 @@ const JOBS = [
   ["world-laurasia", "world/laurasia.jpg", "cont"],
   ["world-gondwana", "world/gondwana.jpg", "cont"],
   ["world-ocean", "world/ocean.jpg", "cont"],
+  // --- дополнение «Растения»: виды (4:3, размеры уже выставлены — kind asis) ---
+  ["plant-perennial", "plant/perennial.jpg", "asis"],
+  ["plant-annual", "plant/annual.jpg", "asis"],
+  ["plant-fruit", "plant/fruit.jpg", "asis"],
+  ["plant-succulent", "plant/succulent.jpg", "asis"],
+  ["plant-legume", "plant/legume.jpg", "asis"],
+  ["plant-grass", "plant/grass.jpg", "asis"],
+  ["plant-liana", "plant/liana.jpg", "asis"],
+  ["plant-fungus", "plant/fungus.jpg", "asis"],
+  ["plant-carnivorous", "plant/carnivorous.jpg", "asis"],
+  ["plant-parasite", "plant/parasite.jpg", "asis"],
+  // --- дополнение «Растения»: свойства (2:3, kind asis) ---
+  ["trait-plantWater", "trait/plantWater.jpg", "asis"],
+  ["trait-thorny", "trait/thorny.jpg", "asis"],
+  ["trait-rootVegetable", "trait/rootVegetable.jpg", "asis"],
+  ["trait-medicinal", "trait/medicinal.jpg", "asis"],
+  ["trait-plantParasite", "trait/plantParasite.jpg", "asis"],
+  ["trait-micorrhiza", "trait/micorrhiza.jpg", "asis"],
+  ["trait-tree", "trait/tree.jpg", "asis"],
+  ["trait-nutritious", "trait/nutritious.jpg", "asis"],
+  ["trait-honeyPlant", "trait/honeyPlant.jpg", "asis"],
   // --- мутации ---
   ["1da57803", "mutation/virus-1.jpg", "mut"],
   ["85c9dadb", "mutation/virus-2.jpg", "mut"],
@@ -151,9 +173,21 @@ for (const dir of SRC_DIRS) {
     // подпапка может отсутствовать — пропускаем
   }
 }
-const resolve = (prefix) => {
-  const hit = files.find((f) => f.split("/").pop().startsWith(`grok-${prefix}`));
-  if (!hit) throw new Error(`нет файла с префиксом ${prefix}`);
+const resolve = (prefix, dest) => {
+  const base = (f) => f.split("/").pop();
+  const hit =
+    files.find((f) => base(f).startsWith(`grok-${prefix}`)) ??
+    // Растения лежат без префикса grok-: точное имя <префикс>.jpg.
+    files.find((f) => base(f) === `${prefix}.jpg`);
+  if (!hit) {
+    // Исходник мог быть удалён из assets/ после первой сборки: если готовый
+    // файл уже лежит в public/img — пропускаем с предупреждением.
+    if (existsSync(`${OUT}/${dest}`)) {
+      console.warn(`[build-art] исходник ${prefix} не найден, оставляю существующий ${dest}`);
+      return null;
+    }
+    throw new Error(`нет файла с префиксом ${prefix}`);
+  }
   return hit;
 };
 
@@ -161,7 +195,10 @@ async function processKind(kind, src, dest) {
   const out = `${OUT}/${dest}`;
   await mkdir(dirname(out), { recursive: true });
   let pipe;
-  if (kind === "card" || (Array.isArray(kind) && kind[0] === "card")) {
+  if (kind === "asis") {
+    // Размеры уже выставлены вручную — только пережим, без ресайза/кропа.
+    pipe = sharp(src);
+  } else if (kind === "card" || (Array.isArray(kind) && kind[0] === "card")) {
     const position = Array.isArray(kind) && kind[1] === "attention" ? "attention" : "centre";
     pipe = sharp(src).resize(720, 1080, { fit: "cover", position });
   } else if (kind === "dark") {
@@ -207,7 +244,8 @@ async function processKind(kind, src, dest) {
 
 let ok = 0;
 for (const [prefix, dest, kind] of JOBS) {
-  const src = resolve(prefix);
+  const src = resolve(prefix, dest);
+  if (!src) continue;
   await processKind(kind, src, dest);
   ok++;
 }

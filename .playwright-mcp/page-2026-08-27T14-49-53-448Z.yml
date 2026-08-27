@@ -1,0 +1,10 @@
+- main [ref=f30e2]:
+  - link [ref=f30e3] [cursor=pointer]:
+    - /url: //www.google.com
+    - img "Google" [ref=f30e4]
+  - paragraph [ref=f30e5]:
+    - text: "404."
+    - insertion [ref=f30e6]: Произошла ошибка.
+  - paragraph [ref=f30e7]:
+    - text: Не удалось найти запрошенный URL на этом сервере.
+    - insertion [ref=f30e8]: Это все, что мы знаем.

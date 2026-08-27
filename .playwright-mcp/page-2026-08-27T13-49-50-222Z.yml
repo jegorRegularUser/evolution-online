@@ -1,0 +1,49 @@
+- generic [ref=f1e2]:
+  - paragraph [ref=f1e4]: Правильные игры · Кнорре
+  - heading "Эволюция" [level=1] [ref=f1e5]
+  - paragraph [ref=f1e6]: Настольная игра о происхождении видов. Комбинируйте свойства, кормите популяцию и переживайте голодные годы.
+  - generic [ref=f1e7]:
+    - group "Сетевая игра" [ref=f1e8]:
+      - button "Игра по сети" [ref=f1e10] [cursor=pointer]
+    - group "Игроков за столом" [ref=f1e11]:
+      - generic [ref=f1e18]:
+        - button "2" [ref=f1e19] [cursor=pointer]
+        - button "3" [ref=f1e20] [cursor=pointer]
+        - button "4" [ref=f1e21] [cursor=pointer]
+        - button "5" [ref=f1e22] [cursor=pointer]
+        - button "6" [ref=f1e23] [cursor=pointer]
+        - button "7" [ref=f1e24] [cursor=pointer]
+        - button "8" [ref=f1e25] [cursor=pointer]
+      - paragraph [ref=f1e26]: Вы против одного бота
+    - group "Сложность" [ref=f1e27]:
+      - generic [ref=f1e29]:
+        - button "Проще" [ref=f1e30] [cursor=pointer]
+        - button "Обычная" [ref=f1e31] [cursor=pointer]
+        - button "Жёстче" [ref=f1e32] [cursor=pointer]
+    - group "Темп игры" [ref=f1e33]:
+      - generic [ref=f1e35]:
+        - button "Медленно" [ref=f1e36] [cursor=pointer]
+        - button "Обычно" [ref=f1e37] [cursor=pointer]
+        - button "Быстро" [ref=f1e38] [cursor=pointer]
+    - group "Дополнения" [ref=f1e39]:
+      - generic [ref=f1e41]:
+        - button "Континенты две кормовые базы и океан · миграция · новые свойства выкл" [ref=f1e42] [cursor=pointer]:
+          - generic [ref=f1e43]:
+            - generic [ref=f1e44]: Континенты
+            - generic [ref=f1e45]: две кормовые базы и океан · миграция · новые свойства
+          - generic [ref=f1e46]: выкл
+        - button "Растения еда на общих растениях · убежища · фаза роста · хищные растения выкл" [ref=f1e47] [cursor=pointer]:
+          - generic [ref=f1e48]:
+            - generic [ref=f1e49]: Растения
+            - generic [ref=f1e50]: еда на общих растениях · убежища · фаза роста · хищные растения
+          - generic [ref=f1e51]: выкл
+        - list [ref=f1e52]:
+          - 'listitem "Грибы: питание, распад и новые цепочки еды. Готовится — официальный пересказ правил следующим обновлением." [ref=f1e53]':
+            - generic [ref=f1e54]: Грибы
+            - generic [ref=f1e55]: скоро
+          - 'listitem "Случайные мутации: скрытые мутации и неоплазия с растущим вирусом. Готовится — официальный пересказ правил следующим обновлением." [ref=f1e56]':
+            - generic [ref=f1e57]: Случайные мутации
+            - generic [ref=f1e58]: скоро
+    - generic [ref=f1e59]:
+      - button "Начать год" [ref=f1e60] [cursor=pointer]
+      - button "Правила" [ref=f1e61] [cursor=pointer]

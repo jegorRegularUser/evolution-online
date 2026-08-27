@@ -5,6 +5,21 @@ import { DARK_ART, TRAIT_ART } from "@/lib/art";
 import { cn } from "@/lib/utils";
 import { TraitGlyph } from "./icons";
 
+/**
+ * Минимальная форма описания для подсказки: подходит и TraitDef свойства
+ * животного, и описание вида растения (с своим артом через image).
+ */
+export interface TipDef {
+  id: string;
+  name: string;
+  description: string;
+  extraFood?: number;
+  scoreBonus?: number;
+  virusLike?: boolean;
+  /** Переопределение арта (растения берут его из PLANT_ART). */
+  image?: string;
+}
+
 /** Всплывающее мини-окно с правилом свойства; позиционируется над чипом. */
 export function TraitTooltip({
   def,
@@ -15,7 +30,7 @@ export function TraitTooltip({
   anchorRect,
   id,
 }: {
-  def: TraitDef;
+  def: TipDef;
   pair?: boolean;
   /** Кому именно принадлежит эта пара: «с №2», «симбионт — №1». */
   pairNote?: string;
@@ -54,29 +69,29 @@ export function TraitTooltip({
       style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999 }}
       className="pointer-events-none fixed z-50 w-max max-w-[min(190px,calc(100vw-16px))] animate-[fade-in_160ms_var(--ease-out)] overflow-hidden rounded-[var(--radius-sm)] border border-border-strong bg-bg/95 text-left shadow-[var(--shadow-card)] backdrop-blur-sm"
     >
-      {TRAIT_ART[def.id] ? (
+      {def.image ?? TRAIT_ART[def.id as TraitDef["id"]] ? (
         <img
-          src={TRAIT_ART[def.id]}
+          src={def.image ?? TRAIT_ART[def.id as TraitDef["id"]]!}
           alt=""
           className={cn(
             "-mx-3 -mt-2 mb-1.5 h-36 w-[calc(100%+24px)] max-w-none",
-            DARK_ART.has(def.id) ? "bg-ink object-contain p-1.5" : "object-cover object-[50%_25%]",
+            DARK_ART.has(def.id as TraitDef["id"]) ? "bg-ink object-contain p-1.5" : "object-cover object-[50%_25%]",
           )}
         />
       ) : (
         <div className="-mx-3 -mt-2 mb-1.5 flex h-20 items-center justify-center border-b border-border bg-surface-2">
-          <TraitGlyph id={def.id} className="size-10 text-muted" />
+          <TraitGlyph id={def.id as TraitDef["id"]} className="size-10 text-muted" />
         </div>
       )}
       <div className="px-2.5 pb-2">
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
           <span className={cn("text-fg", def.virusLike && "text-virus")}>{def.name}</span>
-          {def.extraFood > 0 ? (
+          {def.extraFood && def.extraFood > 0 ? (
             <span className="rounded-full bg-clay/20 px-1.5 text-[9px] uppercase tracking-wide text-clay">
               +{def.extraFood} к еде
             </span>
           ) : null}
-          {def.scoreBonus > 0 ? (
+          {def.scoreBonus && def.scoreBonus > 0 ? (
             <span className="rounded-full bg-good/20 px-1.5 text-[9px] uppercase tracking-wide text-good">
               +{def.scoreBonus} очк.
             </span>

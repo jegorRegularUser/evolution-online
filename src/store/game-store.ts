@@ -18,12 +18,29 @@ export type UiIntent =
   | { kind: "placeAnimal"; cardId: string }
   | { kind: "playTrait"; cardId: string; face: number }
   | { kind: "playPair"; cardId: string; face: number; first?: string }
+  | { kind: "playPlantTrait"; cardId: string; face: number }
+  | { kind: "playPlantPair"; cardId: string; face: number; first?: string }
   | { kind: "hunt"; carnivoreId?: string }
   | { kind: "pirate"; pirateId?: string }
   | { kind: "take" }
+  /** «Растения»: взять еду — животное, затем растение. */
+  | { kind: "takePlant"; animalId?: string }
+  /** «Трава и грибы»: взять еду — животное, затем карту флоры. */
+  | { kind: "takeFlora"; animalId?: string }
+  /** «Растения»: занять убежище — животное, затем растение. */
+  | { kind: "shelter"; animalId?: string }
+  /** «Растения»: направить хищное растение — растение, затем жертва. */
+  | { kind: "plantAttack"; plantId?: string }
+  /** «Растения»: перекинуть фишку хозяина на растение-паразит. */
+  | { kind: "parasitize" }
   | { kind: "hibernate" }
   | { kind: "fat" }
-  | { kind: "graze" };
+  | { kind: "graze"; animalId?: string }
+  /** «Случайные мутации»: объявление розыгрыша верхней карты личной колоды. */
+  | { kind: "mutateNew" }
+  | { kind: "mutateTrait" }
+  | { kind: "mutatePop" }
+  | { kind: "mutatePlant" };
 
 /** Сетевой стол в UI: что показывают лобби и баннер соединения. */
 export interface NetUiState {
@@ -389,9 +406,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
 
+    if (state.phase === "growth") {
+      set({ thinking: false, thinkingWho: null });
+      aiTimer = setTimeout(() => get().dispatch({ type: "continueGrowth" }), EXTINCTION_MS * mult);
+      return;
+    }
+
     const actor = currentActor(state);
     if (!actor) return;
-    if (!actor.isAI) {
+    // «Трава и грибы»: раунд безумца проводит сосед справа — логика ботов.
+    if (!actor.isAI && state.madTurn !== actor.id) {
       set({ thinking: false, thinkingWho: null });
       return;
     }
@@ -410,7 +434,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const cur = get();
       if (!cur.state) return;
       const who = currentActor(cur.state);
-      if (!who?.isAI) {
+      if (!who || (!who.isAI && cur.state.madTurn !== who.id)) {
         set({ thinking: false, thinkingWho: null });
         return;
       }

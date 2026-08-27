@@ -26,13 +26,38 @@ export type TraitId =
   | "regeneration"
   | "recombination"
   | "edificator"
-  | "neoplasia";
+  | "neoplasia"
+  // ── Дополнение «Растения» (Правильные игры, 2016): свойства растений.
+  // Разыгрываются на общие растения на столе, а не на животных. ──
+  | "plantWater"
+  | "thorny"
+  | "rootVegetable"
+  | "medicinal"
+  | "plantParasite"
+  | "micorrhiza"
+  | "tree"
+  | "nutritious"
+  | "honeyPlant"
+  // ── Дополнение «Трава и грибы» (Правильные игры, 2019): свойства животных. ──
+  | "transparent"
+  | "insectivore"
+  // ── Дополнение «Случайные мутации» (Правильные игры, 2013): свойства
+  // достаются вслепую из личной колоды; часть из них — вредные мутации. ──
+  | "obligateCarnivore"
+  | "budding"
+  | "metabolicSyndrome"
+  | "barkBeetle"
+  | "extremophile"
+  | "developmentDefects"
+  | "simplification";
 
 export type Phase =
   | "development"
   | "foodBank"
   | "feeding"
   | "extinction"
+  /** «Растения»: выжившие растения разрастаются, добавляются новые. */
+  | "growth"
   | "gameOver";
 
 /**
@@ -78,13 +103,31 @@ export interface Animal {
   receivedFoodThisYear: boolean;
   poisoned: boolean;
   seed: number;
+  /**
+   * «Случайные мутации»: численность вида (сколько животных в нём).
+   * Вне модуля всегда 1; еда засчитывается накормленным животным.
+   */
+  population?: number;
   /** Шов под «Континенты»: зона размещения (по умолчанию единое поле). */
   zoneId?: TerritoryId;
+  /** «Растения»: жетон убежища с растения — защита от хищников до конца фазы питания. */
+  sheltered?: boolean;
+  /**
+   * «Растения»: поело с лекарственного растения — накормлено, но все его
+   * свойства не действуют до конца фазы питания (очков при этом не теряет).
+   */
+  sedated?: boolean;
   /**
    * «Неоплазия»: сколько непарных свойств она уже выключила (карта лежит
    * под свойствами и каждый год поднимается на одну позицию).
    */
   neoplasia?: TraitInstance;
+  /**
+   * «Трава и грибы»: метки последствий на животном (Яд, Антидот, Безумие,
+   * Бешенство, Сон, Трын, Дурь, Пацифизм). Метка — не свойство: у спящего
+   * животного свойства не работают, а метки — работают.
+   */
+  marks?: MarkKind[];
 }
 
 export interface Player {
@@ -99,6 +142,13 @@ export interface Player {
   passedFeed: boolean;
   /** Сетевой вид (viewFor): размер руки без передачи самих карт. */
   handCount?: number;
+  /**
+   * «Случайные мутации»: личная слепая колода игрока (не просматривается
+   * даже владельцем). Карта с верха переворачивается в фазе развития.
+   */
+  blindDeck?: Card[];
+  /** Сетевой вид (viewFor): размер личной колоды без её содержимого. */
+  blindDeckCount?: number;
 }
 
 export interface PendingAttack {
@@ -107,6 +157,24 @@ export interface PendingAttack {
   mimicryChain: string[];
   waitingFor: number;
   usedDefenses: Array<"running" | "mimicry" | "tailLoss">;
+  /**
+   * «Растения»: атакует хищное растение (carnivoreId — id растения).
+   * plantCounter — контратака на животное, тянущее с него еду: выживший
+   * всё равно получает фишку. plantRequesterId — кто тянул еду.
+   */
+  plantId?: string;
+  plantCounter?: boolean;
+  plantRequesterId?: string;
+  /**
+   * «Трава и грибы»: атака бешеного животного (не обязано быть хищником;
+   * добычу не ест, раунд после атаки заканчивается).
+   */
+  rage?: boolean;
+  /**
+   * «Трава и грибы»: метка «Дурь» — атакующий игнорирует одно свойство
+   * жертвы (выбирается автоматически; защиты жертвы с ним не работают).
+   */
+  ignoredTraitId?: string;
 }
 
 /** Шов под «Континенты»: зоны размещения животных. */
@@ -131,6 +199,85 @@ export const TERRITORIES: Array<{ id: TerritoryId; name: string }> = [
 /** Шов под «Растения»/«Грибы»: банк — частный случай источника еды. */
 export type FoodSourceId = "bank";
 
+// ── Дополнение «Растения» ───────────────────────────────────────────────────
+
+/** Вид растения из колоды растений; parasite создаётся свойством «Растение-Паразит». */
+export type PlantKind =
+  | "liana"
+  | "fungus"
+  | "carnivorous"
+  | "annual"
+  | "legume"
+  | "perennial"
+  | "grass"
+  | "succulent"
+  | "fruit"
+  | "parasite";
+
+/** Растение на столе: общее, не принадлежит никому из игроков. */
+export interface Plant {
+  id: string;
+  kind: PlantKind;
+  /** Жетоны пищи на растении. */
+  food: number;
+  /** Свободные жетоны убежищ на растении. */
+  shelters: number;
+  /** Свойства, приданные растению (в том числе микориза с pairWith). */
+  traits: TraitInstance[];
+  /** «Растение-Паразит»: растение-хозяин. */
+  hostId?: string;
+  /** Хищное растение уже атаковало в эту фазу питания. */
+  attackedThisYear?: boolean;
+  /** Съело ядовитое животное — погибнет в вымирание. */
+  doomed?: boolean;
+  /** Выжило без фишек (однолетник/микориза): в конце роста получит 1 фишку. */
+  starvedRevive?: boolean;
+  /** «Континенты»: континент растения (в океане растений нет). */
+  zoneId?: TerritoryId;
+  /** Порядок появления — для стабильной отрисовки. */
+  playSeq: number;
+}
+
+// ── Дополнение «Трава и грибы» ──────────────────────────────────────────────
+
+/** Вид карты флоры: 6 грибов и 6 трав. */
+export type FloraKind =
+  | "toadstool"
+  | "mold"
+  | "madCap"
+  | "flyAgaric"
+  | "insight"
+  | "soaring"
+  | "sleepGrass"
+  | "thryn"
+  | "datura"
+  | "smile"
+  | "cleanser"
+  | "passionflower";
+
+/** Метки последствий: 8 видов по 4 копии, лежат на столе. */
+export type MarkKind =
+  | "poison"
+  | "antidote"
+  | "madness"
+  | "rage"
+  | "sleep"
+  | "thryn"
+  | "haze"
+  | "pacifism";
+
+/** Длинная карта травы или гриба на столе (общая, как растения). */
+export interface FloraCard {
+  id: string;
+  kind: FloraKind;
+  /** Красные фишки на карте (максимум 4). */
+  food: number;
+  /** «Континенты»: континент карты флоры (в океане флоры нет). */
+  zoneId?: TerritoryId;
+  /** Порядок появления — для стабильной отрисовки. */
+  playSeq: number;
+}
+
 export type GameEvent =
   | { kind: "diceRoll"; dice: number[]; total: number }
   | {
@@ -140,7 +287,7 @@ export type GameEvent =
     }
   | { kind: "foodFromBank"; animalId: string; playerId: number; via: "take" | "communication" }
   | { kind: "foodToFat"; animalId: string }
-  | { kind: "blueFood"; animalId: string; reason: "hunt" | "cooperation" | "scavenger" | "tailLoss" | "piracy" | "fat" }
+  | { kind: "blueFood"; animalId: string; reason: "hunt" | "cooperation" | "scavenger" | "tailLoss" | "piracy" | "fat" | "soaring" | "beetle" }
   | { kind: "traitPlaced"; animalId: string; type: TraitId; hidden: boolean }
   | { kind: "animalPlaced"; animalId: string; ownerId: number; zoneId?: TerritoryId }
   | { kind: "huntDeclared"; carnivoreId: string; preyId: string }
@@ -153,7 +300,39 @@ export type GameEvent =
   | { kind: "migrated"; moves: Array<{ animalId: string; from?: TerritoryId; to: TerritoryId }> }
   | { kind: "edificator"; territory: TerritoryId; amount: number }
   | { kind: "paralyzed"; carnivoreId: string }
-  | { kind: "regenerated"; ownerId: number };
+  | { kind: "regenerated"; ownerId: number }
+  // ── «Растения» ──
+  | { kind: "plantPlaced"; plantId: string; kindOfPlant: PlantKind }
+  | { kind: "plantFoodTaken"; animalId: string; plantId: string; playerId: number }
+  | { kind: "shelterTaken"; animalId: string; plantId: string }
+  | { kind: "plantAttack"; plantId: string; preyId: string; counter: boolean }
+  | { kind: "plantGrew"; plantId: string; from: number; to: number }
+  | { kind: "plantGrazed"; plantId: string; from: number; to: number }
+  | { kind: "plantDied"; plantId: string; cause: "eaten" | "poison" | "host" }
+  | { kind: "cardStolen"; fromPlayerId: number; toPlayerId: number }
+  // ── «Трава и грибы» ──
+  | { kind: "floraPlaced"; floraId: string; kindOfFlora: FloraKind }
+  | { kind: "floraFoodTaken"; animalId: string; floraId: string; playerId: number }
+  | { kind: "floraGrew"; floraId: string; from: number; to: number }
+  | { kind: "floraGrazed"; floraId: string; from: number; to: number }
+  | { kind: "floraDied"; floraId: string }
+  | { kind: "markGained"; animalId: string; mark: MarkKind }
+  | { kind: "handLost"; playerId: number }
+  // ── «Случайные мутации» ──
+  /**
+   * Игрок объявил способ розыгрыша и перевернул верхнюю карту личной колоды.
+   * trait null — карта легла животным (рубашкой). usedAs — чем карта стала.
+   */
+  | {
+      kind: "mutationFlipped";
+      playerId: number;
+      cardId: string;
+      trait: TraitId | null;
+      usedAs: "animal" | "trait" | "population" | "plantTrait" | "newSpecies" | "discarded";
+    }
+  | { kind: "budding"; animalId: string; playerId: number }
+  | { kind: "populationGrown"; animalId: string; to: number }
+  | { kind: "populationLost"; animalId: string; to: number };
 
 
 export interface LogEntry {
@@ -189,6 +368,10 @@ export interface FeedTurnUse {
    * больше ничего (кроме свойств мигрирующих) использовать нельзя.
    */
   migrated: boolean;
+  /**
+   * «Растения»: в этот ход уже занято убежище (убежище — вместо еды или атаки).
+   */
+  sheltered: boolean;
 }
 
 export interface GameState {
@@ -247,6 +430,44 @@ export interface GameState {
    * фазы питания (в океане теряют и водоплавающее — вытеснены на континент).
    */
   paralyzed?: string[];
+  // ── «Растения» ──
+  /** Растения на столе (общие). undefined вне модуля. */
+  plants?: Plant[];
+  /** Колода растений (PlantKind); счётчик колоды для сетевого вида — plantDeckCount. */
+  plantDeck?: PlantKind[];
+  plantDeckCount?: number;
+  /** Счётчик погибших растений (для отображения). */
+  plantDiscard?: number;
+  /**
+   * «Континенты»+«Растения»: при добавлении новых растений первым кладём на
+   * континент, где их меньше (без учёта паразитов); tie — решает первый игрок.
+   */
+  plantsNextZone?: TerritoryId;
+  // ── «Трава и грибы» ──
+  /** Карты флоры на столе (общие). undefined вне модуля. */
+  flora?: FloraCard[];
+  /** Колода флоры (FloraKind); счётчик колоды для сетевого вида — floraDeckCount. */
+  floraDeck?: FloraKind[];
+  floraDeckCount?: number;
+  /** Счётчик сброшенных карт флоры (для отображения). */
+  floraDiscard?: number;
+  /**
+   * Метки последствий, оставшиеся на столе (по видам). Метка с погибшего
+   * животного возвращается на стол; с животного их снимают в вымирание.
+   */
+  marksPool?: Partial<Record<MarkKind, number>>;
+  /**
+   * «Трава и грибы»: раунд этого игрока вместо него проводит сосед справа —
+   * в онлайн-версии ход играется логикой ботов (руку сосед не видит).
+   */
+  madTurn?: number;
+  /** «Трава и грибы»: обязательная атака бешеного животного в текущем ходу. */
+  rageTurn?: { animalId: string } | null;
+  /**
+   * «Континенты»: животные, уже мигрировавшие в этой фазе питания
+   * (миграция — раз за фазу, иначе ход нельзя закончить).
+   */
+  migratedThisPhase?: string[];
 }
 
 export type Difficulty = "easy" | "normal" | "hard";
@@ -257,15 +478,42 @@ export type GameAction =
   | { type: "devPlayTrait"; cardId: string; face: number; animalId: string }
   | { type: "devPlayPair"; cardId: string; face: number; a: string; b: string }
   | { type: "devPass" }
+  /**
+   * «Случайные мутации»: объявить способ розыгрыша, затем перевернуть
+   * верхнюю карту личной колоды. Карту выбирает движок — она вслепая.
+   * - newAnimal — карта ложится новым видом (zoneId — континент);
+   * - trait — свойство на свой вид из одного животного (не подошло —
+   *   переезжает на вид справа, никуда не подошло — само становится видом);
+   * - population — карта становится +1 животным вида (численность вида
+   *   не выше числа видов игрока; «Экстрофил» требует лишнюю карту);
+   * - plant — «Растения»: свойство на общее растение.
+   */
+  | { type: "devMutate"; intent: "newAnimal" | "trait" | "population" | "plant"; animalId?: string; plantId?: string; zoneId?: TerritoryId }
+  /** «Растения»: свойство растения на общее растение (паразит — на хозяина). */
+  | { type: "devPlayPlantTrait"; cardId: string; face: number; plantId: string }
+  /** «Растения»: микориза — связывает два растения (одного континента). */
+  | { type: "devPlayPlantPair"; cardId: string; face: number; a: string; b: string }
   | { type: "rollFoodBank" }
   | { type: "beginFeeding" }
   | { type: "continueExtinction" }
+  /** «Растения»: завершить просмотр фазы роста — добор карт и новый год. */
+  | { type: "continueGrowth" }
   | { type: "feedTake"; animalId: string }
+  /** «Растения»: взять фишку еды с растения (вместо кормовой базы). */
+  | { type: "feedTakePlant"; animalId: string; plantId: string }
+  /** «Трава и грибы»: взять фишку еды с карты флоры (срабатывает способность). */
+  | { type: "feedTakeFlora"; animalId: string; floraId: string }
+  /** «Растения»: спрятать животное в убежище растения. */
+  | { type: "feedShelter"; animalId: string; plantId: string }
   | { type: "feedHunt"; carnivoreId: string; preyId: string }
+  /** «Растения»: направить хищное растение на жертву (ход игрока). */
+  | { type: "feedPlantAttack"; plantId: string; preyId: string }
+  /** «Растения»: перекинуть фишку с растения-хозяина на растение-паразит. */
+  | { type: "feedParasitize"; hostId: string; parasiteId: string }
   | { type: "feedPirate"; pirateId: string; targetId: string }
   | { type: "feedHibernate"; animalId: string }
   | { type: "feedConvertFat"; animalId: string; amount: number }
-  | { type: "feedGraze"; animalId: string }
+  | { type: "feedGraze"; animalId: string; /** «Растения»: растение, по которому топчут. */ plantId?: string; /** «Трава и грибы»: карта флоры, по которой топчут. */ floraId?: string }
   | { type: "feedEndTurn" }
   | { type: "feedSkip" }
   /** «Континенты»: объявить ход миграции (свойства «миграция»/«прилипала»). */

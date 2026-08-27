@@ -1,0 +1,82 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e62]:
+    - banner [ref=e63]:
+      - generic [ref=e64]:
+        - generic [ref=e65]: Эволюция
+        - generic [ref=e66]: Год 1 · Развитие · Уоллес
+      - group "Скорость игры" [ref=e67]:
+        - button "Медленно" [ref=e68] [cursor=pointer]
+        - button "Обычно" [ref=e69] [cursor=pointer]
+        - button "Быстро" [ref=e70] [cursor=pointer]
+      - generic "Кормовая база" [ref=e71]:
+        - generic [ref=e72]: База
+        - generic [ref=e73]: —
+      - generic [ref=e74]:
+        - button "Журнал" [ref=e75] [cursor=pointer]
+        - button "Правила" [ref=e76] [cursor=pointer]
+        - button "Меню" [ref=e77] [cursor=pointer]
+    - main [ref=e78]:
+      - generic [ref=e80]:
+        - generic [ref=e81]:
+          - generic [ref=e82]: Дарвин
+          - generic [ref=e83]: рука 6 · сброс 0
+        - paragraph [ref=e85]: Нет животных
+      - generic [ref=e86]:
+        - generic [ref=e87]:
+          - generic [ref=e88]: Год 1
+          - generic [ref=e89]: ·
+          - generic [ref=e90]: Развитие
+          - generic [ref=e91]: ·
+          - generic [ref=e92]: колода 66
+        - generic "Кормовая база" [ref=e93]:
+          - generic [ref=e94]: —
+          - generic [ref=e96]: "0"
+          - generic [ref=e97]: кормовая база
+        - paragraph [ref=e98]: "Ход: Уоллес"
+        - paragraph [ref=e99]: Год 1. Первым ходит Уоллес.
+      - generic [ref=e101]:
+        - generic [ref=e102]:
+          - generic [ref=e103]:
+            - text: Уоллес
+            - generic [ref=e104]: думает…
+          - generic [ref=e106]: рука 6 · сброс 0
+        - paragraph [ref=e108]: Нет животных
+      - generic [ref=e109]:
+        - generic [ref=e110]:
+          - generic [ref=e111]: Ваша популяция
+          - generic [ref=e112]: рука 6 · сброс 0
+        - paragraph [ref=e114]: Выложите животное из руки
+    - contentinfo [ref=e115]:
+      - generic [ref=e116]:
+        - generic [ref=e117]:
+          - paragraph [ref=e118]: Ход соперника — карты остаются у вас
+          - button "Пас" [disabled]
+        - generic [ref=e119]:
+          - generic [ref=e120]:
+            - button "Животное" [disabled] [ref=e121]
+            - button "Быстрое" [disabled] [ref=e122]
+          - generic [ref=e129]:
+            - button "Животное" [disabled] [ref=e130]
+            - button "Паразит +2 еды" [disabled] [ref=e131]:
+              - generic [ref=e133]: Паразит
+              - generic [ref=e137]: +2 еды
+            - button "Хищник +1 еды" [disabled] [ref=e138]:
+              - generic [ref=e140]: Хищник
+              - generic [ref=e144]: +1 еды
+          - generic [ref=e145]:
+            - button "Животное" [disabled] [ref=e146]
+            - button "Отбрасывание хвоста" [disabled] [ref=e147]
+          - generic [ref=e154]:
+            - button "Животное" [disabled] [ref=e155]
+            - button "Ядовитое" [disabled] [ref=e156]
+          - generic [ref=e163]:
+            - button "Животное" [disabled] [ref=e164]
+            - button "Ядовитое" [disabled] [ref=e165]
+          - generic [ref=e172]:
+            - button "Животное" [disabled] [ref=e173]
+            - button "Норное" [disabled] [ref=e174]
+            - button "Жировой запас" [disabled] [ref=e181]
+  - tooltip "Ядовитое Хищник, полностью съевший это животное, погибает в фазу вымирания. Отбрасывание хвоста яд не передаёт.":
+    - generic:
+      - generic: Ядовитое
+      - paragraph: Хищник, полностью съевший это животное, погибает в фазу вымирания. Отбрасывание хвоста яд не передаёт.

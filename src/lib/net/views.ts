@@ -22,9 +22,17 @@ export function viewFor(full: GameState, seat: number): GameState {
   const v: GameState = structuredClone(full);
   v.humanId = seat;
   v.deckCount = full.deck.length;
+  // Растения и флора публичны; прячем только содержимое колод.
+  v.plantDeckCount = full.plantDeck?.length;
+  v.plantDeck = [];
+  v.floraDeckCount = full.floraDeck?.length;
+  v.floraDeck = [];
   v.deck = [];
   for (const p of v.players) {
     p.handCount = p.hand.length;
+    p.blindDeckCount = p.blindDeck?.length;
+    // «Случайные мутации»: личная колода слепа даже для владельца.
+    p.blindDeck = [];
     if (p.id === seat) continue;
     p.hand = [];
     for (const a of p.animals) {

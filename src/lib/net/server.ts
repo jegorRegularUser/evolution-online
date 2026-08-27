@@ -187,8 +187,10 @@ export function nextAutoStep(state: GameState): GameAction | null {
     return state.foodRoll ? { type: "beginFeeding" } : { type: "rollFoodBank" };
   }
   if (state.phase === "extinction") return { type: "continueExtinction" };
+  if (state.phase === "growth") return { type: "continueGrowth" };
   const actor = currentActor(state);
-  if (!actor || !actor.isAI) return null;
+  // «Трава и грибы»: раунд безумца проводит сосед справа — логика ботов.
+  if (!actor || (!actor.isAI && state.madTurn !== actor.id)) return null;
   const pick = chooseAIAction(state);
   if (pick) return pick;
   // Страховка от зависания: у бота всегда есть пас/скип/сдаться.
@@ -203,6 +205,7 @@ function stepDelay(before: GameState, step: GameAction, after: GameState): numbe
   const j = () => Math.round((Math.random() * 2 - 1) * PACE.jitterMs);
   if (step.type === "rollFoodBank") return PACE.diceMs + j();
   if (step.type === "continueExtinction") return PACE.extinctMs + j();
+  if (step.type === "continueGrowth") return PACE.extinctMs + j();
   const changedTurn = before.currentPlayerId !== after.currentPlayerId;
   return PACE.botMs + (changedTurn ? PACE.turnGapMs : 0) + j();
 }
@@ -219,6 +222,9 @@ const ID_KEYS = [
   "preyId",
   "pirateId",
   "targetId",
+  "plantId",
+  "hostId",
+  "parasiteId",
 ] as const;
 
 function sameAction(a: GameAction, b: GameAction): boolean {

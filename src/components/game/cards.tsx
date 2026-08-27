@@ -1,10 +1,11 @@
 import { memo } from "react";
 import { TRAITS } from "@/game/traits";
 import type { Animal, Card, TraitId } from "@/game/types";
-import { foodNeeded, hasTrait, isFed } from "@/game/queries";
+import { hasTrait, isCarnivoreLike, isFed, speciesNeed } from "@/game/queries";
 import { cn } from "@/lib/utils";
-import { DARK_ART, TOKEN, TRAIT_ART, speciesArt } from "@/lib/art";
-import { TraitGlyph } from "./icons";
+import { DARK_ART, TRAIT_ART, speciesArt } from "@/lib/art";
+import { MarkChip } from "./cards-flora";
+import { FoodCube, TraitGlyph } from "./icons";
 import { TraitTooltip } from "./trait-tip";
 import { useTraitTip } from "./use-trait-tip";
 
@@ -14,7 +15,7 @@ import { useTraitTip } from "./use-trait-tip";
  * хвост, жир), поэтому blueFood рисуется отдельными синими жетонами.
  */
 export const FoodDots = memo(function FoodDots({ animal }: { animal: Animal }) {
-  const need = foodNeeded(animal);
+  const need = speciesNeed(animal);
   const blue = Math.min(animal.blueFood, animal.food);
   const red = animal.food - blue;
   const empty = Math.max(0, need - animal.food);
@@ -27,16 +28,16 @@ export const FoodDots = memo(function FoodDots({ animal }: { animal: Animal }) {
     >
       <div className="flex items-center gap-1">
         {Array.from({ length: red }).map((_, i) => (
-          <img key={`r${i}`} src={TOKEN.red} alt="" className="token-pop size-3.5 rounded-full" />
+          <FoodCube key={`r${i}`} tone="red" title="Красная фишка" className="token-pop size-3.5" />
         ))}
         {Array.from({ length: blue }).map((_, i) => (
-          <img key={`b${i}`} src={TOKEN.blue} alt="" className="token-pop size-3.5 rounded-full" />
+          <FoodCube key={`b${i}`} tone="blue" title="Синяя фишка" className="token-pop size-3.5" />
         ))}
         {Array.from({ length: empty }).map((_, i) => (
           <span key={`e${i}`} className="inline-block size-3.5 rounded-full border border-ink/40 bg-parchment-2" />
         ))}
         {Array.from({ length: animal.fatTokens }).map((_, i) => (
-          <img key={`f${i}`} src={TOKEN.fat} alt="" className="size-3.5 rounded-full" />
+          <FoodCube key={`f${i}`} tone="yellow" title="Жир" className="token-pop size-3.5" />
         ))}
       </div>
       <span className="text-[10px] tabular-nums text-ink-soft">
@@ -121,11 +122,13 @@ export const TraitChip = memo(function TraitChip({
           ? "bg-virus/15 text-virus line-through decoration-virus/60"
           : def.virusLike
             ? "bg-virus/20 text-virus ring-1 ring-inset ring-virus/50"
-            : type === "carnivore"
-              ? "bg-clay/15 text-clay"
-              : type === "fatTissue"
-                ? "bg-food-yellow/20 text-ink"
-                : "bg-ink/8 text-ink",
+            : def.harmful
+              ? "bg-ink/85 text-parchment ring-1 ring-inset ring-clay/60"
+              : type === "carnivore"
+                ? "bg-clay/15 text-clay"
+                : type === "fatTissue"
+                  ? "bg-food-yellow/20 text-ink"
+                  : "bg-ink/8 text-ink",
         fresh && !disabled && "chip-fresh",
       )}
     >
@@ -221,21 +224,54 @@ export const AnimalCard = memo(function AnimalCard({
       <div className="mb-1 flex items-start justify-between gap-2">
         <span className="flex items-baseline gap-1 font-display text-sm tracking-tight">
           {no ? <span className="text-[10px] tabular-nums text-ink-soft">№{no}</span> : null}
-          {hasTrait(animal, "carnivore") ? "Хищник" : hasTrait(animal, "swimming") ? "Водное" : "Животное"}
+          {hasTrait(animal, "obligateCarnivore")
+            ? "Облигатный хищник"
+            : hasTrait(animal, "carnivore")
+              ? "Хищник"
+              : hasTrait(animal, "swimming")
+                ? "Водное"
+                : "Животное"}
         </span>
-        {animal.hibernating ? (
-          <span className="rounded-full bg-ink/10 px-1.5 text-[10px] font-medium uppercase tracking-wide">сон</span>
-        ) : fed ? (
-          <span className="rounded-full bg-good/20 px-1.5 text-[10px] font-medium uppercase tracking-wide text-good">сыто</span>
-        ) : (
-          <span className="rounded-full bg-clay/15 px-1.5 text-[10px] font-medium uppercase tracking-wide text-clay">голод</span>
-        )}
+        <span className="flex items-center gap-1">
+          {(animal.population ?? 1) > 1 ? (
+            <span
+              title={`Численность вида: ${animal.population} животного(-ых)`}
+              className="rounded-full bg-accent/20 px-1.5 text-[10px] font-semibold tabular-nums text-accent"
+            >
+              ×{animal.population}
+            </span>
+          ) : null}
+          {animal.sheltered ? (
+            <span
+              title="В убежище растения: хищники и хищные растения не тронут до конца фазы питания"
+              className="flex items-center gap-1 rounded-full bg-leaf/25 px-1.5 text-[10px] font-medium uppercase tracking-wide text-leaf"
+            >
+              <span className="size-2 rounded-full border border-leaf/60 bg-leaf/40" />
+              убежище
+            </span>
+          ) : null}
+          {animal.sedated ? (
+            <span
+              title="Откушало с лекарственного растения: накормлено, но свойства не действуют до конца фазы питания"
+              className="rounded-full bg-ink/10 px-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-soft"
+            >
+              усыплено
+            </span>
+          ) : null}
+          {animal.hibernating ? (
+            <span className="rounded-full bg-ink/10 px-1.5 text-[10px] font-medium uppercase tracking-wide">сон</span>
+          ) : fed ? (
+            <span className="rounded-full bg-good/20 px-1.5 text-[10px] font-medium uppercase tracking-wide text-good">сыто</span>
+          ) : (
+            <span className="rounded-full bg-clay/15 px-1.5 text-[10px] font-medium uppercase tracking-wide text-clay">голод</span>
+          )}
+        </span>
       </div>
       <div className="mb-2 flex justify-center">
         <img
           src={speciesArt({
             swimming: hasTrait(animal, "swimming"),
-            carnivore: hasTrait(animal, "carnivore"),
+            carnivore: isCarnivoreLike(animal),
             bulky: hasTrait(animal, "highBodyWeight"),
           })}
           alt=""
@@ -260,6 +296,13 @@ export const AnimalCard = memo(function AnimalCard({
           ))
         )}
       </div>
+      {animal.marks?.length ? (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {animal.marks.map((m) => (
+            <MarkChip key={m} mark={m} />
+          ))}
+        </div>
+      ) : null}
       {name ? <div className="mt-2 text-[10px] uppercase tracking-wider text-ink-soft">{name}</div> : null}
     </div>
   );

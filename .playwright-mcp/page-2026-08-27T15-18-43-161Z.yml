@@ -1,0 +1,49 @@
+- generic [ref=e2]:
+  - paragraph [ref=e4]: Правильные игры · Кнорре
+  - heading "Эволюция" [level=1] [ref=e5]
+  - paragraph [ref=e6]: Настольная игра о происхождении видов. Комбинируйте свойства, кормите популяцию и переживайте голодные годы.
+  - generic [ref=e7]:
+    - group "Сетевая игра" [ref=e8]:
+      - button "Игра по сети" [ref=e10] [cursor=pointer]
+    - group "Игроков за столом" [ref=e11]:
+      - generic [ref=e18]:
+        - button "2" [ref=e19] [cursor=pointer]
+        - button "3" [active] [ref=e20] [cursor=pointer]
+        - button "4" [ref=e21] [cursor=pointer]
+        - button "5" [ref=e22] [cursor=pointer]
+        - button "6" [ref=e23] [cursor=pointer]
+        - button "7" [ref=e24] [cursor=pointer]
+        - button "8" [ref=e25] [cursor=pointer]
+      - paragraph [ref=e26]: Вы против 2 ботов
+    - group "Сложность" [ref=e27]:
+      - generic [ref=e29]:
+        - button "Проще" [ref=e30] [cursor=pointer]
+        - button "Обычная" [ref=e31] [cursor=pointer]
+        - button "Жёстче" [ref=e32] [cursor=pointer]
+    - group "Темп игры" [ref=e33]:
+      - generic [ref=e35]:
+        - button "Медленно" [ref=e36] [cursor=pointer]
+        - button "Обычно" [ref=e37] [cursor=pointer]
+        - button "Быстро" [ref=e38] [cursor=pointer]
+    - group "Дополнения" [ref=e39]:
+      - generic [ref=e41]:
+        - button "Континенты две кормовые базы и океан · миграция · новые свойства выкл" [ref=e42] [cursor=pointer]:
+          - generic [ref=e43]:
+            - generic [ref=e44]: Континенты
+            - generic [ref=e45]: две кормовые базы и океан · миграция · новые свойства
+          - generic [ref=e46]: выкл
+        - button "Растения еда на общих растениях · убежища · фаза роста · хищные растения выкл" [ref=e47] [cursor=pointer]:
+          - generic [ref=e48]:
+            - generic [ref=e49]: Растения
+            - generic [ref=e50]: еда на общих растениях · убежища · фаза роста · хищные растения
+          - generic [ref=e51]: выкл
+        - list [ref=e52]:
+          - 'listitem "Грибы: питание, распад и новые цепочки еды. Готовится — официальный пересказ правил следующим обновлением." [ref=e53]':
+            - generic [ref=e54]: Грибы
+            - generic [ref=e55]: скоро
+          - 'listitem "Случайные мутации: скрытые мутации и неоплазия с растущим вирусом. Готовится — официальный пересказ правил следующим обновлением." [ref=e56]':
+            - generic [ref=e57]: Случайные мутации
+            - generic [ref=e58]: скоро
+    - generic [ref=e59]:
+      - button "Начать год" [ref=e60] [cursor=pointer]
+      - button "Правила" [ref=e61] [cursor=pointer]

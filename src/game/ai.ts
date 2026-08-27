@@ -1,4 +1,6 @@
 import { TRAITS } from "./traits.ts";
+import { PLANTS } from "./plants.ts";
+import { FLORA } from "./flora.ts";
 import type { Animal, GameAction, GameState } from "./types.ts";
 import {
   legalDefenseActions,
@@ -9,10 +11,13 @@ import { nextRandom } from "./rng.ts";
 import {
   animalValue,
   findAnimal,
-  foodNeeded,
+
+  hasMark,
   hasTrait,
+  isCarnivoreLike,
   isFed,
   player,
+  speciesNeed,
 } from "./queries.ts";
 
 /**
@@ -74,14 +79,16 @@ function pickDefense(state: GameState, acts: GameAction[]): GameAction {
 
 function pickDev(state: GameState, acts: GameAction[]): GameAction {
   const p = player(state, state.currentPlayerId);
+  // «Случайные мутации»: карты в слепой колоде, а не в руке.
+  const stock = state.modules.randomMutations ? (p.blindDeck?.length ?? 0) : p.hand.length;
   let best = acts[0]!;
   let bestScore = -Infinity;
   for (const a of acts) {
     let s = 0;
     if (a.type === "devPass") {
       const keep = state.lastYear ? 0 : p.animals.length === 0 ? 0 : 1;
-      s = p.hand.length <= keep ? 4 : p.hand.length <= 2 && !state.lastYear ? 1.5 : -1;
-      if (p.animals.length === 0 && p.hand.length) s = -20;
+      s = stock <= keep ? 4 : stock <= 2 && !state.lastYear ? 1.5 : -1;
+      if (p.animals.length === 0 && stock) s = -20;
     }
     if (a.type === "devPlayAnimal") {
       s = 6 - p.animals.length * 1.4;
@@ -96,6 +103,45 @@ function pickDev(state: GameState, acts: GameAction[]): GameAction {
         if (card?.faces.includes("swimming")) s += 0.5; // уйдёт в океан — там свободнее
       }
     }
+    // «Случайные мутации»: объявление розыгрыша верхней карты слепой колоды.
+    if (a.type === "devMutate") {
+      if (a.intent === "newAnimal") {
+        s = 6 - p.animals.length * 1.4;
+        if (p.animals.length === 0) s = 14;
+        if (state.lastYear) s = 8;
+        if (a.zoneId) {
+          const inZone = p.animals.filter((x) => x.zoneId === a.zoneId).length;
+          s -= inZone * 0.6;
+        }
+      }
+      if (a.intent === "trait") {
+        // Свойство вслепую: умеренно выгодно, лучше — на пустой вид
+        // (там любая мутация ляжет) и в поздние годы (очки важнее риска).
+        const target = a.animalId ? findAnimal(state, a.animalId) : undefined;
+        s = 4;
+        if (target) {
+          s += (3 - Math.min(3, target.traits.length)) * 0.8;
+          if (target.traits.some((t) => t.disabled)) s -= 1;
+        }
+        if (state.lastYear) s += 1.5;
+      }
+      if (a.intent === "population") {
+        // +1 животное выгодно сильному виду (хорошая еда/защита) и в последний год.
+        const target = a.animalId ? findAnimal(state, a.animalId) : undefined;
+        s = 3;
+        if (target) {
+          const worth = target.traits.reduce((v, t) => v + (TRAITS[t.type]?.aiValue ?? 0), 0);
+          s += Math.max(0, Math.min(6, worth)) * 0.5;
+          if (target.traits.some((t) => t.type === "budding")) s += 2;
+        }
+        if (state.lastYear) s += 3;
+      }
+      if (a.intent === "plant") {
+        // Свойство растения вслепую: помогает столу, но очков не даёт.
+        s = 2.2;
+        if (state.lastYear) s -= 2;
+      }
+    }
     if (a.type === "devPlayTrait") {
       const card = p.hand.find((c) => c.id === a.cardId);
       const trait = card?.faces[a.face] ?? card?.faces[0];
@@ -103,7 +149,7 @@ function pickDev(state: GameState, acts: GameAction[]): GameAction {
       if (trait && animal) {
         s = (TRAITS[trait].aiValue ?? 2) + (animal.ownerId === p.id ? 1 : 0);
         if (trait === "parasite") {
-          s = 7 + foodNeeded(animal) - (animal.ownerId === p.id ? 20 : 0);
+          s = 7 + speciesNeed(animal) - (animal.ownerId === p.id ? 20 : 0);
           if (state.difficulty === "easy") s -= 3;
         }
         if (trait === "carnivore" && animal.ownerId === p.id) s += 3;
@@ -123,6 +169,24 @@ function pickDev(state: GameState, acts: GameAction[]): GameAction {
       s = 5;
       if (state.lastYear) s += 2;
     }
+    // «Растения»: свойство на общее растение.
+    if (a.type === "devPlayPlantTrait") {
+      const card = p.hand.find((c) => c.id === a.cardId);
+      const trait = card?.faces[a.face] ?? card?.faces[0];
+      s = 2.5;
+      if (trait === "plantParasite") {
+        // паразит удобнее на растение с запасом фишек
+        const plant = state.plants?.find((pl) => pl.id === a.plantId);
+        s = plant ? 1.5 + Math.min(plant.food, 3) * 0.4 : 1.5;
+      }
+      if (trait === "thorny" || trait === "nutritious") s += 1;
+      if (state.lastYear) s -= 2; // свойства растений очков не дают
+    }
+    if (a.type === "devPlayPlantPair") {
+      // микориза страхует растения от вымирания
+      s = 2.8;
+      if (state.lastYear) s -= 2;
+    }
     s += jitter(state);
     if (s > bestScore) {
       bestScore = s;
@@ -133,7 +197,7 @@ function pickDev(state: GameState, acts: GameAction[]): GameAction {
 }
 
 function hunger(a: Animal): number {
-  return Math.max(0, foodNeeded(a) - a.food);
+  return Math.max(0, speciesNeed(a) - a.food);
 }
 
 /** Есть ли вообще еда, доступная этому игроку (по всем его территориям). */
@@ -156,7 +220,60 @@ function pickFeed(state: GameState, acts: GameAction[]): GameAction {
     if (a.type === "feedTake") {
       const an = findAnimal(state, a.animalId)!;
       s = 10 + (3 - hunger(an)) + (hasTrait(an, "burrowing") ? 1.5 : 0);
-      if (hasTrait(an, "carnivore") && hunger(an) <= 2) s -= 0.5;
+      if (isCarnivoreLike(an) && hunger(an) <= 2) s -= 0.5;
+    }
+    // «Растения»: фишка с растения — как обычная еда, чуть предпочитаем
+    // растения с запасом (дольше проживут) и питательные.
+    if (a.type === "feedTakePlant") {
+      const an = findAnimal(state, a.animalId)!;
+      const plant = state.plants?.find((pl) => pl.id === a.plantId);
+      s = 10 + (3 - hunger(an)) + (hasTrait(an, "burrowing") ? 1.5 : 0);
+      if (plant) {
+        s += Math.min(plant.food, 4) * 0.2;
+        if (plant.traits.some((t) => t.type === "nutritious" && !t.disabled)) s += 1.5;
+        if (plant.traits.some((t) => t.type === "medicinal" && !t.disabled) && an.traits.length > 2) s -= 4;
+        if (plant.kind === "carnivorous") s -= 2.5; // контратака
+      }
+      if (isCarnivoreLike(an) && hunger(an) <= 2) s -= 0.5;
+    }
+    // «Трава и грибы»: фишка с карты флоры — как еда, но способность карты
+    // может быть ловушкой (яд, бешенство, потеря руки).
+    if (a.type === "feedTakeFlora") {
+      const an = findAnimal(state, a.animalId)!;
+      const f = state.flora?.find((fl) => fl.id === a.floraId);
+      s = 10 + (3 - hunger(an)) + (hasTrait(an, "burrowing") ? 1.5 : 0);
+      if (f) {
+        const def = FLORA[f.kind];
+        s += Math.min(f.food, 4) * 0.2 + def.aiHint;
+        // яд не страшен с антидотом, а выгоден сопернику без него
+        if (def.mark === "poison" && hasMark(an, "antidote")) s += 3;
+        // чистильщик сбрасывает уже собранную еду
+        if (f.kind === "cleanser" && an.food > 1) s -= 5;
+        // гриб прозрения больнее при полной руке
+        if (f.kind === "insight") s -= Math.min(p.hand.length, 6) * 0.5;
+        // страстоцвет разбивает ценное животное
+        if (f.kind === "passionflower" && an.traits.length > 1) s -= 1.5;
+      }
+      if (isCarnivoreLike(an) && hunger(an) <= 2) s -= 0.5;
+    }
+    // «Растения»: убежище — сильная защита для голодных и ценных животных.
+    if (a.type === "feedShelter") {
+      const an = findAnimal(state, a.animalId)!;
+      const threats = state.players.some((x) =>
+        x.id !== p.id ? x.animals.some((c) => isCarnivoreLike(c) && !isFed(c)) : false,
+      );
+      s = threats ? 7 + Math.min(animalValue(an), 8) * 0.3 : 1.5;
+      if (isFed(an)) s -= 2;
+    }
+    // «Растения»: направить хищное растение на чужое животное.
+    if (a.type === "feedPlantAttack") {
+      const prey = findAnimal(state, a.preyId)!;
+      s = animalValue(prey) + 3 + (prey.ownerId !== p.id ? 0 : -12);
+      if (state.difficulty === "easy") s -= 4;
+    }
+    // «Растения»: перекинуть фишку на паразита — припасти еду.
+    if (a.type === "feedParasitize") {
+      s = 1;
     }
     if (a.type === "feedHunt") {
       const prey = findAnimal(state, a.preyId)!;
