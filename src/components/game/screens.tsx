@@ -3,11 +3,25 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { NetMenuPanel } from "@/components/game/net-screens";
 import { FLORA, MARKS } from "@/game/flora";
+import { PLANTS } from "@/game/plants";
 import { CONTINENTS_TRAIT_IDS, FUNGI_TRAIT_IDS, MUTATIONS_TRAIT_IDS, PLANTS_TRAIT_IDS, TRAITS, TRAIT_ORDER } from "@/game/traits";
-import type { Difficulty, FloraKind, MarkKind, ScoreBreakdown, TraitId } from "@/game/types";
-import { BG, DARK_ART, FLORA_ART, LOGO, MARK_ART, TRAIT_ART } from "@/lib/art";
+import { TERRITORIES } from "@/game/types";
+import type { Difficulty, FloraKind, MarkKind, PlantKind, ScoreBreakdown, TerritoryId, TraitId } from "@/game/types";
+import {
+  BG,
+  DARK_ART,
+  FLORA_ART,
+  LOGO,
+  MARK_ART,
+  PLANT_ART,
+  SPECIES_EXTINCT,
+  TERRITORY_ART,
+  TRAIT_ART,
+  speciesArt,
+} from "@/lib/art";
 import { cn } from "@/lib/utils";
-import { FloraGlyph, TraitGlyph } from "./icons";
+import { Dice3D } from "./dice-3d";
+import { FloraGlyph, FoodCube, TraitGlyph } from "./icons";
 import { useGameStore } from "@/store/game-store";
 
 const SPEEDS: Array<["slow" | "normal" | "fast", string, string]> = [
@@ -395,6 +409,97 @@ function MarksList() {
   );
 }
 
+/** Список видов растений «Растений» в правилах. */
+function PlantsList() {
+  const kinds = Object.keys(PLANTS) as PlantKind[];
+  return (
+    <ul className="grid gap-2 sm:grid-cols-2">
+      {kinds.map((k) => {
+        const p = PLANTS[k];
+        return (
+          <li key={k} className="flex gap-3 rounded-[var(--radius-sm)] border border-border bg-bg p-3">
+            {PLANT_ART[k] ? (
+              <img
+                src={PLANT_ART[k]}
+                alt=""
+                loading="lazy"
+                className="h-[68px] w-[102px] shrink-0 rounded-[var(--radius-xs)] border border-border object-cover"
+              />
+            ) : (
+              <span className="h-[68px] w-[102px] shrink-0 rounded-[var(--radius-xs)] border border-border bg-surface" />
+            )}
+            <div>
+              <div className="font-medium text-fg">{p.name}</div>
+              <div className="mt-1 text-xs leading-snug">{p.description}</div>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Описания территорий «Континентов» для карточек в правилах. */
+const TERRITORY_DESC: Record<TerritoryId, string> = {
+  laurasia:
+    "Северный из двух континентов с самой щедрой базой: 8 фишек при двух игроках, 11 при трёх, 14 при четырёх.",
+  gondwana:
+    "Южный континент: 7/10/13 фишек по числу игроков. С «Растениями» и «Травой и грибами» флора стоит на обоих континентах.",
+  ocean: "Мир воды — только водоплавающие, база 5/7/9. Водность несъёмна: уйти из океана можно лишь миграцией.",
+};
+
+/** Карточки территорий «Континентов» в правилах. */
+function TerritoryList() {
+  return (
+    <div className="grid gap-2 sm:grid-cols-3">
+      {TERRITORIES.map((t) => (
+        <figure key={t.id} className="overflow-hidden rounded-[var(--radius-md)] border border-border bg-bg">
+          <img src={TERRITORY_ART[t.id]} alt={t.name} loading="lazy" className="aspect-square w-full object-cover" />
+          <figcaption className="p-2.5">
+            <div className="text-sm font-medium text-fg">{t.name}</div>
+            <div className="mt-1 text-xs leading-snug">{TERRITORY_DESC[t.id]}</div>
+          </figcaption>
+        </figure>
+      ))}
+    </div>
+  );
+}
+
+/** Кубик-фишка еды из игры (FoodCube) в базовых правилах. */
+function RuleCube({ tone, label }: { tone: "red" | "blue" | "yellow" | "green"; label: string }) {
+  return (
+    <span className="flex flex-col items-center gap-1">
+      <FoodCube tone={tone} className="size-8" title={label} />
+      <span className="text-[10px] leading-none text-muted">{label}</span>
+    </span>
+  );
+}
+
+/** Круглая иллюстрация базовых правил: медальон животного. */
+function RuleToken({ src, label }: { src: string; label?: string }) {
+  return (
+    <span className="flex flex-col items-center gap-1">
+      <img src={src} alt="" loading="lazy" className="size-10 rounded-full object-cover ring-1 ring-border" />
+      {label ? <span className="text-[10px] leading-none text-muted">{label}</span> : null}
+    </span>
+  );
+}
+
+/** Миниатюра карты для базовых правил. */
+function RuleCard({ src, label }: { src: string; label?: string }) {
+  return (
+    <span className="flex flex-col items-center gap-1">
+      <img
+        src={src}
+        alt=""
+        loading="lazy"
+        className="h-16 w-11 rounded-[var(--radius-xs)] border border-border object-cover"
+      />
+      {label ? <span className="text-[10px] leading-none text-muted">{label}</span> : null}
+    </span>
+  );
+}
+
 export function RulesPanel({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<RulesTab>("base");
   return (
@@ -434,19 +539,42 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
             <ol className="list-decimal space-y-2 pl-5">
               <li>
                 <strong className="text-fg">Развитие.</strong> По кругу выкладывайте по одной карте: новое животное или свойство. Свойства кладутся лицом вверх — все видят, кто что выложил. Двойные карты — одно из двух свойств. Паразит только на чужих. Парная карта (симбиоз, сотрудничество, взаимодействие) кладётся между двумя животными — на пару может лежать только одна парная карта. Пас — и больше не играете в этой фазе; когда спасовали все, фаза заканчивается.
+                <span className="mt-2 flex flex-wrap items-end gap-3">
+                  <RuleCard src={BG.cardBack} label="рука" />
+                  <RuleCard src={TRAIT_ART.carnivore!} label="свойство" />
+                  <RuleToken src={speciesArt({})} label="животное" />
+                </span>
               </li>
               <li>
                 <strong className="text-fg">Кормовая база.</strong> 2 игрока: 1d6+2. 3: 2d6. 4: 2d6+2.
+                <span className="mt-2 flex flex-wrap items-end gap-3">
+                  <Dice3D values={[2, 5]} dieSize={44} gap={10} ariaLabel="Кости кормовой базы" />
+                  <RuleCube tone="red" label="фишка базы" />
+                </span>
               </li>
               <li>
                 <strong className="text-fg">Питание.</strong> Ход длится, пока не нажмёте «Закончить ход»: одно действие ход не отдаёт. За ход можно напасть каждым из своих хищников и/или использовать всех пиратов — либо взять одну фишку еды (накормленное животное берёт только в пустой жировой запас); если берёте еду, хищники и пираты в этот ход недоступны. Накормленное животное больше не использует свойства: не нападает, не пиратствует, не топчет, не уходит в спячку и не тратит жир. Топтуны топчут вместе с взятием еды, каждый — раз за ход. Превращение жира — свободное действие. Когда делать нечего совсем, ход передаётся сам. «Пас» выводит вас до конца фазы; фаза заканчивается, когда база пуста, все накормлены, все пасанули или никому нельзя ходить.
+                <span className="mt-2 flex flex-wrap items-end gap-3">
+                  <RuleCube tone="red" label="красная" />
+                  <RuleCube tone="blue" label="синяя" />
+                  <RuleCube tone="yellow" label="жир" />
+                </span>
               </li>
               <li>
                 <strong className="text-fg">Вымирание.</strong> Ненакормленные погибают. Добор: число выживших + 1. Если никого нет и рука пуста — 6 карт. Пустая колода — последний год.
+                <span className="mt-2 flex flex-wrap items-end gap-3">
+                  <RuleToken src={SPECIES_EXTINCT} label="вымерло" />
+                  <RuleCard src={BG.cardBack} label="добор" />
+                </span>
               </li>
             </ol>
             <h3 className="text-fg">Очки</h3>
             <p>2 за каждое выжившее животное, 1 за каждое свойство. Дополнительно: хищник и большой +1, паразит +2. Ничья — по картам в сбросе.</p>
+            <span className="flex flex-wrap items-end gap-3">
+              <RuleToken src={speciesArt({})} label="+2" />
+              <RuleToken src={speciesArt({ carnivore: true })} label="+2 · хищнику +1" />
+              <RuleCard src={TRAIT_ART.parasite!} label="+1 · паразиту +2" />
+            </span>
             <h3 className="text-fg">Свойства базовой игры</h3>
             <TraitList ids={TRAITS_BY_TAB.base} />
           </div>
@@ -456,6 +584,7 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
             <p>
               Дополнение «Континенты» (Правильные игры, 2012): 42 карты новых свойств. Включается в меню перед партией — все правила базовой игры остаются в силе.
             </p>
+            <TerritoryList />
             <ul className="list-decimal space-y-2 pl-5">
               <li>
                 <strong className="text-fg">Территории.</strong> Животные живут на Лавразии, в Гондване и в Океане. Выкладывая животное, выбираете континент кликом по нему; в Океан животное попадает только со свойством «Водоплавающее». В океане водность перманентна: её не снять ни неоплазией, ни рекомбинацией, ни параличом — только миграция выводит животное на континент.
@@ -505,6 +634,8 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
                 <strong className="text-fg">Очки.</strong> Растения и их свойства при подсчёте не учитываются — очки дают только животные и их свойства.
               </li>
             </ul>
+            <h3 className="text-fg">Виды растений</h3>
+            <PlantsList />
             <h3 className="text-fg">Свойства растений</h3>
             <TraitList ids={TRAITS_BY_TAB.plants} />
             <p className="text-xs">

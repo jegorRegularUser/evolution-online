@@ -1,6 +1,6 @@
 import { n as TSS_SERVER_FUNCTION, t as createServerFn } from "./ssr.mjs";
-import { A as legalDevActions, N as pollInput, O as joinRoomInput, S as currentActor, b as createGame, d as actionInput, f as applyAction, j as legalFeedActions, k as legalDefenseActions, o as PACE, p as botsInput, v as chooseAIAction, x as createRoomInput, y as codeTokenInput } from "./ai-BoVvw1cM.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/api-CxqtrMT1.js
+import { A as legalFeedActions, D as joinRoomInput, M as pollInput, O as legalDefenseActions, _ as chooseAIAction, b as createRoomInput, d as actionInput, f as applyAction, k as legalDevActions, o as PACE, p as botsInput, v as codeTokenInput, x as currentActor, y as createGame } from "./ai-CKs4XESH.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/api-V85Drz8i.js
 var createServerRpc = (serverFnMeta, splitImportFn) => {
 	const url = "/_serverFn/" + serverFnMeta.id;
 	return Object.assign(splitImportFn, {
@@ -433,7 +433,7 @@ alter table evo_seats add constraint evo_seats_seat_check check (seat between 0 
 */
 function getRoomService() {
 	const g = globalThis;
-	g.__evoNetService__ ??= import("./db-CpEyk40J.mjs").then(async ({ getSql }) => {
+	g.__evoNetService__ ??= import("./db-DT9F08SC.mjs").then(async ({ getSql }) => {
 		const sql = await getSql();
 		await sql.query(NET_TABLES_DDL);
 		return createRoomService(sql);

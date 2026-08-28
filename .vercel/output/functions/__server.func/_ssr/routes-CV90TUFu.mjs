@@ -2,14 +2,14 @@ import { o as __toESM } from "../_runtime.mjs";
 import { n as require_react } from "../_libs/@radix-ui/react-compose-refs+[...].mjs";
 import { l as require_react_dom, y as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
 import { n as TSS_SERVER_FUNCTION, r as getServerFnById, t as createServerFn } from "./ssr.mjs";
-import { A as legalDevActions, C as findAnimal, D as isFed, E as isCarnivoreLike, M as player, N as pollInput, O as joinRoomInput, P as speciesNeed, S as currentActor, T as hasTrait, _ as canReceiveFood, a as MUTATIONS_TRAIT_IDS, b as createGame, c as PLANTS_TRAIT_IDS, d as actionInput, f as applyAction, g as canRageAttack, h as canPlantAttackTarget, i as MARKS, j as legalFeedActions, k as legalDefenseActions, l as TRAITS, m as canAttack, n as FLORA, p as botsInput, r as FUNGI_TRAIT_IDS, s as PLANTS, t as CONTINENTS_TRAIT_IDS, u as TRAIT_ORDER, v as chooseAIAction, w as foodNeeded, x as createRoomInput, y as codeTokenInput } from "./ai-BoVvw1cM.mjs";
+import { A as legalFeedActions, C as foodNeeded, D as joinRoomInput, E as isFed, M as pollInput, N as speciesNeed, O as legalDefenseActions, S as findAnimal, T as isCarnivoreLike, _ as chooseAIAction, a as MUTATIONS_TRAIT_IDS, b as createRoomInput, c as PLANTS_TRAIT_IDS, d as actionInput, f as applyAction, g as canRageAttack, h as canPlantAttackTarget, i as MARKS, j as player, k as legalDevActions, l as TRAITS, m as canAttack, n as FLORA, p as botsInput, r as FUNGI_TRAIT_IDS, s as PLANTS, t as CONTINENTS_TRAIT_IDS, u as TRAIT_ORDER, v as codeTokenInput, w as hasTrait, x as currentActor, y as createGame } from "./ai-CKs4XESH.mjs";
 import { a as RotateCcw, c as Pause, d as List, f as Copy, h as BookOpen, i as Skull, l as Minus, m as Bot, o as Plus, p as Check, r as Swords, s as Play, t as Users, u as LogOut } from "../_libs/lucide-react.mjs";
 import { t as Slot } from "../_libs/radix-ui__react-slot.mjs";
 import { n as clsx, t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { t as twMerge } from "../_libs/tailwind-merge.mjs";
 import { t as create } from "../_libs/zustand.mjs";
 import { a as DirectionalLight, c as MeshStandardMaterial, d as SRGBColorSpace, f as Scene, i as CanvasTexture, l as PerspectiveCamera, n as AmbientLight, o as Euler, p as Vector3, r as BoxGeometry, s as Mesh, t as WebGLRenderer, u as Quaternion } from "../_libs/three.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-BIHn9pZV.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-CV90TUFu.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 var import_react_dom = require_react_dom();
@@ -110,7 +110,16 @@ var TRAIT_ART = {
 	micorrhiza: "/img/trait/micorrhiza.jpg",
 	tree: "/img/trait/tree.jpg",
 	nutritious: "/img/trait/nutritious.jpg",
-	honeyPlant: "/img/trait/honeyPlant.jpg"
+	honeyPlant: "/img/trait/honeyPlant.jpg",
+	transparent: "/img/trait/transparent.jpg",
+	insectivore: "/img/trait/insectivore.jpg",
+	obligateCarnivore: "/img/trait/obligateCarnivore.jpg",
+	budding: "/img/trait/budding.jpg",
+	metabolicSyndrome: "/img/trait/metabolicSyndrome.jpg",
+	barkBeetle: "/img/trait/barkBeetle.jpg",
+	extremophile: "/img/trait/extremophile.jpg",
+	developmentDefects: "/img/trait/developmentDefects.jpg",
+	simplification: "/img/trait/simplification.jpg"
 };
 /**
 * Арты с чёрным фоном рисуются на тёмной плашке. Сейчас все карты сделаны
@@ -124,6 +133,25 @@ function speciesArt(opts) {
 	return opts.bulky ? "/img/species/herb-large.jpg" : "/img/species/herb-medium.jpg";
 }
 var SPECIES_EXTINCT = "/img/species/extinct.jpg";
+/**
+* Жетоны еды. red — фишка из кормовой базы, blue — мясо и всё, что приходит
+* от свойств (охота, сотрудничество, пиратство, падальщик, хвост, жир).
+* population — жетон численности вида («Случайные мутации», тёмная эмблема).
+*/
+var TOKEN = {
+	meat: "/img/token/meat.jpg",
+	red: "/img/token/meat.jpg",
+	blue: "/img/token/blue.jpg",
+	plant: "/img/token/plant.jpg",
+	fat: "/img/token/fat.jpg",
+	population: "/img/token/population.jpg"
+};
+/** Мета-арт «Случайных мутаций»: рубашка слепой колоды, флип вскрытия, иконка. */
+var MUTATION_ART = {
+	deckBack: "/img/mutation/deckback.jpg",
+	flip: "/img/mutation/flip.jpg",
+	icon: "/img/mutation/icon.jpg"
+};
 /** Фоны и крупные декорации. */
 var BG = {
 	menu: "/img/bg/menu.jpg",
@@ -168,10 +196,33 @@ var PLANT_ART = {
 	parasite: "/img/plant/parasite.jpg"
 };
 /**
-* Арты карт флоры «Травы и грибов» (4:3). Пока картинок нет — карточка
-* рисует векторный глиф (гриб/травинка) и цветную рамку происхождения.
+* Арты карт флоры «Травы и грибов» (3:2, верх карточки флоры 4:3 с object-cover).
 */
-var FLORA_ART = {};
+var FLORA_ART = {
+	toadstool: "/img/flora/toadstool.jpg",
+	mold: "/img/flora/mold.jpg",
+	madCap: "/img/flora/madCap.jpg",
+	flyAgaric: "/img/flora/flyAgaric.jpg",
+	insight: "/img/flora/insight.jpg",
+	soaring: "/img/flora/soaring.jpg",
+	sleepGrass: "/img/flora/sleepGrass.jpg",
+	thryn: "/img/flora/thryn.jpg",
+	datura: "/img/flora/datura.jpg",
+	smile: "/img/flora/smile.jpg",
+	cleanser: "/img/flora/cleanser.jpg",
+	passionflower: "/img/flora/passionflower.jpg"
+};
+/** Жетоны меток последствий «Травы и грибов» (1:1, тёмный фон #101010). */
+var MARK_ART = {
+	poison: "/img/mark/poison.jpg",
+	antidote: "/img/mark/antidote.jpg",
+	madness: "/img/mark/madness.jpg",
+	rage: "/img/mark/rage.jpg",
+	sleep: "/img/mark/sleep.jpg",
+	thryn: "/img/mark/thryn.jpg",
+	haze: "/img/mark/haze.jpg",
+	pacifism: "/img/mark/pacifism.jpg"
+};
 var createSsrRpc = (functionId) => {
 	const url = "/_serverFn/" + functionId;
 	const serverFnMeta = { id: functionId };
@@ -1467,14 +1518,15 @@ var MARK_TONE = {
 	haze: "border-food-yellow/60 bg-food-yellow/15 text-ink",
 	pacifism: "border-water/50 bg-water/15 text-water"
 };
-/** Чип метки последствий на животном: цвет по виду, правило — в подсказке. */
+/** Чип метки последствий на животном: жетон-картинка и цвет по виду, правило — в подсказке. */
 var MarkChip = (0, import_react.memo)(function MarkChip({ mark }) {
 	const def = MARKS[mark];
 	const tip = useTraitTip({ isolateClick: true });
 	const tipDef = {
 		id: mark,
 		name: `Метка «${def.name}»`,
-		description: def.description
+		description: def.description,
+		image: MARK_ART[mark]
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 		ref: (el) => {
@@ -1483,11 +1535,20 @@ var MarkChip = (0, import_react.memo)(function MarkChip({ mark }) {
 		...tip.triggerProps,
 		"data-mark-chip": true,
 		className: cn("anim-chip-in relative inline-flex h-5 items-center gap-1 rounded-[var(--radius-xs)] border px-1.5 text-[10px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-accent/60", MARK_TONE[mark]),
-		children: [def.short, tip.anchorRect ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TraitTooltip, {
-			def: tipDef,
-			anchorRect: tip.anchorRect,
-			id: tip.tipId
-		}) : null]
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+				src: MARK_ART[mark],
+				alt: "",
+				loading: "lazy",
+				className: "size-3.5 shrink-0 rounded-full object-cover"
+			}),
+			def.short,
+			tip.anchorRect ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TraitTooltip, {
+				def: tipDef,
+				anchorRect: tip.anchorRect,
+				id: tip.tipId
+			}) : null
+		]
 	});
 });
 /**
@@ -1553,10 +1614,12 @@ var FloraCardView = (0, import_react.memo)(function FloraCardView({ flora, highl
 						className: "text-[10px] text-ink-soft",
 						children: "без еды"
 					}) : null]
-				}), def.mark ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: cn("ml-auto rounded-full border px-1.5 text-[9px] font-semibold", MARK_TONE[def.mark]),
+				}), def.mark ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+					src: MARK_ART[def.mark],
+					alt: `Метка «${MARKS[def.mark].name}»`,
+					loading: "lazy",
 					title: `Даёт метку «${MARKS[def.mark].name}»`,
-					children: "метка"
+					className: "ml-auto size-4 shrink-0 rounded-full object-cover ring-1 ring-border-strong/40"
 				}) : null]
 			}),
 			tip.anchorRect ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TraitTooltip, {
@@ -1749,8 +1812,17 @@ var AnimalCard = (0, import_react.memo)(function AnimalCard({ animal, name, no, 
 					children: [
 						(animal.population ?? 1) > 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							title: `Численность вида: ${animal.population} животного(-ых)`,
-							className: "rounded-full bg-accent/20 px-1.5 text-[10px] font-semibold tabular-nums text-accent",
-							children: ["×", animal.population]
+							className: "flex items-center gap-0.5 rounded-full bg-accent/20 px-1.5 text-[10px] font-semibold tabular-nums text-accent",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+									src: TOKEN.population,
+									alt: "",
+									loading: "lazy",
+									className: "size-3 rounded-full object-cover"
+								}),
+								"×",
+								animal.population
+							]
 						}) : null,
 						animal.sheltered ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							title: "В убежище растения: хищники и хищные растения не тронут до конца фазы питания",
@@ -2190,44 +2262,83 @@ var PIPS = {
 		[.7, .74]
 	]
 };
-/** Грань кости: пергамент с кромкой и очками тушью (в стиле стола). */
-function dieFaceTexture(value) {
-	const S = 128;
+/** Бумага граней — тот же лист, что лежит под игровым столом. */
+var PAPER_SRC = "/img/bg/texture-paper.jpg";
+var paperCache = null;
+function paperImage() {
+	paperCache ??= new Promise((resolve) => {
+		const img = new Image();
+		img.onload = () => resolve(img);
+		img.onerror = () => resolve(null);
+		img.src = PAPER_SRC;
+	});
+	return paperCache;
+}
+/**
+* Грань кости: ровный тон цвета кормовой базы с лёгкой бумажной фактурой
+* поверх (текстура стола, но приглушённо — тон доминирует), виньетка к кромке
+* для объёма, очки — светлая кость с тёмной обводкой, как на окрашенной кости.
+*/
+function dieFaceTexture(value, paper, tint) {
+	const S = 256;
 	const canvas = document.createElement("canvas");
 	canvas.width = canvas.height = S;
 	const ctx = canvas.getContext("2d");
-	const r = 18;
-	ctx.beginPath();
-	ctx.moveTo(r, 0);
-	ctx.arcTo(S, 0, S, S, r);
-	ctx.arcTo(S, S, 0, S, r);
-	ctx.arcTo(0, S, 0, 0, r);
-	ctx.arcTo(0, 0, S, 0, r);
-	ctx.closePath();
-	const grad = ctx.createLinearGradient(0, 0, 0, S);
-	grad.addColorStop(0, "#faf4e4");
-	grad.addColorStop(1, "#e7ddc4");
-	ctx.fillStyle = grad;
-	ctx.fill();
-	ctx.lineWidth = 4;
-	ctx.strokeStyle = "rgba(58,48,32,0.35)";
+	const r = 30;
+	const roundPath = () => {
+		ctx.beginPath();
+		ctx.moveTo(r, 0);
+		ctx.arcTo(S, 0, S, S, r);
+		ctx.arcTo(S, S, 0, S, r);
+		ctx.arcTo(0, S, 0, 0, r);
+		ctx.arcTo(0, 0, S, 0, r);
+		ctx.closePath();
+	};
+	ctx.fillStyle = tint;
+	ctx.fillRect(0, 0, S, S);
+	const light = ctx.createLinearGradient(0, 0, 0, S);
+	light.addColorStop(0, "rgba(255,246,225,0.32)");
+	light.addColorStop(.5, "rgba(255,255,255,0)");
+	light.addColorStop(1, "rgba(24,14,6,0.24)");
+	ctx.fillStyle = light;
+	ctx.fillRect(0, 0, S, S);
+	if (paper) {
+		roundPath();
+		ctx.save();
+		ctx.clip();
+		ctx.globalAlpha = .24;
+		ctx.drawImage(paper, 0, 0, S, S);
+		ctx.restore();
+	}
+	const vig = ctx.createRadialGradient(S / 2, S / 2, S * .32, S / 2, S / 2, S * .78);
+	vig.addColorStop(0, "rgba(0,0,0,0)");
+	vig.addColorStop(1, "rgba(28,18,10,0.34)");
+	ctx.fillStyle = vig;
+	ctx.fillRect(0, 0, S, S);
+	roundPath();
+	ctx.lineWidth = 6;
+	ctx.strokeStyle = "rgba(35,24,15,0.5)";
 	ctx.stroke();
 	for (const [fx, fy] of PIPS[value] ?? []) {
 		const x = fx * S;
 		const y = fy * S;
-		const pip = ctx.createRadialGradient(x - 2, y - 2, 1, x, y, 11);
-		pip.addColorStop(0, "#4a4234");
-		pip.addColorStop(1, "#211c14");
-		ctx.fillStyle = pip;
 		ctx.beginPath();
-		ctx.arc(x, y, 10, 0, Math.PI * 2);
+		ctx.arc(x, y, 30, 0, Math.PI * 2);
+		ctx.fillStyle = "#f8f1de";
+		ctx.fill();
+		ctx.lineWidth = 6;
+		ctx.strokeStyle = "rgba(30,20,12,0.6)";
+		ctx.stroke();
+		ctx.beginPath();
+		ctx.arc(x - 4, y - 5, 11, 0, Math.PI * 2);
+		ctx.fillStyle = "rgba(255,255,255,0.5)";
 		ctx.fill();
 	}
 	const tex = new CanvasTexture(canvas);
 	tex.colorSpace = SRGBColorSpace;
 	return tex;
 }
-function Dice3D({ values, rolling, dieSize = 64, gap = 14, className, ariaLabel }) {
+function Dice3D({ values, rolling, dieSize = 64, gap = 14, className, ariaLabel, tint = "#b4453a" }) {
 	const canvasRef = (0, import_react.useRef)(null);
 	const rollingRef = (0, import_react.useRef)(rolling);
 	const valuesRef = (0, import_react.useRef)(values);
@@ -2238,18 +2349,36 @@ function Dice3D({ values, rolling, dieSize = 64, gap = 14, className, ariaLabel 
 	const height = Math.round(dieSize * 1.45);
 	const rollKey = values.map((v) => v ?? "?").join(",") + (rolling ? "|rolling" : "");
 	(0, import_react.useEffect)(() => {
-		const canvas = canvasRef.current;
-		if (!canvas) return;
+		if (!canvasRef.current) return;
+		let disposed = false;
+		let cleanup;
+		paperImage().then((paper) => {
+			if (disposed || !canvasRef.current) return;
+			cleanup = buildScene(canvasRef.current, paper, tint);
+		});
+		return () => {
+			disposed = true;
+			cleanup?.();
+		};
+	}, [
+		rollKey,
+		n,
+		width,
+		height,
+		tint
+	]);
+	function buildScene(canvas, paper, tint) {
 		const renderer = new WebGLRenderer({
 			canvas,
 			alpha: true,
-			antialias: true
+			antialias: true,
+			preserveDrawingBuffer: true
 		});
 		renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 		renderer.setSize(width, height, false);
 		const scene = new Scene();
-		const camera = new PerspectiveCamera(30, width / height, .1, 50);
-		camera.position.set(0, 1.9, 6.6);
+		const camera = new PerspectiveCamera(34, width / height, .1, 50);
+		camera.position.set(0, 1.7, 5.4);
 		camera.lookAt(0, 0, 0);
 		scene.add(new AmbientLight(16774886, 1.05));
 		const key = new DirectionalLight(16777215, 1.7);
@@ -2264,7 +2393,7 @@ function Dice3D({ values, rolling, dieSize = 64, gap = 14, className, ariaLabel 
 			let m = materialsByValue.get(value);
 			if (!m) {
 				m = new MeshStandardMaterial({
-					map: dieFaceTexture(value),
+					map: dieFaceTexture(value, paper, tint),
 					roughness: .38,
 					metalness: .04
 				});
@@ -2327,12 +2456,7 @@ function Dice3D({ values, rolling, dieSize = 64, gap = 14, className, ariaLabel 
 			}
 			renderer.dispose();
 		};
-	}, [
-		rollKey,
-		n,
-		width,
-		height
-	]);
+	}
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("canvas", {
 		ref: canvasRef,
 		role: "img",
@@ -3034,8 +3158,13 @@ function FloraList() {
 			const f = FLORA[k];
 			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 				className: "flex gap-3 rounded-[var(--radius-sm)] border border-border bg-bg p-3",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: cn("flex h-[68px] w-12 shrink-0 items-center justify-center rounded-[var(--radius-xs)] border", f.isFungus ? "border-virus/40 bg-virus/10 text-virus" : "border-leaf/40 bg-leaf/10 text-leaf"),
+				children: [FLORA_ART[k] ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+					src: FLORA_ART[k],
+					alt: "",
+					loading: "lazy",
+					className: "h-[68px] w-[102px] shrink-0 rounded-[var(--radius-xs)] border border-border object-cover"
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: cn("flex h-[68px] w-[102px] shrink-0 items-center justify-center rounded-[var(--radius-xs)] border", f.isFungus ? "border-virus/40 bg-virus/10 text-virus" : "border-leaf/40 bg-leaf/10 text-leaf"),
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FloraGlyph, {
 						kind: k,
 						className: "size-7"
@@ -3066,8 +3195,13 @@ function MarksList() {
 		children: kinds.map((k) => {
 			const m = MARKS[k];
 			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-				className: "rounded-[var(--radius-sm)] border border-border bg-bg p-3",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "flex gap-3 rounded-[var(--radius-sm)] border border-border bg-bg p-3",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+					src: MARK_ART[k],
+					alt: "",
+					loading: "lazy",
+					className: "size-10 shrink-0 self-start rounded-full object-cover ring-1 ring-border"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "font-medium text-fg",
 					children: [
 						"Метка «",
@@ -3077,9 +3211,108 @@ function MarksList() {
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "mt-1 text-xs leading-snug",
 					children: m.description
-				})]
+				})] })]
 			}, k);
 		})
+	});
+}
+/** Список видов растений «Растений» в правилах. */
+function PlantsList() {
+	const kinds = Object.keys(PLANTS);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+		className: "grid gap-2 sm:grid-cols-2",
+		children: kinds.map((k) => {
+			const p = PLANTS[k];
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+				className: "flex gap-3 rounded-[var(--radius-sm)] border border-border bg-bg p-3",
+				children: [PLANT_ART[k] ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+					src: PLANT_ART[k],
+					alt: "",
+					loading: "lazy",
+					className: "h-[68px] w-[102px] shrink-0 rounded-[var(--radius-xs)] border border-border object-cover"
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "h-[68px] w-[102px] shrink-0 rounded-[var(--radius-xs)] border border-border bg-surface" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "font-medium text-fg",
+					children: p.name
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "mt-1 text-xs leading-snug",
+					children: p.description
+				})] })]
+			}, k);
+		})
+	});
+}
+/** Описания территорий «Континентов» для карточек в правилах. */
+var TERRITORY_DESC = {
+	laurasia: "Северный из двух континентов с самой щедрой базой: 8 фишек при двух игроках, 11 при трёх, 14 при четырёх.",
+	gondwana: "Южный континент: 7/10/13 фишек по числу игроков. С «Растениями» и «Травой и грибами» флора стоит на обоих континентах.",
+	ocean: "Мир воды — только водоплавающие, база 5/7/9. Водность несъёмна: уйти из океана можно лишь миграцией."
+};
+/** Карточки территорий «Континентов» в правилах. */
+function TerritoryList() {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "grid gap-2 sm:grid-cols-3",
+		children: TERRITORIES.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("figure", {
+			className: "overflow-hidden rounded-[var(--radius-md)] border border-border bg-bg",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+				src: TERRITORY_ART[t.id],
+				alt: t.name,
+				loading: "lazy",
+				className: "aspect-square w-full object-cover"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("figcaption", {
+				className: "p-2.5",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "text-sm font-medium text-fg",
+					children: t.name
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "mt-1 text-xs leading-snug",
+					children: TERRITORY_DESC[t.id]
+				})]
+			})]
+		}, t.id))
+	});
+}
+/** Кубик-фишка еды из игры (FoodCube) в базовых правилах. */
+function RuleCube({ tone, label }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "flex flex-col items-center gap-1",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FoodCube, {
+			tone,
+			className: "size-8",
+			title: label
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "text-[10px] leading-none text-muted",
+			children: label
+		})]
+	});
+}
+/** Круглая иллюстрация базовых правил: медальон животного. */
+function RuleToken({ src, label }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "flex flex-col items-center gap-1",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+			src,
+			alt: "",
+			loading: "lazy",
+			className: "size-10 rounded-full object-cover ring-1 ring-border"
+		}), label ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "text-[10px] leading-none text-muted",
+			children: label
+		}) : null]
+	});
+}
+/** Миниатюра карты для базовых правил. */
+function RuleCard({ src, label }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "flex flex-col items-center gap-1",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+			src,
+			alt: "",
+			loading: "lazy",
+			className: "h-16 w-11 rounded-[var(--radius-xs)] border border-border object-cover"
+		}), label ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "text-[10px] leading-none text-muted",
+			children: label
+		}) : null]
 	});
 }
 function RulesPanel({ onClose }) {
@@ -3125,22 +3358,90 @@ function RulesPanel({ onClose }) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
 							className: "list-decimal space-y-2 pl-5",
 							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
-									className: "text-fg",
-									children: "Развитие."
-								}), " По кругу выкладывайте по одной карте: новое животное или свойство. Свойства кладутся лицом вверх — все видят, кто что выложил. Двойные карты — одно из двух свойств. Паразит только на чужих. Парная карта (симбиоз, сотрудничество, взаимодействие) кладётся между двумя животными — на пару может лежать только одна парная карта. Пас — и больше не играете в этой фазе; когда спасовали все, фаза заканчивается."] }),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
-									className: "text-fg",
-									children: "Кормовая база."
-								}), " 2 игрока: 1d6+2. 3: 2d6. 4: 2d6+2."] }),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
-									className: "text-fg",
-									children: "Питание."
-								}), " Ход длится, пока не нажмёте «Закончить ход»: одно действие ход не отдаёт. За ход можно напасть каждым из своих хищников и/или использовать всех пиратов — либо взять одну фишку еды (накормленное животное берёт только в пустой жировой запас); если берёте еду, хищники и пираты в этот ход недоступны. Накормленное животное больше не использует свойства: не нападает, не пиратствует, не топчет, не уходит в спячку и не тратит жир. Топтуны топчут вместе с взятием еды, каждый — раз за ход. Превращение жира — свободное действие. Когда делать нечего совсем, ход передаётся сам. «Пас» выводит вас до конца фазы; фаза заканчивается, когда база пуста, все накормлены, все пасанули или никому нельзя ходить."] }),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
-									className: "text-fg",
-									children: "Вымирание."
-								}), " Ненакормленные погибают. Добор: число выживших + 1. Если никого нет и рука пуста — 6 карт. Пустая колода — последний год."] })
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+										className: "text-fg",
+										children: "Развитие."
+									}),
+									" По кругу выкладывайте по одной карте: новое животное или свойство. Свойства кладутся лицом вверх — все видят, кто что выложил. Двойные карты — одно из двух свойств. Паразит только на чужих. Парная карта (симбиоз, сотрудничество, взаимодействие) кладётся между двумя животными — на пару может лежать только одна парная карта. Пас — и больше не играете в этой фазе; когда спасовали все, фаза заканчивается.",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "mt-2 flex flex-wrap items-end gap-3",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RuleCard, {
+												src: BG.cardBack,
+												label: "рука"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RuleCard, {
+												src: TRAIT_ART.carnivore,
+												label: "свойство"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RuleToken, {
+												src: speciesArt({}),
+												label: "животное"
+											})
+										]
+									})
+								] }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+										className: "text-fg",
+										children: "Кормовая база."
+									}),
+									" 2 игрока: 1d6+2. 3: 2d6. 4: 2d6+2.",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "mt-2 flex flex-wrap items-end gap-3",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Dice3D, {
+											values: [2, 5],
+											dieSize: 44,
+											gap: 10,
+											ariaLabel: "Кости кормовой базы"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RuleCube, {
+											tone: "red",
+											label: "фишка базы"
+										})]
+									})
+								] }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+										className: "text-fg",
+										children: "Питание."
+									}),
+									" Ход длится, пока не нажмёте «Закончить ход»: одно действие ход не отдаёт. За ход можно напасть каждым из своих хищников и/или использовать всех пиратов — либо взять одну фишку еды (накормленное животное берёт только в пустой жировой запас); если берёте еду, хищники и пираты в этот ход недоступны. Накормленное животное больше не использует свойства: не нападает, не пиратствует, не топчет, не уходит в спячку и не тратит жир. Топтуны топчут вместе с взятием еды, каждый — раз за ход. Превращение жира — свободное действие. Когда делать нечего совсем, ход передаётся сам. «Пас» выводит вас до конца фазы; фаза заканчивается, когда база пуста, все накормлены, все пасанули или никому нельзя ходить.",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "mt-2 flex flex-wrap items-end gap-3",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RuleCube, {
+												tone: "red",
+												label: "красная"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RuleCube, {
+												tone: "blue",
+												label: "синяя"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RuleCube, {
+												tone: "yellow",
+												label: "жир"
+											})
+										]
+									})
+								] }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+										className: "text-fg",
+										children: "Вымирание."
+									}),
+									" Ненакормленные погибают. Добор: число выживших + 1. Если никого нет и рука пуста — 6 карт. Пустая колода — последний год.",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "mt-2 flex flex-wrap items-end gap-3",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RuleToken, {
+											src: "/img/species/extinct.jpg",
+											label: "вымерло"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RuleCard, {
+											src: BG.cardBack,
+											label: "добор"
+										})]
+									})
+								] })
 							]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
@@ -3148,6 +3449,23 @@ function RulesPanel({ onClose }) {
 							children: "Очки"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "2 за каждое выжившее животное, 1 за каждое свойство. Дополнительно: хищник и большой +1, паразит +2. Ничья — по картам в сбросе." }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "flex flex-wrap items-end gap-3",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RuleToken, {
+									src: speciesArt({}),
+									label: "+2"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RuleToken, {
+									src: speciesArt({ carnivore: true }),
+									label: "+2 · хищнику +1"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RuleCard, {
+									src: TRAIT_ART.parasite,
+									label: "+1 · паразиту +2"
+								})
+							]
+						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 							className: "text-fg",
 							children: "Свойства базовой игры"
@@ -3159,6 +3477,7 @@ function RulesPanel({ onClose }) {
 					className: "space-y-4 text-sm text-muted",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Дополнение «Континенты» (Правильные игры, 2012): 42 карты новых свойств. Включается в меню перед партией — все правила базовой игры остаются в силе." }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TerritoryList, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
 							className: "list-decimal space-y-2 pl-5",
 							children: [
@@ -3236,6 +3555,11 @@ function RulesPanel({ onClose }) {
 								}), " Растения и их свойства при подсчёте не учитываются — очки дают только животные и их свойства."] })
 							]
 						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+							className: "text-fg",
+							children: "Виды растений"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlantsList, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 							className: "text-fg",
 							children: "Свойства растений"
@@ -3757,13 +4081,14 @@ function useActionFx(state) {
 		const floraEl = (id) => document.querySelector(`[data-flora-id="${id}"]`);
 		const sectionEl = (id) => document.querySelector(`[data-player-section="${id}"]`);
 		const created = [];
-		const push = (point, text, tone) => {
+		const push = (point, text, tone, image) => {
 			idRef.current += 1;
 			created.push({
 				id: idRef.current,
 				...point,
 				text,
-				tone
+				tone,
+				image
 			});
 		};
 		for (const e of state.lastEvents) switch (e.kind) {
@@ -3837,9 +4162,18 @@ function useActionFx(state) {
 			case "handLost":
 				push(anchorOf(sectionEl(e.playerId)), "рука сброшена (прозрение)", "bad");
 				break;
-			case "cardsDrawn": for (let i = 0; i < e.counts.length; i++) {
-				const n = e.counts[i];
-				if (n > 0) push(anchorOf(sectionEl(i)), `+${n} ${n === 1 ? "карта" : n < 5 ? "карты" : "карт"}`, "info");
+			case "cardsDrawn":
+				for (let i = 0; i < e.counts.length; i++) {
+					const n = e.counts[i];
+					if (n > 0) push(anchorOf(sectionEl(i)), `+${n} ${n === 1 ? "карта" : n < 5 ? "карты" : "карт"}`, "info");
+				}
+				break;
+			case "mutationFlipped": {
+				const traitName = e.trait ? TRAITS[e.trait].name : null;
+				const caption = e.usedAs === "trait" ? `«${traitName}»` : e.usedAs === "animal" ? "новый вид" : e.usedAs === "newSpecies" ? "вид-мутант" : e.usedAs === "population" ? "+1 животное" : e.usedAs === "plantTrait" ? `«${traitName}» на растении` : "в сброс";
+				const tone = e.usedAs === "trait" || e.usedAs === "plantTrait" ? e.trait && TRAITS[e.trait].harmful ? "bad" : "good" : "info";
+				push(anchorOf(sectionEl(e.playerId)), caption, tone, MUTATION_ART.flip);
+				break;
 			}
 		}
 		if (state.lastEvents.some((e) => e.kind === "animalDied")) {
@@ -4459,13 +4793,18 @@ function Table() {
 				children: state.phase === "foodBank" ? plantsOn || fungiOn ? "Кормовая база Океана определяется…" : state.foodRoll ? "Кубики брошены — кормовая база определяется…" : "Бросок кормовой базы…" : state.phase === "extinction" ? "Вымирание: ненакормленные животные погибают…" : state.phase === "growth" ? "Рост: растения разрастаются, добавляются новые…" : state.madTurn === (actor?.id ?? -2) ? `Безумие: раунд ${actor?.name ?? ""} проводит сосед справа…` : mode === "net" && actor && actor.id !== human.id ? `${actor.name} ходит…` : thinking ? `${actor?.name ?? "Соперник"} думает…` : "Ожидание"
 			})
 		}),
-		fx.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		fx.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			style: {
 				left: b.x,
 				top: b.y
 			},
-			className: cn("fx-badge rounded-full border px-2.5 py-1 text-xs font-semibold shadow-[var(--shadow-card)] backdrop-blur-sm", FX_TONE[b.tone]),
-			children: b.text
+			className: cn("fx-badge flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold shadow-[var(--shadow-card)] backdrop-blur-sm", FX_TONE[b.tone]),
+			children: [b.image ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+				src: b.image,
+				alt: "",
+				loading: "lazy",
+				className: "h-6 w-4 rounded-[2px] border border-ink/20 object-cover"
+			}) : null, b.text]
 		}, b.id)),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(EventSpotlight, {}),
 		state.pendingAttack && state.pendingAttack.waitingFor === human.id ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DefenseDock, {
@@ -4640,7 +4979,7 @@ function animalHighlight(state, animal, intent, isHumanTurn, feedActs, devActs) 
 	}
 	if (intent.kind === "plantAttack" && !intent.plantId) return false;
 	if (intent.kind === "graze" && !intent.animalId) return feedActs.some((a) => a.type === "feedGraze" && a.animalId === animal.id);
-	if (intent.kind === "take" || intent.kind === "none") return animal.ownerId === state.humanId && canReceiveFood(state, animal) && state.foodBank > 0;
+	if (intent.kind === "take" || intent.kind === "none") return feedActs.some((a) => a.type === "feedTake" && a.animalId === animal.id);
 	if (intent.kind === "hibernate") return feedActs.some((a) => a.type === "feedHibernate" && a.animalId === animal.id);
 	if (intent.kind === "fat") return feedActs.some((a) => a.type === "feedConvertFat" && a.animalId === animal.id);
 	if (intent.kind === "graze") return feedActs.some((a) => a.type === "feedGraze" && a.animalId === animal.id);
@@ -4803,8 +5142,15 @@ var PlayerSection = (0, import_react.memo)(function PlayerSection({ p, isHuman, 
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: cn("size-1.5 rounded-full bg-accent", thinking && "pulse-dot") }), thinking ? "думает…" : "ходит"]
 				}) : null]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "text-xs text-muted",
+				className: "flex items-center gap-1.5 text-xs text-muted",
 				children: [
+					randomMutations ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+						src: MUTATION_ART.deckBack,
+						alt: "",
+						loading: "lazy",
+						title: `Слепая колода: ${p.blindDeckCount ?? p.blindDeck?.length ?? 0}`,
+						className: "h-5 w-3.5 rounded-[2px] border border-border object-cover"
+					}) : null,
 					randomMutations ? `колода ${p.blindDeckCount ?? p.blindDeck?.length ?? 0}` : `рука ${p.handCount ?? p.hand.length}`,
 					" ",
 					"· сброс ",
@@ -5166,14 +5512,23 @@ function MutateDock({ human, intent, disabled, continents, canPlant, onNewAnimal
 		className: "space-y-2",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "flex items-center justify-between gap-2",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "text-xs text-muted",
-				children: disabled ? "Ход соперника" : mutating ? intent.kind === "mutateTrait" ? "Выберите свой вид из одного животного — карта вскроется на нём" : intent.kind === "mutatePop" ? "Выберите вид — карта станет +1 животным" : "Выберите растение — карта вскроется свойством на нём" : "Объявите розыгрыш верхней карты колоды — потом она вскроется"
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "flex min-w-0 items-center gap-1.5 text-xs text-muted",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+					src: MUTATION_ART.icon,
+					alt: "",
+					loading: "lazy",
+					className: "size-4 shrink-0 rounded-full object-cover"
+				}), disabled ? "Ход соперника" : mutating ? intent.kind === "mutateTrait" ? "Выберите свой вид из одного животного — карта вскроется на нём" : intent.kind === "mutatePop" ? "Выберите вид — карта станет +1 животным" : "Выберите растение — карта вскроется свойством на нём" : "Объявите розыгрыш верхней карты колоды — потом она вскроется"]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "text-[10px] uppercase tracking-wider",
-					children: "Колода"
+				title: `Слепая колода: ${left}`,
+				"aria-label": `Колода: ${left}`,
+				className: "flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface p-1 pr-2.5 text-xs text-muted",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+					src: MUTATION_ART.deckBack,
+					alt: "",
+					loading: "lazy",
+					className: "h-6 w-4 rounded-[2px] border border-border object-cover"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "font-display text-sm tabular-nums leading-none",
 					children: left

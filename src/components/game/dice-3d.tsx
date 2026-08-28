@@ -57,37 +57,83 @@ const PIPS: Record<number, Array<[number, number]>> = {
   ],
 };
 
-/** Грань кости: пергамент с кромкой и очками тушью (в стиле стола). */
-function dieFaceTexture(value: number): THREE.CanvasTexture {
-  const S = 128;
+/** Бумага граней — тот же лист, что лежит под игровым столом. */
+const PAPER_SRC = "/img/bg/texture-paper.jpg";
+let paperCache: Promise<HTMLImageElement | null> | null = null;
+function paperImage(): Promise<HTMLImageElement | null> {
+  paperCache ??= new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = PAPER_SRC;
+  });
+  return paperCache;
+}
+
+/**
+ * Грань кости: ровный тон цвета кормовой базы с лёгкой бумажной фактурой
+ * поверх (текстура стола, но приглушённо — тон доминирует), виньетка к кромке
+ * для объёма, очки — светлая кость с тёмной обводкой, как на окрашенной кости.
+ */
+function dieFaceTexture(value: number, paper: HTMLImageElement | null, tint: string): THREE.CanvasTexture {
+  const S = 256;
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = S;
   const ctx = canvas.getContext("2d")!;
-  const r = 18;
-  ctx.beginPath();
-  ctx.moveTo(r, 0);
-  ctx.arcTo(S, 0, S, S, r);
-  ctx.arcTo(S, S, 0, S, r);
-  ctx.arcTo(0, S, 0, 0, r);
-  ctx.arcTo(0, 0, S, 0, r);
-  ctx.closePath();
-  const grad = ctx.createLinearGradient(0, 0, 0, S);
-  grad.addColorStop(0, "#faf4e4");
-  grad.addColorStop(1, "#e7ddc4");
-  ctx.fillStyle = grad;
-  ctx.fill();
-  ctx.lineWidth = 4;
-  ctx.strokeStyle = "rgba(58,48,32,0.35)";
+  const r = 30;
+  const roundPath = () => {
+    ctx.beginPath();
+    ctx.moveTo(r, 0);
+    ctx.arcTo(S, 0, S, S, r);
+    ctx.arcTo(S, S, 0, S, r);
+    ctx.arcTo(0, S, 0, 0, r);
+    ctx.arcTo(0, 0, S, 0, r);
+    ctx.closePath();
+  };
+
+  // Насыщенный тон с мягким световым градиентом — основа грани.
+  ctx.fillStyle = tint;
+  ctx.fillRect(0, 0, S, S);
+  const light = ctx.createLinearGradient(0, 0, 0, S);
+  light.addColorStop(0, "rgba(255,246,225,0.32)");
+  light.addColorStop(0.5, "rgba(255,255,255,0)");
+  light.addColorStop(1, "rgba(24,14,6,0.24)");
+  ctx.fillStyle = light;
+  ctx.fillRect(0, 0, S, S);
+  // Бумажная фактура стола поверх — приглушённо, чтобы не гасить тон.
+  if (paper) {
+    roundPath();
+    ctx.save();
+    ctx.clip();
+    ctx.globalAlpha = 0.24;
+    ctx.drawImage(paper, 0, 0, S, S);
+    ctx.restore();
+  }
+  const vig = ctx.createRadialGradient(S / 2, S / 2, S * 0.32, S / 2, S / 2, S * 0.78);
+  vig.addColorStop(0, "rgba(0,0,0,0)");
+  vig.addColorStop(1, "rgba(28,18,10,0.34)");
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, S, S);
+
+  roundPath();
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = "rgba(35,24,15,0.5)";
   ctx.stroke();
+
   for (const [fx, fy] of PIPS[value] ?? []) {
     const x = fx * S;
     const y = fy * S;
-    const pip = ctx.createRadialGradient(x - 2, y - 2, 1, x, y, 11);
-    pip.addColorStop(0, "#4a4234");
-    pip.addColorStop(1, "#211c14");
-    ctx.fillStyle = pip;
+    // Очки — кость с двойным контуром: тёмная кромка и внутренняя тень-блик.
     ctx.beginPath();
-    ctx.arc(x, y, 10, 0, Math.PI * 2);
+    ctx.arc(x, y, 30, 0, Math.PI * 2);
+    ctx.fillStyle = "#f8f1de";
+    ctx.fill();
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = "rgba(30,20,12,0.6)";
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x - 4, y - 5, 11, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
     ctx.fill();
   }
   const tex = new THREE.CanvasTexture(canvas);
@@ -107,6 +153,7 @@ export function Dice3D({
   gap = 14,
   className,
   ariaLabel,
+  tint = "#b4453a",
 }: {
   /** Выпавшие значения; null — кубик ещё летит без значения. */
   values: Array<number | null>;
@@ -117,6 +164,8 @@ export function Dice3D({
   gap?: number;
   className?: string;
   ariaLabel?: string;
+  /** Цвет граней (по умолчанию — красный кормовой базы); бумага тонируется им целиком. */
+  tint?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rollingRef = useRef(rolling);
@@ -132,14 +181,30 @@ export function Dice3D({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    // Сцена строится после загрузки бумаги; при сбое — с градиентным фолбэком.
+    paperImage().then((paper) => {
+      if (disposed || !canvasRef.current) return;
+      cleanup = buildScene(canvasRef.current, paper, tint);
+    });
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+    // Пересоздаём сцену только на новый бросок или смену числа кубиков.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rollKey, n, width, height, tint]);
 
-    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+  function buildScene(canvas: HTMLCanvasElement, paper: HTMLImageElement | null, tint: string) {
+    // preserveDrawingBuffer — чтобы кубики попадали в скриншоты (QA, шеринг).
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(width, height, false);
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(30, width / height, 0.1, 50);
-    camera.position.set(0, 1.9, 6.6);
+    const camera = new THREE.PerspectiveCamera(34, width / height, 0.1, 50);
+    camera.position.set(0, 1.7, 5.4);
     camera.lookAt(0, 0, 0);
 
     scene.add(new THREE.AmbientLight(0xfff6e6, 1.05));
@@ -155,7 +220,7 @@ export function Dice3D({
     const materialFor = (value: number) => {
       let m = materialsByValue.get(value);
       if (!m) {
-        m = new THREE.MeshStandardMaterial({ map: dieFaceTexture(value), roughness: 0.38, metalness: 0.04 });
+        m = new THREE.MeshStandardMaterial({ map: dieFaceTexture(value, paper, tint), roughness: 0.38, metalness: 0.04 });
         materialsByValue.set(value, m);
       }
       return m;
@@ -225,9 +290,7 @@ export function Dice3D({
       }
       renderer.dispose();
     };
-    // Пересоздаём сцену только на новый бросок или смену числа кубиков.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rollKey, n, width, height]);
+  }
 
   return (
     <canvas

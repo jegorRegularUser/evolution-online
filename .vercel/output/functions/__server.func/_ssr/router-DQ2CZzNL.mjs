@@ -3,8 +3,8 @@ import { n as require_react } from "../_libs/@radix-ui/react-compose-refs+[...].
 import { _ as createRootRoute, d as HeadContent, g as createFileRoute, h as lazyRouteComponent, m as Outlet, p as createRouter, u as Scripts, v as useRouter, y as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
 import { a as number, c as union, i as literal, o as object, s as string } from "../_libs/zod.mjs";
 import { n as TriangleAlert } from "../_libs/lucide-react.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/router-C-rIuw5S.js
-var router_C_rIuw5S_exports = /* @__PURE__ */ __exportAll({ getRouter: () => getRouter });
+//#region node_modules/.nitro/vite/services/ssr/assets/router-DQ2CZzNL.js
+var router_DQ2CZzNL_exports = /* @__PURE__ */ __exportAll({ getRouter: () => getRouter });
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 function AppErrorComponent({ error }) {
@@ -273,7 +273,7 @@ function PreviewHostBridge() {
 	}, [router]);
 	return null;
 }
-var styles_default = "/assets/styles-7cJjVhaU.css";
+var styles_default = "/assets/styles-Dxy3AE4K.css";
 var APP_NAME = "Эволюция";
 var Route$1 = createRootRoute({
 	head: () => ({
@@ -327,7 +327,7 @@ var Route$1 = createRootRoute({
 		] })]
 	})
 });
-var $$splitComponentImporter = () => import("./routes-BIHn9pZV.mjs");
+var $$splitComponentImporter = () => import("./routes-CV90TUFu.mjs");
 var rootRouteChildren = { IndexRoute: createFileRoute("/")({ component: lazyRouteComponent($$splitComponentImporter, "component") }).update({
 	id: "/",
 	path: "/",
@@ -341,4 +341,4 @@ function getRouter() {
 	});
 }
 //#endregion
-export { getRouter, router_C_rIuw5S_exports as t };
+export { getRouter, router_DQ2CZzNL_exports as t };

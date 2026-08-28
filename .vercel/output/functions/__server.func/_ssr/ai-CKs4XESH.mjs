@@ -1,5 +1,5 @@
 import { a as number, c as union, i as literal, n as boolean, o as object, r as custom, s as string, t as _enum } from "../_libs/zod.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/ai-BoVvw1cM.js
+//#region node_modules/.nitro/vite/services/ssr/assets/ai-CKs4XESH.js
 /**
 * Общий контракт сетевой партии: типы кадров опроса, zod-схемы входа и
 * серверные константы темпа. Импортируется и клиентом, и сервером;
@@ -44,7 +44,8 @@ var createRoomInput = object({
 	modules: object({
 		continents: boolean().optional(),
 		plants: boolean().optional(),
-		fungi: boolean().optional()
+		fungi: boolean().optional(),
+		randomMutations: boolean().optional()
 	}).partial().default({}).optional()
 });
 var joinRoomInput = object({
@@ -2515,7 +2516,17 @@ function finishPlantKill(state, plant, prey, tokens) {
 		plant.doomed = true;
 		log(state, `Добыча была ядовитой — растение погибнет в вымирание.`, "bad");
 	}
-	if (hasTrait(prey, "regeneration")) {
+	if (state.modules.randomMutations && (prey.population ?? 1) > 1) {
+		prey.population = (prey.population ?? 1) - 1;
+		ev(state, {
+			kind: "populationLost",
+			animalId: prey.id,
+			to: prey.population
+		});
+		log(state, `${victim.name}: вид теряет животное (осталось ${prey.population}).`, "bad");
+		feedFungi(state);
+		spreadFungalGrowth(state);
+	} else if (hasTrait(prey, "regeneration")) {
 		state.pendingRegeneration = [...state.pendingRegeneration ?? [], regenSnapshotOf(prey, victim.id)];
 		log(state, `Свойства съеденного регенерируют — владелец вернёт их животным.`, "good");
 		const p0 = ownerOf(state, prey.id);
@@ -4995,4 +5006,4 @@ function pickFeed(state, acts) {
 	return best;
 }
 //#endregion
-export { legalDevActions as A, findAnimal as C, isFed as D, isCarnivoreLike as E, player as M, pollInput as N, joinRoomInput as O, speciesNeed as P, currentActor as S, hasTrait as T, canReceiveFood as _, MUTATIONS_TRAIT_IDS as a, createGame as b, PLANTS_TRAIT_IDS as c, actionInput as d, applyAction as f, canRageAttack as g, canPlantAttackTarget as h, MARKS as i, legalFeedActions as j, legalDefenseActions as k, TRAITS as l, canAttack as m, FLORA as n, PACE as o, botsInput as p, FUNGI_TRAIT_IDS as r, PLANTS as s, CONTINENTS_TRAIT_IDS as t, TRAIT_ORDER as u, chooseAIAction as v, foodNeeded as w, createRoomInput as x, codeTokenInput as y };
+export { legalFeedActions as A, foodNeeded as C, joinRoomInput as D, isFed as E, pollInput as M, speciesNeed as N, legalDefenseActions as O, findAnimal as S, isCarnivoreLike as T, chooseAIAction as _, MUTATIONS_TRAIT_IDS as a, createRoomInput as b, PLANTS_TRAIT_IDS as c, actionInput as d, applyAction as f, canRageAttack as g, canPlantAttackTarget as h, MARKS as i, player as j, legalDevActions as k, TRAITS as l, canAttack as m, FLORA as n, PACE as o, botsInput as p, FUNGI_TRAIT_IDS as r, PLANTS as s, CONTINENTS_TRAIT_IDS as t, TRAIT_ORDER as u, codeTokenInput as v, hasTrait as w, currentActor as x, createGame as y };

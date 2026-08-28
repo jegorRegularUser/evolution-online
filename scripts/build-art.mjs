@@ -1,9 +1,13 @@
 // Сборка арт-ассетов: assets/grok-*.jpg -> public/img/** (пережим под веб).
 // Сопоставление — по 8-символьному префиксу имени файла.
-// Запуск: node scripts/build-art.mjs
+// Запуск: node scripts/build-art.mjs [--force]
+// Манифест scripts/.build-art-manifest.json защищает ручные правки готовых
+// картинок в public/img: пока исходник не менялся, сборка не перезаписывает
+// изменённый вручную выход. --force — пересобрать всё принудительно.
 import sharp from "sharp";
 import { readdir, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 
 const SRC = "assets";
@@ -280,11 +284,64 @@ async function processKind(kind, src, dest) {
   else await pipe.jpeg({ quality: kind === "og" ? 84 : 80, progressive: true, mozjpeg: true }).toFile(out);
 }
 
-let ok = 0;
+const MANIFEST_PATH = "scripts/.build-art-manifest.json";
+const FORCE = process.argv.includes("--force");
+
+function loadManifest() {
+  try {
+    return JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function hashFile(path) {
+  try {
+    return createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 16);
+  } catch {
+    return null;
+  }
+}
+
+const manifest = loadManifest();
+let built = 0;
+let kept = 0;
+let fresh = 0;
+const nextManifest = {};
 for (const [prefix, dest, kind] of JOBS) {
   const src = resolve(prefix, dest);
-  if (!src) continue;
+  const out = `${OUT}/${dest}`;
+  const outHash = hashFile(out);
+  const prev = manifest[dest];
+
+  if (!src) {
+    // Исходника нет: существующий выход — единственная истина (см. resolve).
+    if (outHash) nextManifest[dest] = { src: null, out: outHash };
+    continue;
+  }
+  const srcHash = hashFile(src);
+
+  if (!FORCE && outHash) {
+    if (prev && prev.src === srcHash && prev.out === outHash) {
+      // Уже собрано из этого же исходника — пересборка дала бы тот же файл.
+      nextManifest[dest] = prev;
+      fresh++;
+      continue;
+    }
+    if (!prev || (prev.src === srcHash && prev.out !== outHash)) {
+      // Либо манифест видит этот выход впервые (считаем существующий файл
+      // верным), либо исходник не менялся, а выход правили руками напрямую
+      // в public/img — сохраняем правку, не перезаписываем.
+      nextManifest[dest] = { src: srcHash, out: outHash };
+      kept++;
+      console.warn(`[build-art] ${dest}: оставляю существующий файл (правлен вручную или первая фиксация)`);
+      continue;
+    }
+  }
+
   await processKind(kind, src, dest);
-  ok++;
+  nextManifest[dest] = { src: srcHash, out: hashFile(out) };
+  built++;
 }
-console.log(`готово: ${ok} файлов -> ${OUT}/ и og/x-banner в public/`);
+writeFileSync(MANIFEST_PATH, `${JSON.stringify(nextManifest, null, 2)}\n`);
+console.log(`готово: собрано ${built}, оставлено ${kept}, без изменений ${fresh} -> ${OUT}/ и og/x-banner в public/`);
