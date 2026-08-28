@@ -5,7 +5,7 @@ import { NetMenuPanel } from "@/components/game/net-screens";
 import { FLORA, MARKS } from "@/game/flora";
 import { CONTINENTS_TRAIT_IDS, FUNGI_TRAIT_IDS, MUTATIONS_TRAIT_IDS, PLANTS_TRAIT_IDS, TRAITS, TRAIT_ORDER } from "@/game/traits";
 import type { Difficulty, FloraKind, MarkKind, ScoreBreakdown, TraitId } from "@/game/types";
-import { BG, DARK_ART, LOGO, TRAIT_ART } from "@/lib/art";
+import { BG, DARK_ART, FLORA_ART, LOGO, MARK_ART, TRAIT_ART } from "@/lib/art";
 import { cn } from "@/lib/utils";
 import { FloraGlyph, TraitGlyph } from "./icons";
 import { useGameStore } from "@/store/game-store";
@@ -338,14 +338,23 @@ function FloraList() {
         const f = FLORA[k];
         return (
           <li key={k} className="flex gap-3 rounded-[var(--radius-sm)] border border-border bg-bg p-3">
-            <span
-              className={cn(
-                "flex h-[68px] w-12 shrink-0 items-center justify-center rounded-[var(--radius-xs)] border",
-                f.isFungus ? "border-virus/40 bg-virus/10 text-virus" : "border-leaf/40 bg-leaf/10 text-leaf",
-              )}
-            >
-              <FloraGlyph kind={k} className="size-7" />
-            </span>
+            {FLORA_ART[k] ? (
+              <img
+                src={FLORA_ART[k]}
+                alt=""
+                loading="lazy"
+                className="h-[68px] w-[102px] shrink-0 rounded-[var(--radius-xs)] border border-border object-cover"
+              />
+            ) : (
+              <span
+                className={cn(
+                  "flex h-[68px] w-[102px] shrink-0 items-center justify-center rounded-[var(--radius-xs)] border",
+                  f.isFungus ? "border-virus/40 bg-virus/10 text-virus" : "border-leaf/40 bg-leaf/10 text-leaf",
+                )}
+              >
+                <FloraGlyph kind={k} className="size-7" />
+              </span>
+            )}
             <div>
               <div className="font-medium text-fg">
                 {f.name}
@@ -368,9 +377,17 @@ function MarksList() {
       {kinds.map((k) => {
         const m = MARKS[k];
         return (
-          <li key={k} className="rounded-[var(--radius-sm)] border border-border bg-bg p-3">
-            <div className="font-medium text-fg">Метка «{m.name}» · по 4 в комплекте</div>
-            <div className="mt-1 text-xs leading-snug">{m.description}</div>
+          <li key={k} className="flex gap-3 rounded-[var(--radius-sm)] border border-border bg-bg p-3">
+            <img
+              src={MARK_ART[k]}
+              alt=""
+              loading="lazy"
+              className="size-10 shrink-0 self-start rounded-full object-cover ring-1 ring-border"
+            />
+            <div>
+              <div className="font-medium text-fg">Метка «{m.name}» · по 4 в комплекте</div>
+              <div className="mt-1 text-xs leading-snug">{m.description}</div>
+            </div>
           </li>
         );
       })}

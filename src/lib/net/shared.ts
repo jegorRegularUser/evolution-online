@@ -89,6 +89,7 @@ export const createRoomInput = z.object({
       continents: z.boolean().optional(),
       plants: z.boolean().optional(),
       fungi: z.boolean().optional(),
+      randomMutations: z.boolean().optional(),
     })
     .partial()
     .default({})

@@ -1,4 +1,4 @@
-import type { FloraKind, PlantKind, TraitId } from "@/game/types";
+import type { FloraKind, MarkKind, PlantKind, TraitId } from "@/game/types";
 
 /**
  * Реестр арт-ассетов (public/img, собираются scripts/build-art.mjs из assets/).
@@ -49,17 +49,17 @@ export const TRAIT_ART: Partial<Record<TraitId, string>> = {
   tree: "/img/trait/tree.jpg",
   nutritious: "/img/trait/nutritious.jpg",
   honeyPlant: "/img/trait/honeyPlant.jpg",
-  // Дополнение «Трава и грибы» (арта пока нет — UI рисует глифы)
-  // transparent: "/img/trait/transparent.jpg",
-  // insectivore: "/img/trait/insectivore.jpg",
-  // Дополнение «Случайные мутации» (арта пока нет — UI рисует глифы)
-  // obligateCarnivore: "/img/trait/obligateCarnivore.jpg",
-  // budding: "/img/trait/budding.jpg",
-  // metabolicSyndrome: "/img/trait/metabolicSyndrome.jpg",
-  // barkBeetle: "/img/trait/barkBeetle.jpg",
-  // extremophile: "/img/trait/extremophile.jpg",
-  // developmentDefects: "/img/trait/developmentDefects.jpg",
-  // simplification: "/img/trait/simplification.jpg",
+  // Дополнение «Трава и грибы»
+  transparent: "/img/trait/transparent.jpg",
+  insectivore: "/img/trait/insectivore.jpg",
+  // Дополнение «Случайные мутации» (тёмные — сумеречный пергамент)
+  obligateCarnivore: "/img/trait/obligateCarnivore.jpg",
+  budding: "/img/trait/budding.jpg",
+  metabolicSyndrome: "/img/trait/metabolicSyndrome.jpg",
+  barkBeetle: "/img/trait/barkBeetle.jpg",
+  extremophile: "/img/trait/extremophile.jpg",
+  developmentDefects: "/img/trait/developmentDefects.jpg",
+  simplification: "/img/trait/simplification.jpg",
 };
 
 /** Есть ли сгенерированная картинка свойства; нет — UI рисует векторный глиф. */
@@ -85,6 +85,7 @@ export const SPECIES_EXTINCT = "/img/species/extinct.jpg";
 /**
  * Жетоны еды. red — фишка из кормовой базы, blue — мясо и всё, что приходит
  * от свойств (охота, сотрудничество, пиратство, падальщик, хвост, жир).
+ * population — жетон численности вида («Случайные мутации», тёмная эмблема).
  */
 export const TOKEN = {
   meat: "/img/token/meat.jpg",
@@ -92,6 +93,14 @@ export const TOKEN = {
   blue: "/img/token/blue.jpg",
   plant: "/img/token/plant.jpg",
   fat: "/img/token/fat.jpg",
+  population: "/img/token/population.jpg",
+} as const;
+
+/** Мета-арт «Случайных мутаций»: рубашка слепой колоды, флип вскрытия, иконка. */
+export const MUTATION_ART = {
+  deckBack: "/img/mutation/deckback.jpg",
+  flip: "/img/mutation/flip.jpg",
+  icon: "/img/mutation/icon.jpg",
 } as const;
 
 /** Фоны и крупные декорации. */
@@ -143,20 +152,31 @@ export const PLANT_ART: Partial<Record<PlantKind, string>> = {
 };
 
 /**
- * Арты карт флоры «Травы и грибов» (4:3). Пока картинок нет — карточка
- * рисует векторный глиф (гриб/травинка) и цветную рамку происхождения.
+ * Арты карт флоры «Травы и грибов» (3:2, верх карточки флоры 4:3 с object-cover).
  */
 export const FLORA_ART: Partial<Record<FloraKind, string>> = {
-  // toadstool: "/img/flora/toadstool.jpg",
-  // mold: "/img/flora/mold.jpg",
-  // madCap: "/img/flora/madCap.jpg",
-  // flyAgaric: "/img/flora/flyAgaric.jpg",
-  // insight: "/img/flora/insight.jpg",
-  // soaring: "/img/flora/soaring.jpg",
-  // sleepGrass: "/img/flora/sleepGrass.jpg",
-  // thryn: "/img/flora/thryn.jpg",
-  // datura: "/img/flora/datura.jpg",
-  // smile: "/img/flora/smile.jpg",
-  // cleanser: "/img/flora/cleanser.jpg",
-  // passionflower: "/img/flora/passionflower.jpg",
+  toadstool: "/img/flora/toadstool.jpg",
+  mold: "/img/flora/mold.jpg",
+  madCap: "/img/flora/madCap.jpg",
+  flyAgaric: "/img/flora/flyAgaric.jpg",
+  insight: "/img/flora/insight.jpg",
+  soaring: "/img/flora/soaring.jpg",
+  sleepGrass: "/img/flora/sleepGrass.jpg",
+  thryn: "/img/flora/thryn.jpg",
+  datura: "/img/flora/datura.jpg",
+  smile: "/img/flora/smile.jpg",
+  cleanser: "/img/flora/cleanser.jpg",
+  passionflower: "/img/flora/passionflower.jpg",
+};
+
+/** Жетоны меток последствий «Травы и грибов» (1:1, тёмный фон #101010). */
+export const MARK_ART: Record<MarkKind, string> = {
+  poison: "/img/mark/poison.jpg",
+  antidote: "/img/mark/antidote.jpg",
+  madness: "/img/mark/madness.jpg",
+  rage: "/img/mark/rage.jpg",
+  sleep: "/img/mark/sleep.jpg",
+  thryn: "/img/mark/thryn.jpg",
+  haze: "/img/mark/haze.jpg",
+  pacifism: "/img/mark/pacifism.jpg",
 };

@@ -7,7 +7,7 @@ import { TERRITORIES } from "@/game/types";
 import { currentActor, legalDefenseActions, legalDevActions, legalFeedActions } from "@/game/engine";
 import { canAttack, canPlantAttackTarget, canReceiveFood, canRageAttack, findAnimal, foodNeeded, hasTrait, player } from "@/game/queries";
 import { cn } from "@/lib/utils";
-import { BG, LOGO, PHASE_ICON, TERRITORY_ART } from "@/lib/art";
+import { BG, LOGO, MUTATION_ART, PHASE_ICON, TERRITORY_ART } from "@/lib/art";
 import { loadSpeed, useGameStore, type UiIntent } from "@/store/game-store";
 import { AnimalCard, HandCard, PAIR_COLORS, PairPlate, type PairMark } from "./cards";
 import { FloraStrip } from "./cards-flora";
@@ -49,6 +49,8 @@ interface FxBadge {
   y: number;
   text: string;
   tone: "attack" | "good" | "bad" | "info";
+  /** Миниатюра (жетон, карта) слева от подписи — например, флип вскрытой мутации. */
+  image?: string;
 }
 
 const FX_TONE: Record<FxBadge["tone"], string> = {
@@ -92,9 +94,9 @@ function useActionFx(state: GameState | null): FxBadge[] {
     const sectionEl = (id: number) => document.querySelector(`[data-player-section="${id}"]`);
 
     const created: FxBadge[] = [];
-    const push = (point: { x: number; y: number }, text: string, tone: FxBadge["tone"]) => {
+    const push = (point: { x: number; y: number }, text: string, tone: FxBadge["tone"], image?: string) => {
       idRef.current += 1;
-      created.push({ id: idRef.current, ...point, text, tone });
+      created.push({ id: idRef.current, ...point, text, tone, image });
     };
 
     for (const e of state.lastEvents) {
@@ -191,6 +193,31 @@ function useActionFx(state: GameState | null): FxBadge[] {
             const n = e.counts[i]!;
             if (n > 0) push(anchorOf(sectionEl(i)), `+${n} ${n === 1 ? "карта" : n < 5 ? "карты" : "карт"}`, "info");
           }
+          break;
+        }
+        // ── «Случайные мутации» ──
+        case "mutationFlipped": {
+          // Флип-карта — общая для всех вскрытий; подпись зависит от розыгрыша.
+          const traitName = e.trait ? TRAITS[e.trait].name : null;
+          const caption =
+            e.usedAs === "trait"
+              ? `«${traitName}»`
+              : e.usedAs === "animal"
+                ? "новый вид"
+                : e.usedAs === "newSpecies"
+                  ? "вид-мутант"
+                  : e.usedAs === "population"
+                    ? "+1 животное"
+                    : e.usedAs === "plantTrait"
+                      ? `«${traitName}» на растении`
+                      : "в сброс";
+          const tone: FxBadge["tone"] =
+            e.usedAs === "trait" || e.usedAs === "plantTrait"
+              ? e.trait && TRAITS[e.trait].harmful
+                ? "bad"
+                : "good"
+              : "info";
+          push(anchorOf(sectionEl(e.playerId)), caption, tone, MUTATION_ART.flip);
           break;
         }
         default:
@@ -833,7 +860,10 @@ function Table() {
       </footer>
 
       {fx.map((b) => (
-        <div key={b.id} style={{ left: b.x, top: b.y }} className={cn("fx-badge rounded-full border px-2.5 py-1 text-xs font-semibold shadow-[var(--shadow-card)] backdrop-blur-sm", FX_TONE[b.tone])}>
+        <div key={b.id} style={{ left: b.x, top: b.y }} className={cn("fx-badge flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold shadow-[var(--shadow-card)] backdrop-blur-sm", FX_TONE[b.tone])}>
+          {b.image ? (
+            <img src={b.image} alt="" loading="lazy" className="h-6 w-4 rounded-[2px] border border-ink/20 object-cover" />
+          ) : null}
           {b.text}
         </div>
       ))}
@@ -1282,7 +1312,16 @@ const PlayerSection = memo(function PlayerSection({
             </span>
           ) : null}
         </span>
-        <span className="text-xs text-muted">
+        <span className="flex items-center gap-1.5 text-xs text-muted">
+          {randomMutations ? (
+            <img
+              src={MUTATION_ART.deckBack}
+              alt=""
+              loading="lazy"
+              title={`Слепая колода: ${p.blindDeckCount ?? p.blindDeck?.length ?? 0}`}
+              className="h-5 w-3.5 rounded-[2px] border border-border object-cover"
+            />
+          ) : null}
           {randomMutations
             ? `колода ${p.blindDeckCount ?? p.blindDeck?.length ?? 0}`
             : `рука ${p.handCount ?? p.hand.length}`}{" "}
@@ -1677,7 +1716,13 @@ function MutateDock({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs text-muted">
+        <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted">
+          <img
+            src={MUTATION_ART.icon}
+            alt=""
+            loading="lazy"
+            className="size-4 shrink-0 rounded-full object-cover"
+          />
           {disabled
             ? "Ход соперника"
             : mutating
@@ -1688,8 +1733,17 @@ function MutateDock({
                   : "Выберите растение — карта вскроется свойством на нём"
               : "Объявите розыгрыш верхней карты колоды — потом она вскроется"}
         </p>
-        <span className="flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted">
-          <span className="text-[10px] uppercase tracking-wider">Колода</span>
+        <span
+          title={`Слепая колода: ${left}`}
+          aria-label={`Колода: ${left}`}
+          className="flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface p-1 pr-2.5 text-xs text-muted"
+        >
+          <img
+            src={MUTATION_ART.deckBack}
+            alt=""
+            loading="lazy"
+            className="h-6 w-4 rounded-[2px] border border-border object-cover"
+          />
           <span className="font-display text-sm tabular-nums leading-none">{left}</span>
         </span>
       </div>

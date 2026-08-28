@@ -8,7 +8,7 @@ import { dirname } from "node:path";
 
 const SRC = "assets";
 // Новые партии складываются в подпапки assets/; сканируем все известные.
-const SRC_DIRS = [SRC, `${SRC}/continents`, `${SRC}/plants`];
+const SRC_DIRS = [SRC, `${SRC}/continents`, `${SRC}/plants`, `${SRC}/mushrooms`, `${SRC}/random mutations`];
 const OUT = "public/img";
 
 // kind: см. processKind ниже
@@ -147,10 +147,48 @@ const JOBS = [
   ["trait-tree", "trait/tree.jpg", "asis"],
   ["trait-nutritious", "trait/nutritious.jpg", "asis"],
   ["trait-honeyPlant", "trait/honeyPlant.jpg", "asis"],
+  // --- дополнение «Трава и грибы»: карты флоры (3:2, kind asis) ---
+  ["flora-toadstool", "flora/toadstool.jpg", "asis"],
+  ["flora-mold", "flora/mold.jpg", "asis"],
+  ["flora-madCap", "flora/madCap.jpg", "asis"],
+  ["flora-flyAgaric", "flora/flyAgaric.jpg", "asis"],
+  ["flora-insight", "flora/insight.jpg", "asis"],
+  ["flora-soaring", "flora/soaring.jpg", "asis"],
+  ["flora-sleepGrass", "flora/sleepGrass.jpg", "asis"],
+  ["flora-thryn", "flora/thryn.jpg", "asis"],
+  ["flora-datura", "flora/datura.jpg", "asis"],
+  ["flora-smile", "flora/smile.jpg", "asis"],
+  ["flora-cleanser", "flora/cleanser.jpg", "asis"],
+  ["flora-passionflower", "flora/passionflower.jpg", "asis"],
+  // --- дополнение «Трава и грибы»: свойства (2:3, kind asis) ---
+  ["trait-transparent", "trait/transparent.jpg", "asis"],
+  ["trait-insectivore", "trait/insectivore.jpg", "asis"],
+  // --- дополнение «Трава и грибы»: жетоны меток последствий (1:1, фон #101010) ---
+  ["mark-poison", "mark/poison.jpg", "tok"],
+  ["mark-antidote", "mark/antidote.jpg", "tok"],
+  ["mark-madness", "mark/madness.jpg", "tok"],
+  ["mark-rage", "mark/rage.jpg", "tok"],
+  ["mark-sleep", "mark/sleep.jpg", "tok"],
+  ["mark-thryn", "mark/thryn.jpg", "tok"],
+  ["mark-haze", "mark/haze.jpg", "tok"],
+  ["mark-pacifism", "mark/pacifism.jpg", "tok"],
   // --- мутации ---
   ["1da57803", "mutation/virus-1.jpg", "mut"],
   ["85c9dadb", "mutation/virus-2.jpg", "mut"],
   ["ed4296da", "mutation/virus-3.jpg", "mut"],
+  // --- дополнение «Случайные мутации»: свойства (2:3, сумеречный пергамент у тёмных) ---
+  ["trait-obligateCarnivore", "trait/obligateCarnivore.jpg", "card"],
+  ["trait-budding", "trait/budding.jpg", "card"],
+  ["trait-metabolicSyndrome", "trait/metabolicSyndrome.jpg", "card"],
+  ["trait-barkBeetle", "trait/barkBeetle.jpg", "card"],
+  ["trait-extremophile", "trait/extremophile.jpg", "card"],
+  ["trait-developmentDefects", "trait/developmentDefects.jpg", "card"],
+  ["trait-simplification", "trait/simplification.jpg", "card"],
+  // --- дополнение «Случайные мутации»: мета (рубашка слепой колоды, флип, жетон численности, иконка) ---
+  ["mutation-deckback", "mutation/deckback.jpg", "card"],
+  ["mutation-flip", "mutation/flip.jpg", "card"],
+  ["token-population", "token/population.jpg", "tok"],
+  ["icon-mutation", "mutation/icon.jpg", "mut"],
   // --- грибы ---
   ["d74b641a", "fungi/cluster.jpg", "sq512"],
   ["e3dc8410", "fungi/mycelium.jpg", "sq512"],

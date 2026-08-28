@@ -3,7 +3,7 @@ import { TRAITS } from "@/game/traits";
 import type { Animal, Card, TraitId } from "@/game/types";
 import { hasTrait, isCarnivoreLike, isFed, speciesNeed } from "@/game/queries";
 import { cn } from "@/lib/utils";
-import { DARK_ART, TRAIT_ART, speciesArt } from "@/lib/art";
+import { DARK_ART, TOKEN, TRAIT_ART, speciesArt } from "@/lib/art";
 import { MarkChip } from "./cards-flora";
 import { FoodCube, TraitGlyph } from "./icons";
 import { TraitTooltip } from "./trait-tip";
@@ -236,8 +236,9 @@ export const AnimalCard = memo(function AnimalCard({
           {(animal.population ?? 1) > 1 ? (
             <span
               title={`Численность вида: ${animal.population} животного(-ых)`}
-              className="rounded-full bg-accent/20 px-1.5 text-[10px] font-semibold tabular-nums text-accent"
+              className="flex items-center gap-0.5 rounded-full bg-accent/20 px-1.5 text-[10px] font-semibold tabular-nums text-accent"
             >
+              <img src={TOKEN.population} alt="" loading="lazy" className="size-3 rounded-full object-cover" />
               ×{animal.population}
             </span>
           ) : null}

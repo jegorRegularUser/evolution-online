@@ -1,7 +1,7 @@
 import { memo } from "react";
 import { FLORA, FLORA_MAX_TOKENS, MARKS } from "@/game/flora";
 import type { FloraCard, GameState, MarkKind, TerritoryId } from "@/game/types";
-import { FLORA_ART } from "@/lib/art";
+import { FLORA_ART, MARK_ART } from "@/lib/art";
 import { cn } from "@/lib/utils";
 import { FloraGlyph, FoodCube } from "./icons";
 import { TraitTooltip, type TipDef } from "./trait-tip";
@@ -19,11 +19,16 @@ const MARK_TONE: Record<MarkKind, string> = {
   pacifism: "border-water/50 bg-water/15 text-water",
 };
 
-/** Чип метки последствий на животном: цвет по виду, правило — в подсказке. */
+/** Чип метки последствий на животном: жетон-картинка и цвет по виду, правило — в подсказке. */
 export const MarkChip = memo(function MarkChip({ mark }: { mark: MarkKind }) {
   const def = MARKS[mark];
   const tip = useTraitTip({ isolateClick: true });
-  const tipDef: TipDef = { id: mark, name: `Метка «${def.name}»`, description: def.description };
+  const tipDef: TipDef = {
+    id: mark,
+    name: `Метка «${def.name}»`,
+    description: def.description,
+    image: MARK_ART[mark],
+  };
   return (
     <span
       ref={(el) => {
@@ -36,6 +41,7 @@ export const MarkChip = memo(function MarkChip({ mark }: { mark: MarkKind }) {
         MARK_TONE[mark],
       )}
     >
+      <img src={MARK_ART[mark]} alt="" loading="lazy" className="size-3.5 shrink-0 rounded-full object-cover" />
       {def.short}
       {tip.anchorRect ? <TraitTooltip def={tipDef} anchorRect={tip.anchorRect} id={tip.tipId} /> : null}
     </span>
@@ -130,15 +136,13 @@ export const FloraCardView = memo(function FloraCardView({
           {flora.food === 0 ? <span className="text-[10px] text-ink-soft">без еды</span> : null}
         </span>
         {def.mark ? (
-          <span
-            className={cn(
-              "ml-auto rounded-full border px-1.5 text-[9px] font-semibold",
-              MARK_TONE[def.mark],
-            )}
+          <img
+            src={MARK_ART[def.mark]}
+            alt={`Метка «${MARKS[def.mark].name}»`}
+            loading="lazy"
             title={`Даёт метку «${MARKS[def.mark].name}»`}
-          >
-            метка
-          </span>
+            className="ml-auto size-4 shrink-0 rounded-full object-cover ring-1 ring-border-strong/40"
+          />
         ) : null}
       </div>
       {tip.anchorRect ? (
