@@ -354,14 +354,60 @@ interface FlyingFood {
 }
 
 /**
+ * Летящая фишка еды: стартует точно от источника (инлайн-трансформ виден ещё
+ * до первого кадра анимации) и перелетает к животному через Web Animations
+ * API — надёжнее CSS-keyframes с переменными и без «висения» на старте.
+ */
+function FlyingCube({ item, onDone }: { item: FlyingFood; onDone: (id: number) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // onDone дергается из onfinish — держим актуальную ссылку без перезапуска эффекта.
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      onDoneRef.current(item.id);
+      return;
+    }
+    const anim = el.animate(
+      [
+        { transform: `translate(${item.from.x}px, ${item.from.y}px) scale(0.9)`, opacity: "0" },
+        { transform: `translate(${item.from.x}px, ${item.from.y}px) scale(1)`, opacity: "1", offset: 0.15 },
+        { transform: `translate(${item.to.x}px, ${item.to.y}px) scale(1.06)`, opacity: "1", offset: 0.78 },
+        { transform: `translate(${item.to.x}px, ${item.to.y}px) scale(0.6)`, opacity: "0" },
+      ],
+      { duration: 500, easing: "cubic-bezier(0.22, 0.61, 0.36, 1)" },
+    );
+    anim.onfinish = () => onDoneRef.current(item.id);
+    return () => anim.cancel();
+  }, [item]);
+
+  return (
+    <div
+      ref={ref}
+      className="food-fly"
+      style={{ transform: `translate(${item.from.x}px, ${item.from.y}px)` }}
+    >
+      <FoodCube tone={item.tone} className="size-5 drop-shadow-md" />
+    </div>
+  );
+}
+
+/**
  * Фишка еды «летит» по столу от источника (кормовая база, растение, флора)
  * к карточке животного — вместо простого pop-in на месте. Работает поверх
  * тех же событий последнего действия, что и визуальные бейджи.
  */
-function useFoodFly(state: GameState | null): FlyingFood[] {
+function useFoodFly(state: GameState | null): { flies: FlyingFood[]; remove: (id: number) => void } {
   const [items, setItems] = useState<FlyingFood[]>([]);
   const seqRef = useRef(0);
   const idRef = useRef(0);
+
+  const remove = useCallback((id: number) => {
+    setItems((prev) => prev.filter((b) => b.id !== id));
+  }, []);
 
   useEffect(() => {
     if (!state || state.eventSeq === seqRef.current) return;
@@ -409,12 +455,13 @@ function useFoodFly(state: GameState | null): FlyingFood[] {
 
     if (created.length) {
       setItems((prev) => [...prev, ...created]);
+      // Страховка: если вкладка была скрыта и onfinish не пришёл.
       const ids = new Set(created.map((c) => c.id));
-      setTimeout(() => setItems((prev) => prev.filter((b) => !ids.has(b.id))), 600);
+      setTimeout(() => setItems((prev) => prev.filter((b) => !ids.has(b.id))), 2000);
     }
   }, [state]);
 
-  return items;
+  return { flies: items, remove };
 }
 
 export function GameApp() {
@@ -1206,21 +1253,8 @@ function Table() {
         </div>
       ))}
 
-      {fly.map((f) => (
-        <div
-          key={f.id}
-          className="food-fly"
-          style={
-            {
-              "--from-x": `${f.from.x}px`,
-              "--from-y": `${f.from.y}px`,
-              "--to-x": `${f.to.x}px`,
-              "--to-y": `${f.to.y}px`,
-            } as React.CSSProperties
-          }
-        >
-          <FoodCube tone={f.tone} className="size-5" />
-        </div>
+      {fly.flies.map((f) => (
+        <FlyingCube key={f.id} item={f} onDone={fly.remove} />
       ))}
 
       <EventSpotlight />

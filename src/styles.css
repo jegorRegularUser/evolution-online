@@ -282,20 +282,15 @@
 }
 
 /* ── Полёт фишки еды от источника к животному ─────────────────────────── */
-/* Координаты --from-*/--to-* подставляет JS из getBoundingClientRect. */
+/* Позиционирование летящей фишки; сам полёт анимирует Web Animations API
+   в game-app.tsx — стартовая точка задаётся инлайн-трансформом. */
 .food-fly {
   position: fixed;
   left: 0;
   top: 0;
   z-index: 55;
   pointer-events: none;
-  animation: food-fly-kf 0.5s var(--ease-out) forwards;
-}
-@keyframes food-fly-kf {
-  0% { transform: translate(var(--from-x), var(--from-y)) scale(0.9); opacity: 0; }
-  12% { opacity: 1; }
-  75% { transform: translate(var(--to-x), var(--to-y)) scale(1.08); opacity: 1; }
-  100% { transform: translate(var(--to-x), var(--to-y)) scale(0.55); opacity: 0; }
+  will-change: transform;
 }
 
 /* Каскадный влёт новых карт руки — задержку задаёт инлайн-стиль. */

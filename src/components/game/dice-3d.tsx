@@ -187,10 +187,13 @@ export function Dice3D({
     if (!canvas) return;
     let disposed = false;
     let cleanup: (() => void) | undefined;
-    // Сцена строится после загрузки бумаги; при сбое — с градиентным фолбэком.
+    // Сцена строится после загрузки бумаги и следующего кадра — создание
+    // WebGL-контекста и текстур не блокирует отрисовку хода партии.
     paperImage().then((paper) => {
-      if (disposed || !canvasRef.current) return;
-      cleanup = buildScene(canvasRef.current, paper, tint);
+      requestAnimationFrame(() => {
+        if (disposed || !canvasRef.current) return;
+        cleanup = buildScene(canvasRef.current, paper, tint);
+      });
     });
     return () => {
       disposed = true;
@@ -206,6 +209,9 @@ export function Dice3D({
     renderer.setSize(width, height, false);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Тени перерисовываем только пока идёт физика: после укладки кучки
+    // карта теней замораживается — рендер стоит копейки.
+    renderer.shadowMap.autoUpdate = false;
 
     // Ортографическая камера с наклоном сверху: «настольный» вид, кубики
     // одинакового размера в любой точке лотка, верхняя грань всегда читается.
@@ -221,7 +227,7 @@ export function Dice3D({
     const key = new THREE.DirectionalLight(0xffffff, 1.8);
     key.position.set(3, 6, 2);
     key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.mapSize.set(512, 512);
     key.shadow.camera.left = -5;
     key.shadow.camera.right = 5;
     key.shadow.camera.top = 5;
@@ -333,6 +339,8 @@ export function Dice3D({
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
       elapsed += dt;
+      // Пока кубики движутся — тени живые; после укладки карта замораживается.
+      if (!done) renderer.shadowMap.needsUpdate = true;
 
       // Фаза 1 — физика: падение, столкновения, кучкование.
       if (!settled) {

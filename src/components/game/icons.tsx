@@ -254,14 +254,16 @@ export function FloraGlyph({ kind, className }: { kind: FloraKind; className?: s
 
 /**
  * Кубик-фишка еды (как в настольной игре): изометрический куб с тремя
- * видимыми гранями разной яркости. Красный — еда из кормовой базы, синий —
- * от свойств (охота, сотрудничество…), жёлтый — жир, зелёный — еда растений.
+ * видимыми гранями разной яркости — верхняя со световым бликом и светлым
+ * ребром, чтобы фишка читалась объёмной даже в 14 пикселях. Красный — еда
+ * из кормовой базы, синий — от свойств (охота, сотрудничество…), жёлтый —
+ * жир, зелёный — еда растений.
  */
 const CUBE_TONES = {
-  red: ["#d4705c", "#a83f2f", "#8c3123"],
-  blue: ["#5f9cc9", "#3c6f96", "#2f5a7c"],
-  yellow: ["#e3bd63", "#b8913a", "#9a7728"],
-  green: ["#85b96a", "#5c8f42", "#497534"],
+  red: ["#e0685a", "#b23c2d", "#8c2f22"],
+  blue: ["#6ca6cf", "#3f7199", "#30587a"],
+  yellow: ["#eec871", "#bb923c", "#96762e"],
+  green: ["#90c173", "#5e9043", "#4a7635"],
 } as const;
 
 export function FoodCube({
@@ -274,7 +276,7 @@ export function FoodCube({
   title?: string;
 }) {
   const [top, left, right] = CUBE_TONES[tone];
-  const edge = "rgba(18,14,8,0.4)";
+  const edge = "rgba(18,14,8,0.45)";
   return (
     <svg
       viewBox="0 0 20 21"
@@ -284,10 +286,21 @@ export function FoodCube({
       aria-label={title}
     >
       <g stroke={edge} strokeWidth="0.6" strokeLinejoin="round">
-        <polygon points="10,1 19,6.2 10,11.4 1,6.2" fill={top} />
         <polygon points="1,6.2 10,11.4 10,20.6 1,15.4" fill={left} />
         <polygon points="19,6.2 10,11.4 10,20.6 19,15.4" fill={right} />
+        <polygon points="10,1 19,6.2 10,11.4 1,6.2" fill={top} />
       </g>
+      {/* Блик на верхней грани — фишка выглядит лакированной. */}
+      <polygon points="10,2 17.4,6.2 10,10.2 2.6,6.2" fill="#ffffff" opacity="0.24" />
+      {/* Светлое ребро под верхней гранью — «кромка» куба. */}
+      <polyline
+        points="2.6,6.2 10,10.2 17.4,6.2"
+        fill="none"
+        stroke="#ffffff"
+        strokeOpacity="0.3"
+        strokeWidth="0.7"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
