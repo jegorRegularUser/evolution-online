@@ -1,7 +1,8 @@
 /**
- * Smoke-прогон «оживления» интерфейса: меню → тумблер счёта → экран
- * статистики → старт партии → тумблер звука. Запускать при поднятом
- * dev-сервере: node scripts/qa-feel-smoke.mjs
+ * Smoke-прогон меню и «оживления» интерфейса: полоса навигации (правила,
+ * статистика, звук), закрытие модалок Esc и кликом вне, старт партии,
+ * отмена выбора и тумблер звука. Запускать при поднятом dev-сервере:
+ * node scripts/qa-feel-smoke.mjs
  */
 import { chromium } from "playwright";
 
@@ -19,27 +20,39 @@ try {
   await page.getByRole("button", { name: "Начать год" }).waitFor({ timeout: 20000 });
   console.log("OK: меню отрендерилось");
 
-  await page.getByRole("button", { name: /Показывать счёт/ }).click();
-  console.log("OK: тумблер счёта кликабелен");
+  // Правила из полосы навигации закрываются Esc.
+  await page.getByRole("button", { name: /Правила/ }).click();
+  await page.getByText("Ход года").first().waitFor({ timeout: 5000 });
+  console.log("OK: правила открываются из полосы");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Начать год" }).waitFor({ timeout: 5000 });
+  console.log("OK: Esc закрывает правила");
 
-  await page.getByRole("button", { name: "Статистика" }).click();
+  // …и кликом по затемнению вокруг карточки.
+  await page.getByRole("button", { name: /Правила/ }).click();
+  await page.getByText("Ход года").first().waitFor({ timeout: 5000 });
+  await page.mouse.click(24, 200);
+  await page.getByRole("button", { name: "Начать год" }).waitFor({ timeout: 5000 });
+  console.log("OK: клик вне закрывает правила");
+
+  // Статистика из полосы навигации.
+  await page.getByRole("button", { name: /Статистика/ }).click();
   await page.getByText("Партий").first().waitFor({ timeout: 5000 });
-  console.log("OK: экран статистики открывается");
+  console.log("OK: экран статистики открывается из полосы");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Начать год" }).waitFor({ timeout: 5000 });
   console.log("OK: Esc закрывает статистику");
+
+  // Тумблер звука прямо в меню.
+  await page.getByRole("button", { name: /Включить звук|Выключить звук/ }).first().click();
+  console.log("OK: тумблер звука кликабелен в меню");
 
   await page.getByRole("button", { name: "Начать год" }).click();
   await page.getByText("Развитие").first().waitFor({ timeout: 20000 });
   console.log("OK: партия стартовала");
 
-  await page.getByRole("button", { name: /Включить звук|Выключить звук/ }).first().click();
-  console.log("OK: тумблер звука кликабелен");
-
-  // Начатый выбор отменяется: выбрать грань карты как свойство, снять по Esc.
-  const traitButton = await page
-    .locator('[data-hand-row] button, [data-hand-row] [role="button"]')
-    .first();
+  // Начатый выбор отменяется кнопкой «Отмена» в доке.
+  const traitButton = await page.locator('[data-hand-row] button, [data-hand-row] [role="button"]').first();
   if (await traitButton.count()) {
     await traitButton.click();
     const cancel = page.getByRole("button", { name: "Отмена" });

@@ -25,6 +25,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Dice3D } from "./dice-3d";
 import { FloraGlyph, FoodCube, TraitGlyph } from "./icons";
+import { SoundToggle } from "./sound-toggle";
 import { useGameStore } from "@/store/game-store";
 
 const SPEEDS: Array<["slow" | "normal" | "fast", string, string]> = [
@@ -61,23 +62,36 @@ export function MenuScreen({
         <img src={BG.menu} alt="" className="h-full w-full object-cover opacity-45" />
         <div className="absolute inset-0 bg-gradient-to-b from-bg/80 via-bg/55 to-bg" />
       </div>
-      <div className="relative mx-auto flex min-h-dvh w-full max-w-3xl flex-col justify-center px-5 py-16">
-        <div className="mb-5 flex justify-center">
-          <img
-            src={LOGO}
-            alt=""
-            className="size-24 rounded-full border border-border-strong object-cover shadow-[var(--shadow-card)]"
-          />
-        </div>
-      <p className="relative mb-3 text-center text-[11px] font-medium uppercase tracking-[0.28em] text-muted">
-        Правильные игры · Кнорре
-      </p>
-      <h1 className="relative text-center text-5xl text-fg sm:text-6xl">Эволюция</h1>
-      <p className="relative mx-auto mt-3 max-w-md text-center text-muted">
-        Настольная игра о происхождении видов. Комбинируйте свойства, кормите популяцию и переживайте голодные годы.
-      </p>
+      <div className="relative flex min-h-dvh flex-col">
+        {/* Полоса навигации — как шапка игрового стола: лого и название
+            слева, справа правила, статистика и звук. Партийные настройки
+            остаются в центральном блоке ниже. */}
+        <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-border bg-bg/90 px-3 py-2.5 backdrop-blur-sm sm:px-5">
+          <img src={LOGO} alt="" className="size-8 shrink-0 rounded-full border border-border object-cover" />
+          <div className="min-w-0 flex-1">
+            <div className="font-display text-lg leading-none">Эволюция</div>
+            <div className="mt-1 truncate text-xs text-muted">Правильные игры · Кнорре</div>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" onClick={onRules}>
+              <BookOpen className="size-4" />
+              <span className="hidden sm:inline">Правила</span>
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setStatsOpen(true)}>
+              <BarChart3 className="size-4" />
+              <span className="hidden sm:inline">Статистика</span>
+            </Button>
+            <SoundToggle />
+          </div>
+        </header>
 
-      <div className="relative mt-10 space-y-6 rounded-[var(--radius-xl)] border border-border bg-surface p-5 sm:p-7">
+        <div className="relative mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-5 py-10">
+          <h1 className="relative text-center text-5xl text-fg sm:text-6xl">Эволюция</h1>
+          <p className="relative mx-auto mt-3 max-w-md text-center text-muted">
+            Настольная игра о происхождении видов. Комбинируйте свойства, кормите популяцию и переживайте голодные годы.
+          </p>
+
+          <div className="relative mt-10 space-y-6 rounded-[var(--radius-xl)] border border-border bg-surface p-5 sm:p-7">
         <NetMenuPanel />
 
         <fieldset>
@@ -274,21 +288,12 @@ export function MenuScreen({
           </div>
         </fieldset>
 
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Button className="flex-1" size="lg" onClick={() => onStart(players, difficulty)}>
-            <Play className="size-4" />
-            Начать год
-          </Button>
-          <Button variant="secondary" size="lg" onClick={onRules}>
-            <BookOpen className="size-4" />
-            Правила
-          </Button>
-          <Button variant="secondary" size="lg" onClick={() => setStatsOpen(true)}>
-            <BarChart3 className="size-4" />
-            Статистика
-          </Button>
-        </div>
+        <Button className="flex-1" size="lg" onClick={() => onStart(players, difficulty)}>
+          <Play className="size-4" />
+          Начать год
+        </Button>
       </div>
+        </div>
       </div>
       {statsOpen ? <StatsScreen onClose={() => setStatsOpen(false)} /> : null}
     </>
@@ -511,8 +516,21 @@ function RuleCard({ src, label }: { src: string; label?: string }) {
 
 export function RulesPanel({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<RulesTab>("base");
+  // Правила закрываются и Esc, и кликом по затемнению вокруг карточки.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-0 sm:items-center sm:p-6">
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-0 sm:items-center sm:p-6"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-t-[var(--radius-xl)] border border-border bg-surface p-5 sm:rounded-[var(--radius-xl)] sm:p-8">
         <div className="mb-4 flex items-start justify-between gap-4">
           <h2 className="text-2xl">Правила</h2>
@@ -743,7 +761,12 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
   }, [games]);
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-3 backdrop-blur-sm sm:p-6">
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-3 backdrop-blur-sm sm:p-6"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="relative flex max-h-[92dvh] w-full max-w-2xl flex-col rounded-[var(--radius-xl)] border border-border bg-surface shadow-[var(--shadow-card)]">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
           <h2 className="text-xl">Статистика</h2>

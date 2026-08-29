@@ -1,4 +1,4 @@
-import { BookOpen, List, Pause, Volume2, VolumeX } from "lucide-react";
+import { BookOpen, List, Pause } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import { FoodCube } from "./icons";
 import { LobbyScreen } from "./net-screens";
 import { GameOverScreen, MenuScreen, RulesPanel } from "./screens";
 import { EventSpotlight } from "./spotlight";
+import { SoundToggle } from "./sound-toggle";
 
 const PHASE_LABEL: Record<string, string> = {
   development: "Развитие",
@@ -2094,26 +2095,6 @@ function FoodBankChip({ count, visible }: { count: number; visible: boolean }) {
       <span className="text-[10px] uppercase tracking-wider text-muted">База</span>
       <span className="font-display text-lg tabular-nums leading-none">{visible ? count : "—"}</span>
     </div>
-  );
-}
-
-/** Тумблер звука в шапке: сохраняется в localStorage, как и скорость игры. */
-function SoundToggle() {
-  const [on, setOn] = useState(sfx.enabled);
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      aria-label={on ? "Выключить звук" : "Включить звук"}
-      title={on ? "Выключить звук" : "Включить звук"}
-      onClick={() => {
-        const next = !on;
-        setOn(next);
-        sfx.setEnabled(next);
-      }}
-    >
-      {on ? <Volume2 className="size-4" /> : <VolumeX className="size-4" />}
-    </Button>
   );
 }
 
