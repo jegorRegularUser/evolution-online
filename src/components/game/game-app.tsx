@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { sfx, type SfxId } from "@/lib/sfx";
 import { emptySession, recordGame, type SessionCounters } from "@/lib/stats";
 import { BG, LOGO, MUTATION_ART, PHASE_ICON, TERRITORY_ART } from "@/lib/art";
-import { loadShowScore, loadSpeed, useGameStore, type UiIntent } from "@/store/game-store";
+import { loadSpeed, useGameStore, type UiIntent } from "@/store/game-store";
 import { AnimalCard, HandCard, PAIR_COLORS, PairPlate, type PairMark } from "./cards";
 import { FloraStrip } from "./cards-flora";
 import { PlantStrip } from "./cards-plants";
@@ -418,12 +418,13 @@ function useFoodFly(state: GameState | null): FlyingFood[] {
 
 export function GameApp() {
   const state = useGameStore((s) => s.state);
-  // Скорость и тумблер счёта из localStorage подмешиваем после гидратации,
-  // чтобы SSR-разметка всегда совпадала с первым клиентским рендером.
+  // Скорость из localStorage подмешиваем после гидратации, чтобы SSR-разметка
+  // всегда совпадала с первым клиентским рендером. Заодно возвращаем игрока
+  // в прерванную соло-партию (перезагрузка страницы/F5 её больше не теряет).
   useEffect(() => {
     const saved = loadSpeed();
     if (saved !== "normal") useGameStore.getState().setSpeed(saved);
-    if (loadShowScore()) useGameStore.getState().setShowScore(true);
+    useGameStore.getState().resumeSolo();
   }, []);
   const rulesOpen = useGameStore((s) => s.rulesOpen);
   const start = useGameStore((s) => s.start);
@@ -1514,10 +1515,9 @@ const PlayerSection = memo(function PlayerSection({
   const intent = useGameStore((s) => s.intent);
   // «Случайные мутации»: рука скрыта — показываем счётчик слепой колоды.
   const randomMutations = useGameStore((s) => Boolean(s.state?.modules.randomMutations));
-  // Живой счёт — опциональный тумблер (в настольной игре очки скрыты до конца).
+  // Живой счёт всегда на табло: 2 за животное вида + свойство и его бонус.
   const gameState = useGameStore((s) => s.state);
-  const showScore = useGameStore((s) => s.showScore);
-  const score = gameState && showScore && gameState.phase !== "gameOver" ? liveScore(gameState, p.id) : null;
+  const score = gameState && gameState.phase !== "gameOver" ? liveScore(gameState, p.id) : null;
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   // Ссылка на перетаскиваемое для drop по зоне (замыкание зон не тянет стейт).
@@ -1711,14 +1711,6 @@ const PlayerSection = memo(function PlayerSection({
           ) : null}
         </span>
         <span className="flex items-center gap-1.5 text-xs text-muted">
-          {score !== null ? (
-            <span
-              title="Текущие очки: 2 за животное вида + свойство и его бонус. В настольной игре счёт скрыт до конца партии."
-              className="rounded-full border border-border bg-surface-2 px-2 py-0.5 font-display text-xs tabular-nums text-fg"
-            >
-              {score}
-            </span>
-          ) : null}
           {randomMutations ? (
             <img
               src={MUTATION_ART.deckBack}
@@ -1732,6 +1724,17 @@ const PlayerSection = memo(function PlayerSection({
             ? `колода ${p.blindDeckCount ?? p.blindDeck?.length ?? 0}`
             : `рука ${p.handCount ?? p.hand.length}`}{" "}
           · сброс {p.discardCount}
+          {score !== null ? (
+            <>
+              {" · счёт "}
+              <span
+                title="Текущие очки: 2 за каждое животное вида + по очку за свойство и его бонус"
+                className="font-display tabular-nums text-fg"
+              >
+                {score}
+              </span>
+            </>
+          ) : null}
         </span>
       </div>
       {continents ? (

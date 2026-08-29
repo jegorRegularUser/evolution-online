@@ -71,8 +71,6 @@ interface GameStore {
   rulesOpen: boolean;
   logOpen: boolean;
   speed: GameSpeed;
-  /** Показывать текущие очки на табло игроков (тумблер из меню). */
-  showScore: boolean;
   /** Дополнения, выбранные в меню — применяются к новой solo-партии. */
   modules: Partial<Record<ModuleId, boolean>>;
   /** solo — партия против ботов на этом устройстве; net — сетевой стол. */
@@ -81,12 +79,13 @@ interface GameStore {
   start: (players: number, difficulty: Difficulty) => void;
   setModules: (m: Partial<Record<ModuleId, boolean>>) => void;
   reset: () => void;
+  /** Вернуть прерванную соло-партию после перезагрузки; false — не вышло. */
+  resumeSolo: () => boolean;
   dispatch: (action: GameAction) => void;
   setIntent: (intent: UiIntent) => void;
   setRulesOpen: (v: boolean) => void;
   setLogOpen: (v: boolean) => void;
   setSpeed: (v: GameSpeed) => void;
-  setShowScore: (v: boolean) => void;
   tickAI: () => void;
   startNetCreate: (cfg: NetCreateConfig) => Promise<void>;
   startNetJoin: (code: string, name: string) => Promise<void>;
@@ -171,12 +170,41 @@ export function loadSpeed(): GameSpeed {
   return "normal";
 }
 
-/** Показывать текущий счёт на табло (в настольной игре очки скрыты). */
-export function loadShowScore(): boolean {
+// ── Автосохранение соло-партии ───────────────────────────────────────────────
+// Перезагрузка страницы (F5, HMR дев-сервера, телефон) больше не теряет партию:
+// состояние пишется в localStorage после каждого действия и восстанавливается
+// при следующем заходе. Завершённые партии не сохраняются.
+
+const SOLO_KEY = "evo-solo-game";
+const SOLO_TTL_MS = 48 * 60 * 60 * 1000;
+
+function persistSolo(state: GameState | null) {
+  if (typeof window === "undefined") return;
   try {
-    return localStorage.getItem("evo-show-score") === "on";
+    if (!state || state.phase === "gameOver") {
+      localStorage.removeItem(SOLO_KEY);
+    } else {
+      localStorage.setItem(SOLO_KEY, JSON.stringify({ savedAt: Date.now(), state }));
+    }
   } catch {
-    return false;
+    // не сохранилось (приватный режим/переполнение) — партия просто без дубля
+  }
+}
+
+/** Восстановить прерванную соло-партию; false — сохранёнки нет или старая. */
+function loadSolo(): GameState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(SOLO_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { savedAt: number; state: GameState };
+    if (!parsed?.state || Date.now() - parsed.savedAt > SOLO_TTL_MS) {
+      localStorage.removeItem(SOLO_KEY);
+      return null;
+    }
+    return parsed.state;
+  } catch {
+    return null;
   }
 }
 
@@ -188,7 +216,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
   rulesOpen: false,
   logOpen: false,
   speed: "normal",
-  showScore: false,
   modules: {},
   mode: "solo",
   net: null,
@@ -198,6 +225,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const seed = Date.now() % 1_000_000;
     const state = createGame(players, difficulty, seed, undefined, get().modules);
     lastBotActor = null;
+    persistSolo(state);
     set({
       state,
       thinking: false,
@@ -211,6 +239,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   reset: () => {
     clearAi();
+    // Осознанный выход из соло-партии: прерванную партию больше не продолжаем.
+    if (get().mode === "solo") persistSolo(null);
     if (get().mode === "net") {
       netSession?.stop();
       netSession = null;
@@ -223,6 +253,22 @@ export const useGameStore = create<GameStore>((set, get) => ({
       thinkingWho: null,
       intent: { kind: "none" },
     });
+  },
+
+  resumeSolo: () => {
+    const saved = loadSolo();
+    if (!saved) return false;
+    clearAi();
+    lastBotActor = null;
+    set({
+      state: saved,
+      mode: "solo",
+      thinking: false,
+      thinkingWho: null,
+      intent: { kind: "none" },
+    });
+    queueMicrotask(() => get().tickAI());
+    return true;
   },
 
   dispatch: (action) => {
@@ -241,6 +287,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (state.phase === "gameOver") return;
     const next = applyAction(state, action);
     lastBotActor = null;
+    persistSolo(next);
     set({ state: next, intent: { kind: "none" }, thinking: false });
     queueMicrotask(() => get().tickAI());
   },
@@ -255,15 +302,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
       // приватный режим — скорость просто не сохранится
     }
     set({ speed });
-  },
-
-  setShowScore: (showScore) => {
-    try {
-      localStorage.setItem("evo-show-score", showScore ? "on" : "off");
-    } catch {
-      // приватный режим — настройка просто не сохранится
-    }
-    set({ showScore });
   },
 
   // ── сетевой стол ──────────────────────────────────────────────────────────
@@ -474,6 +512,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       }
       const next = applyAction(cur.state, action);
       lastBotActor = who.id;
+      persistSolo(next);
       set({ state: next });
       queueMicrotask(() => get().tickAI());
     }, delay);

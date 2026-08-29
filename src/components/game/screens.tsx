@@ -48,8 +48,6 @@ export function MenuScreen({
   const [statsOpen, setStatsOpen] = useState(false);
   const speed = useGameStore((s) => s.speed);
   const setSpeed = useGameStore((s) => s.setSpeed);
-  const showScore = useGameStore((s) => s.showScore);
-  const setShowScore = useGameStore((s) => s.setShowScore);
   const continents = useGameStore((s) => Boolean(s.modules.continents));
   const plants = useGameStore((s) => Boolean(s.modules.plants));
   const fungi = useGameStore((s) => Boolean(s.modules.fungi));
@@ -161,29 +159,6 @@ export function MenuScreen({
         <fieldset>
           <legend className="mb-3 text-sm font-medium text-muted">Дополнения</legend>
           <div className="grid gap-2">
-            <button
-              type="button"
-              onClick={() => setShowScore(!showScore)}
-              aria-pressed={showScore}
-              title="В настольной игре очки скрыты до конца партии; включите, чтобы видеть текущий счёт каждого игрока на его табло"
-              className={cn(
-                "flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left",
-                showScore ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2",
-              )}
-            >
-              <span>
-                <span className="block text-sm font-medium text-fg">Показывать счёт</span>
-                <span className="mt-0.5 block text-xs text-muted">текущие очки на табло игроков</span>
-              </span>
-              <span
-                className={cn(
-                  "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
-                  showScore ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
-                )}
-              >
-                {showScore ? "вкл" : "выкл"}
-              </span>
-            </button>
             <button
               type="button"
               onClick={() => setModules({ ...modules, continents: !continents })}
