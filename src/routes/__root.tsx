@@ -1,7 +1,10 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import { AuthProvider } from "@/lib/auth/provider";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
-import appCss from "../styles.css?url";
+// Прямой импорт вместо `?url`: в dev Vite применяет изменения CSS через HMR
+// без перезагрузки страницы (?url даёт <link> без HMR → full-reload →
+// соло-партия «выбрасывалась» в меню). Start собирает CSS в бандл сам.
+import "../styles.css";
 
 const APP_NAME = "Эволюция";
 
@@ -14,9 +17,17 @@ export const Route = createRootRoute({
       { name: "theme-color", content: "#111410" },
       { name: "description", content: "Цифровая «Эволюция» — русская настольная игра о происхождении видов." },
     ],
+    scripts: [
+      {
+        // До гидратации: если есть сейв прерванной партии, сразу прячем меню,
+        // чтобы перезагрузка страницы (F5, HMR) не мигала им. Снимает флаг
+        // GameApp после проверки сейва.
+        children:
+          "try{if(localStorage.getItem('evo-solo-game'))document.documentElement.dataset.evoResume='1'}catch(e){}",
+      },
+    ],
     links: [
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
-      { rel: "stylesheet", href: appCss },
       { rel: "manifest", href: "/__grok/manifest.webmanifest" },
       { rel: "apple-touch-icon", href: "/__grok/icon-180.png" },
       {

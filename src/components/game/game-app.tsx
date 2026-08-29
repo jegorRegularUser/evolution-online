@@ -475,6 +475,10 @@ export function GameApp() {
     const saved = loadSpeed();
     if (saved !== "normal") useGameStore.getState().setSpeed(saved);
     useGameStore.getState().resumeSolo();
+    // Инлайн-скрипт в __root прячет меню, пока партия восстанавливается из
+    // сейва; после проверки снимаем флаг — либо стол уже на экране, либо
+    // сейва нет и меню можно показывать.
+    delete document.documentElement.dataset.evoResume;
   }, []);
   const rulesOpen = useGameStore((s) => s.rulesOpen);
   const start = useGameStore((s) => s.start);
@@ -528,11 +532,11 @@ export function GameApp() {
 
   if (!state) {
     return (
-      <>
+      <div className="menu-screen">
         <MenuScreen onStart={start} onRules={() => setRulesOpen(true)} />
         {rulesOpen ? <RulesPanel onClose={() => setRulesOpen(false)} /> : null}
         <Toaster {...TOASTER_OPTS} />
-      </>
+      </div>
     );
   }
 

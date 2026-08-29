@@ -1,5 +1,5 @@
 import { a as number, c as union, i as literal, n as boolean, o as object, r as custom, s as string, t as _enum } from "../_libs/zod.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/ai-CKs4XESH.js
+//#region node_modules/.nitro/vite/services/ssr/assets/ai-Zhf9JnZS.js
 /**
 * Общий контракт сетевой партии: типы кадров опроса, zod-схемы входа и
 * серверные константы темпа. Импортируется и клиентом, и сервером;
@@ -1628,6 +1628,25 @@ function canFeedOnFlora(state, animal, flora) {
 	if (animal.hibernating) return false;
 	if (state.modules.continents && (animal.zoneId ?? "laurasia") !== (flora.zoneId ?? "gondwana")) return false;
 	return true;
+}
+/**
+* Текущие очки игрока по живым животным — та же формула, что и финальный
+* подсчёт (finishGame): 2 очка за каждое животное вида, по очку за свойство
+* и его бонус. В настольной игре счёт скрыт до конца партии, поэтому
+* в UI он показывается опциональным тумблером.
+*/
+function liveScore(state, playerId) {
+	const p = state.players.find((x) => x.id === playerId);
+	if (!p) return 0;
+	let total = 0;
+	for (const a of p.animals) {
+		total += 2 * (a.population ?? 1);
+		for (const t of a.traits) {
+			if (t.disabled) continue;
+			total += 1 + TRAITS[t.type].scoreBonus;
+		}
+	}
+	return total;
 }
 var AI_NAMES = [
 	"Дарвин",
@@ -5006,4 +5025,4 @@ function pickFeed(state, acts) {
 	return best;
 }
 //#endregion
-export { legalFeedActions as A, foodNeeded as C, joinRoomInput as D, isFed as E, pollInput as M, speciesNeed as N, legalDefenseActions as O, findAnimal as S, isCarnivoreLike as T, chooseAIAction as _, MUTATIONS_TRAIT_IDS as a, createRoomInput as b, PLANTS_TRAIT_IDS as c, actionInput as d, applyAction as f, canRageAttack as g, canPlantAttackTarget as h, MARKS as i, player as j, legalDevActions as k, TRAITS as l, canAttack as m, FLORA as n, PACE as o, botsInput as p, FUNGI_TRAIT_IDS as r, PLANTS as s, CONTINENTS_TRAIT_IDS as t, TRAIT_ORDER as u, codeTokenInput as v, hasTrait as w, currentActor as x, createGame as y };
+export { legalFeedActions as A, foodNeeded as C, joinRoomInput as D, isFed as E, player as M, pollInput as N, legalDefenseActions as O, speciesNeed as P, findAnimal as S, isCarnivoreLike as T, chooseAIAction as _, MUTATIONS_TRAIT_IDS as a, createRoomInput as b, PLANTS_TRAIT_IDS as c, actionInput as d, applyAction as f, canRageAttack as g, canPlantAttackTarget as h, MARKS as i, liveScore as j, legalDevActions as k, TRAITS as l, canAttack as m, FLORA as n, PACE as o, botsInput as p, FUNGI_TRAIT_IDS as r, PLANTS as s, CONTINENTS_TRAIT_IDS as t, TRAIT_ORDER as u, codeTokenInput as v, hasTrait as w, currentActor as x, createGame as y };

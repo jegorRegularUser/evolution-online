@@ -161,6 +161,12 @@ export default defineConfig(({ command, isPreview }) => ({
     allowedHosts: [".trycloudflare.com"],
   },
   resolve: { tsconfigPaths: true },
+  // Прогреваем тяжёлые зависимости на старте дев-сервера: без этого Vite
+  // обнаруживает их лениво уже во время партии и делает full-reload страницы
+  // (соло-партия на секунду «выбрасывается» в меню и восстанавливается из сейва).
+  optimizeDeps: {
+    include: ["three", "cannon-es", "recharts", "lucide-react"],
+  },
   plugins: [
     pgliteBootstrapPlugin(),
     // Before tanstackStart so /auth/popup never falls through to the SPA.

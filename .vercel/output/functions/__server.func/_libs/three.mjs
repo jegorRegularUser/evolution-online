@@ -15261,6 +15261,76 @@ var PlaneGeometry = class PlaneGeometry extends BufferGeometry {
 	}
 };
 /**
+* This material can receive shadows, but otherwise is completely transparent.
+*
+* ```js
+* const geometry = new THREE.PlaneGeometry( 2000, 2000 );
+* geometry.rotateX( - Math.PI / 2 );
+*
+* const material = new THREE.ShadowMaterial();
+* material.opacity = 0.2;
+*
+* const plane = new THREE.Mesh( geometry, material );
+* plane.position.y = -200;
+* plane.receiveShadow = true;
+* scene.add( plane );
+* ```
+*
+* @augments Material
+*/
+var ShadowMaterial = class extends Material {
+	/**
+	* Constructs a new shadow material.
+	*
+	* @param {Object} [parameters] - An object with one or more properties
+	* defining the material's appearance. Any property of the material
+	* (including any property from inherited materials) can be passed
+	* in here. Color values can be passed any type of value accepted
+	* by {@link Color#set}.
+	*/
+	constructor(parameters) {
+		super();
+		/**
+		* This flag can be used for type testing.
+		*
+		* @type {boolean}
+		* @readonly
+		* @default true
+		*/
+		this.isShadowMaterial = true;
+		this.type = "ShadowMaterial";
+		/**
+		* Color of the material.
+		*
+		* @type {Color}
+		* @default (0,0,0)
+		*/
+		this.color = new Color(0);
+		/**
+		* Overwritten since shadow materials are transparent
+		* by default.
+		*
+		* @type {boolean}
+		* @default true
+		*/
+		this.transparent = true;
+		/**
+		* Whether the material is affected by fog or not.
+		*
+		* @type {boolean}
+		* @default true
+		*/
+		this.fog = true;
+		this.setValues(parameters);
+	}
+	copy(source) {
+		super.copy(source);
+		this.color.copy(source.color);
+		this.fog = source.fog;
+		return this;
+	}
+};
+/**
 * Provides utility functions for managing uniforms.
 *
 * @module UniformsUtils
@@ -30387,4 +30457,4 @@ var WebGLRenderer = class {
 	}
 };
 //#endregion
-export { DirectionalLight as a, MeshStandardMaterial as c, SRGBColorSpace as d, Scene as f, CanvasTexture as i, PerspectiveCamera as l, AmbientLight as n, Euler as o, Vector3 as p, BoxGeometry as r, Mesh as s, WebGLRenderer as t, Quaternion as u };
+export { DirectionalLight as a, MeshStandardMaterial as c, Quaternion as d, SRGBColorSpace as f, CanvasTexture as i, OrthographicCamera as l, ShadowMaterial as m, AmbientLight as n, Euler as o, Scene as p, BoxGeometry as r, Mesh as s, WebGLRenderer as t, PlaneGeometry as u };

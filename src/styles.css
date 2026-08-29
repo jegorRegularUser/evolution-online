@@ -346,3 +346,19 @@
 .spotlight-out {
   animation: spotlight-out-kf 0.28s var(--ease-out) forwards;
 }
+
+/* Восстановление прерванной партии: инлайн-скрипт в __root ставит флаг
+   data-evo-resume до гидратации, меню не мигает, пока сейв проверяется. */
+html[data-evo-resume="1"] .menu-screen {
+  visibility: hidden;
+}
+html[data-evo-resume="1"] body::after {
+  content: "Продолжаем прерванную партию…";
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: var(--color-bg);
+  color: var(--color-muted);
+}

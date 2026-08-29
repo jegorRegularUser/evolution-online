@@ -2,17 +2,20 @@ import { o as __toESM } from "../_runtime.mjs";
 import { n as require_react } from "../_libs/@radix-ui/react-compose-refs+[...].mjs";
 import { l as require_react_dom, y as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
 import { n as TSS_SERVER_FUNCTION, r as getServerFnById, t as createServerFn } from "./ssr.mjs";
-import { A as legalFeedActions, C as foodNeeded, D as joinRoomInput, E as isFed, M as pollInput, N as speciesNeed, O as legalDefenseActions, S as findAnimal, T as isCarnivoreLike, _ as chooseAIAction, a as MUTATIONS_TRAIT_IDS, b as createRoomInput, c as PLANTS_TRAIT_IDS, d as actionInput, f as applyAction, g as canRageAttack, h as canPlantAttackTarget, i as MARKS, j as player, k as legalDevActions, l as TRAITS, m as canAttack, n as FLORA, p as botsInput, r as FUNGI_TRAIT_IDS, s as PLANTS, t as CONTINENTS_TRAIT_IDS, u as TRAIT_ORDER, v as codeTokenInput, w as hasTrait, x as currentActor, y as createGame } from "./ai-CKs4XESH.mjs";
-import { a as RotateCcw, c as Pause, d as List, f as Copy, h as BookOpen, i as Skull, l as Minus, m as Bot, o as Plus, p as Check, r as Swords, s as Play, t as Users, u as LogOut } from "../_libs/lucide-react.mjs";
+import { A as legalFeedActions, C as foodNeeded, D as joinRoomInput, E as isFed, M as player, N as pollInput, O as legalDefenseActions, P as speciesNeed, S as findAnimal, T as isCarnivoreLike, _ as chooseAIAction, a as MUTATIONS_TRAIT_IDS, b as createRoomInput, c as PLANTS_TRAIT_IDS, d as actionInput, f as applyAction, g as canRageAttack, h as canPlantAttackTarget, i as MARKS, j as liveScore, k as legalDevActions, l as TRAITS, m as canAttack, n as FLORA, p as botsInput, r as FUNGI_TRAIT_IDS, s as PLANTS, t as CONTINENTS_TRAIT_IDS, u as TRAIT_ORDER, v as codeTokenInput, w as hasTrait, x as currentActor, y as createGame } from "./ai-Zhf9JnZS.mjs";
+import { A as Copy, C as Layers, D as Flame, E as Flower2, F as Bot, I as BookOpen, M as ChevronLeft, N as Check, O as Dna, P as ChartColumn, S as List, T as Globe, _ as Mountain, a as Users, b as LogOut, c as Swords, d as Shield, f as RotateCcw, g as Pause, h as Play, i as Volume2, j as ChevronRight, k as Crosshair, l as Sprout, m as Plus, n as Wheat, o as Trophy, p as Puzzle, r as VolumeX, t as Wind, u as Skull, v as Minus, w as GraduationCap, x as Lock, y as Microscope } from "../_libs/lucide-react.mjs";
+import { n as toast, t as Toaster } from "../_libs/sonner.mjs";
 import { t as Slot } from "../_libs/radix-ui__react-slot.mjs";
 import { n as clsx, t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { t as twMerge } from "../_libs/tailwind-merge.mjs";
 import { t as create } from "../_libs/zustand.mjs";
-import { a as DirectionalLight, c as MeshStandardMaterial, d as SRGBColorSpace, f as Scene, i as CanvasTexture, l as PerspectiveCamera, n as AmbientLight, o as Euler, p as Vector3, r as BoxGeometry, s as Mesh, t as WebGLRenderer, u as Quaternion } from "../_libs/three.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-CV90TUFu.js
+import { a as Plane, c as World, i as Material, n as Box, o as SAPBroadphase, r as ContactMaterial, s as Vec3, t as Body } from "../_libs/cannon-es.mjs";
+import { a as DirectionalLight, c as MeshStandardMaterial, d as Quaternion, f as SRGBColorSpace, i as CanvasTexture, l as OrthographicCamera, m as ShadowMaterial, n as AmbientLight, o as Euler, p as Scene, r as BoxGeometry, s as Mesh, t as WebGLRenderer, u as PlaneGeometry } from "../_libs/three.mjs";
+import { a as CartesianGrid, i as Line, n as YAxis, o as ResponsiveContainer, r as XAxis, s as Tooltip, t as LineChart } from "../_libs/recharts+[...].mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-IJpLZipY.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
-var import_react_dom = require_react_dom();
+var import_react_dom = /* @__PURE__ */ __toESM(require_react_dom());
 function cn(...inputs) {
 	return twMerge(clsx(inputs));
 }
@@ -65,6 +68,585 @@ var TERRITORIES = [
 		name: "Океан"
 	}
 ];
+var STORAGE_KEY = "evo-sound";
+var MASTER_GAIN = .4;
+var ctx = null;
+var master = null;
+var noiseBuf = null;
+var enabled = loadEnabled();
+function loadEnabled() {
+	if (typeof window === "undefined") return true;
+	try {
+		return localStorage.getItem(STORAGE_KEY) !== "off";
+	} catch {
+		return true;
+	}
+}
+/** Контекст создаётся только на клиенте и по мере надобности. */
+function ensureCtx() {
+	if (typeof window === "undefined") return null;
+	if (!ctx) {
+		const AC = window.AudioContext ?? window.webkitAudioContext;
+		if (!AC) return null;
+		ctx = new AC();
+		master = ctx.createGain();
+		master.gain.value = MASTER_GAIN;
+		master.connect(ctx.destination);
+	}
+	if (ctx.state === "suspended") ctx.resume();
+	return ctx;
+}
+/** Общий буфер белого шума — источник для щелчков и шелестов. */
+function noise(c) {
+	if (!noiseBuf) {
+		noiseBuf = c.createBuffer(1, c.sampleRate, c.sampleRate);
+		const data = noiseBuf.getChannelData(0);
+		for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+	}
+	return noiseBuf;
+}
+/** Одна нота: быстрая атака и экспоненциальное затухание. */
+function tone(c, o) {
+	if (!master) return;
+	const t0 = c.currentTime + (o.delay ?? 0);
+	const osc = c.createOscillator();
+	osc.type = o.type ?? "triangle";
+	osc.frequency.setValueAtTime(o.freq, t0);
+	if (o.to) osc.frequency.exponentialRampToValueAtTime(Math.max(30, o.to), t0 + o.dur);
+	const g = c.createGain();
+	g.gain.setValueAtTime(1e-4, t0);
+	g.gain.exponentialRampToValueAtTime(o.gain ?? .2, t0 + .012);
+	g.gain.exponentialRampToValueAtTime(1e-4, t0 + o.dur);
+	osc.connect(g).connect(master);
+	osc.start(t0);
+	osc.stop(t0 + o.dur + .05);
+}
+/** Всплеск фильтрованного шума — удар, щелчок, шелест. */
+function burst(c, o) {
+	if (!master) return;
+	const t0 = c.currentTime + (o.delay ?? 0);
+	const src = c.createBufferSource();
+	src.buffer = noise(c);
+	src.loop = true;
+	const filter = c.createBiquadFilter();
+	const freq = o.freq ?? 1200;
+	if (o.band === "low") {
+		filter.type = "lowpass";
+		filter.frequency.value = freq;
+	} else if (o.band === "high") {
+		filter.type = "highpass";
+		filter.frequency.value = freq;
+	} else {
+		filter.type = "bandpass";
+		filter.frequency.value = freq;
+		filter.Q.value = 1.4;
+	}
+	const g = c.createGain();
+	g.gain.setValueAtTime(1e-4, t0);
+	g.gain.exponentialRampToValueAtTime(o.gain ?? .18, t0 + .008);
+	g.gain.exponentialRampToValueAtTime(1e-4, t0 + o.dur);
+	src.connect(filter).connect(g).connect(master);
+	src.start(t0, Math.random() * .5);
+	src.stop(t0 + o.dur + .05);
+}
+/** Композиции звуков: каждый ид — короткий рецепт из нот и шумов. */
+function perform(c, id, delay) {
+	switch (id) {
+		case "roll":
+			for (let i = 0; i < 4; i++) burst(c, {
+				dur: .05,
+				gain: .16 - i * .03,
+				band: "band",
+				freq: 900 + i * 250,
+				delay: delay + i * .07
+			});
+			tone(c, {
+				freq: 240,
+				to: 180,
+				dur: .1,
+				gain: .08,
+				type: "sine",
+				delay: delay + .28
+			});
+			break;
+		case "hunt":
+			tone(c, {
+				freq: 110,
+				to: 70,
+				dur: .28,
+				gain: .16,
+				type: "sawtooth",
+				delay
+			});
+			burst(c, {
+				dur: .08,
+				gain: .1,
+				band: "low",
+				freq: 300,
+				delay
+			});
+			break;
+		case "kill":
+			burst(c, {
+				dur: .12,
+				gain: .2,
+				band: "low",
+				freq: 220,
+				delay
+			});
+			tone(c, {
+				freq: 90,
+				to: 55,
+				dur: .22,
+				gain: .18,
+				type: "sine",
+				delay
+			});
+			break;
+		case "food":
+			tone(c, {
+				freq: 540,
+				to: 620,
+				dur: .09,
+				gain: .16,
+				delay
+			});
+			tone(c, {
+				freq: 270,
+				dur: .06,
+				gain: .07,
+				type: "sine",
+				delay
+			});
+			break;
+		case "foodBlue":
+			tone(c, {
+				freq: 420,
+				to: 470,
+				dur: .1,
+				gain: .14,
+				delay
+			});
+			tone(c, {
+				freq: 210,
+				dur: .07,
+				gain: .06,
+				type: "sine",
+				delay
+			});
+			break;
+		case "fat":
+			tone(c, {
+				freq: 200,
+				to: 160,
+				dur: .14,
+				gain: .14,
+				type: "sine",
+				delay
+			});
+			break;
+		case "defense":
+			burst(c, {
+				dur: .06,
+				gain: .16,
+				band: "band",
+				freq: 1100,
+				delay
+			});
+			tone(c, {
+				freq: 300,
+				to: 240,
+				dur: .08,
+				gain: .07,
+				type: "sine",
+				delay: delay + .02
+			});
+			break;
+		case "dodge":
+			tone(c, {
+				freq: 430,
+				to: 940,
+				dur: .22,
+				gain: .1,
+				type: "sine",
+				delay
+			});
+			break;
+		case "death":
+			tone(c, {
+				freq: 300,
+				to: 130,
+				dur: .5,
+				gain: .14,
+				type: "sine",
+				delay
+			});
+			burst(c, {
+				dur: .3,
+				gain: .06,
+				band: "low",
+				freq: 400,
+				delay
+			});
+			break;
+		case "draw":
+			burst(c, {
+				dur: .16,
+				gain: .1,
+				band: "high",
+				freq: 2600,
+				delay
+			});
+			burst(c, {
+				dur: .12,
+				gain: .07,
+				band: "high",
+				freq: 3400,
+				delay: delay + .09
+			});
+			break;
+		case "card":
+			tone(c, {
+				freq: 320,
+				to: 280,
+				dur: .07,
+				gain: .12,
+				delay
+			});
+			break;
+		case "flip":
+			burst(c, {
+				dur: .08,
+				gain: .1,
+				band: "high",
+				freq: 2200,
+				delay
+			});
+			tone(c, {
+				freq: 500,
+				to: 380,
+				dur: .1,
+				gain: .1,
+				delay: delay + .04
+			});
+			break;
+		case "phase":
+			burst(c, {
+				dur: .22,
+				gain: .06,
+				band: "high",
+				freq: 1800,
+				delay
+			});
+			break;
+		case "mark":
+			tone(c, {
+				freq: 880,
+				dur: .12,
+				gain: .09,
+				type: "sine",
+				delay
+			});
+			tone(c, {
+				freq: 660,
+				dur: .1,
+				gain: .06,
+				type: "sine",
+				delay: delay + .08
+			});
+			break;
+		case "plant":
+			burst(c, {
+				dur: .14,
+				gain: .07,
+				band: "high",
+				freq: 1500,
+				delay
+			});
+			tone(c, {
+				freq: 350,
+				to: 480,
+				dur: .16,
+				gain: .08,
+				type: "sine",
+				delay: delay + .05
+			});
+			break;
+		case "win":
+			tone(c, {
+				freq: 392,
+				dur: .18,
+				gain: .14,
+				delay
+			});
+			tone(c, {
+				freq: 494,
+				dur: .18,
+				gain: .14,
+				delay: delay + .14
+			});
+			tone(c, {
+				freq: 587,
+				dur: .34,
+				gain: .16,
+				delay: delay + .28
+			});
+			break;
+		case "lose":
+			tone(c, {
+				freq: 330,
+				dur: .22,
+				gain: .12,
+				type: "sine",
+				delay
+			});
+			tone(c, {
+				freq: 247,
+				dur: .4,
+				gain: .12,
+				type: "sine",
+				delay: delay + .2
+			});
+	}
+}
+var sfx = {
+	get enabled() {
+		return enabled;
+	},
+	setEnabled(v) {
+		enabled = v;
+		try {
+			localStorage.setItem(STORAGE_KEY, v ? "on" : "off");
+		} catch {}
+		if (v) {
+			const c = ensureCtx();
+			if (c) perform(c, "food", 0);
+		}
+	},
+	/** Разбудить AudioContext по пользовательскому жесту (политики автоплея). */
+	unlock() {
+		ensureCtx();
+	},
+	/**
+	* Проиграть звук. delay — сдвиг в секундах, чтобы цепочка событий
+	* sounded каскадом, а не одной кучей.
+	*/
+	play(id, delay = 0) {
+		if (!enabled) return;
+		const c = ensureCtx();
+		if (!c || c.state !== "running") return;
+		perform(c, id, delay);
+	}
+};
+/**
+* Локальная статистика и достижения — в localStorage, без сервера.
+* Работает и для соло-партий, и для сетевых: событие партии одно и то же.
+*
+* Партии накапливаются сессионными счётчиками (охоты, еда, защиты…),
+* которые UI собирает из событий последнего действия, а при финале
+*recordGame записывает одну строку истории и проверяет достижения.
+*/
+var KEY = "evo-stats";
+var MAX_GAMES = 50;
+function emptySession() {
+	return {
+		hunts: 0,
+		kills: 0,
+		food: 0,
+		deaths: 0,
+		dodges: 0,
+		traits: {},
+		maxTraits: 0
+	};
+}
+var ACHIEVEMENTS = [
+	{
+		id: "first-win",
+		name: "Первая победа",
+		desc: "Победить в партии",
+		icon: Trophy,
+		check: (c) => c.game.won
+	},
+	{
+		id: "wins-5",
+		name: "Естественный отбор",
+		desc: "5 побед за всё время",
+		icon: Trophy,
+		check: (c) => c.totalWins >= 5
+	},
+	{
+		id: "streak-3",
+		name: "Вид-доминант",
+		desc: "3 победы подряд",
+		icon: Flame,
+		check: (c) => c.streak >= 3
+	},
+	{
+		id: "apex",
+		name: "Апекс-хищник",
+		desc: "Объявить 5 и более атак за партию",
+		icon: Crosshair,
+		check: (c) => c.session.hunts >= 5
+	},
+	{
+		id: "gourmet",
+		name: "Изобилие",
+		desc: "Собрать 15 и более фишек еды за партию",
+		icon: Wheat,
+		check: (c) => c.session.food >= 15
+	},
+	{
+		id: "clean-pop",
+		name: "Чистая популяция",
+		desc: "Победа без единой потери животного",
+		icon: Shield,
+		check: (c) => c.game.won && c.session.deaths === 0
+	},
+	{
+		id: "hard-win",
+		name: "Давление среды",
+		desc: "Победа на сложности «Жёстче»",
+		icon: Mountain,
+		check: (c) => c.game.won && c.game.difficulty === "hard"
+	},
+	{
+		id: "big-table",
+		name: "Перенаселение",
+		desc: "Партия за столом на 8 игроков",
+		icon: Users,
+		check: (c) => c.game.players >= 8
+	},
+	{
+		id: "win-continents",
+		name: "Пангея",
+		desc: "Победа с дополнением «Континенты»",
+		icon: Globe,
+		check: (c) => c.game.won && c.game.modules.includes("continents")
+	},
+	{
+		id: "win-plants",
+		name: "Садовник",
+		desc: "Победа с дополнением «Растения»",
+		icon: Sprout,
+		check: (c) => c.game.won && c.game.modules.includes("plants")
+	},
+	{
+		id: "win-fungi",
+		name: "Грибник",
+		desc: "Победа с дополнением «Трава и грибы»",
+		icon: Flower2,
+		check: (c) => c.game.won && c.game.modules.includes("fungi")
+	},
+	{
+		id: "win-mutations",
+		name: "Радиация",
+		desc: "Победа с дополнением «Случайные мутации»",
+		icon: Dna,
+		check: (c) => c.game.won && c.game.modules.includes("randomMutations")
+	},
+	{
+		id: "all-modules",
+		name: "Полная экосистема",
+		desc: "Партия со всеми четырьмя дополнениями",
+		icon: Layers,
+		check: (c) => c.game.modules.length >= 4
+	},
+	{
+		id: "darwin",
+		name: "Дарвинизм",
+		desc: "Сыграть 25 партий",
+		icon: Microscope,
+		check: (c) => c.totalGames >= 25
+	},
+	{
+		id: "escape",
+		name: "Спасение бегством",
+		desc: "3 успешные защиты за партию",
+		icon: Wind,
+		check: (c) => c.session.dodges >= 3
+	},
+	{
+		id: "five-traits",
+		name: "Сложный организм",
+		desc: "Животное с пятью свойствами",
+		icon: Puzzle,
+		check: (c) => c.session.maxTraits >= 5
+	}
+];
+function loadStats() {
+	if (typeof window === "undefined") return {
+		games: [],
+		achievements: {}
+	};
+	try {
+		const raw = localStorage.getItem(KEY);
+		if (raw) {
+			const parsed = JSON.parse(raw);
+			return {
+				games: parsed.games ?? [],
+				achievements: parsed.achievements ?? {}
+			};
+		}
+	} catch {}
+	return {
+		games: [],
+		achievements: {}
+	};
+}
+function save(s) {
+	if (typeof window === "undefined") return;
+	try {
+		localStorage.setItem(KEY, JSON.stringify(s));
+	} catch {}
+}
+/**
+* Записать завершённую партию и разблокировать достижения.
+* Возвращает список только что открытых (для тостов).
+*/
+function recordGame(state, session, mode) {
+	if (state.phase !== "gameOver") return [];
+	const s = loadStats();
+	const scores = state.scores ?? [];
+	const place = Math.max(1, scores.findIndex((x) => x.playerId === state.humanId) + 1);
+	const record = {
+		date: Date.now(),
+		mode,
+		players: state.players.length,
+		difficulty: state.difficulty,
+		modules: Object.entries(state.modules).filter(([, v]) => v).map(([k]) => k),
+		place,
+		score: scores.find((x) => x.playerId === state.humanId)?.total ?? 0,
+		won: (state.winnerIds ?? []).includes(state.humanId),
+		year: state.year,
+		traits: session.traits
+	};
+	s.games.push(record);
+	if (s.games.length > MAX_GAMES) s.games = s.games.slice(-50);
+	let streak = 0;
+	for (let i = s.games.length - 1; i >= 0; i--) if (s.games[i].won) streak++;
+	else break;
+	const totalWins = s.games.filter((g) => g.won).length;
+	const unlocked = [];
+	for (const a of ACHIEVEMENTS) {
+		if (s.achievements[a.id]) continue;
+		if (a.check({
+			game: record,
+			session,
+			totalGames: s.games.length,
+			totalWins,
+			streak
+		})) {
+			s.achievements[a.id] = Date.now();
+			unlocked.push(a);
+		}
+	}
+	save(s);
+	return unlocked;
+}
+/** Итоги для экрана статистики: считаются на месте из истории. */
+function readStats() {
+	return loadStats();
+}
 /**
 * Реестр арт-ассетов (public/img, собираются scripts/build-art.mjs из assets/).
 * Стиль: винтажный натуралистический атлас — тушь и акварель на пергаменте.
@@ -502,6 +1084,34 @@ function loadSpeed() {
 	} catch {}
 	return "normal";
 }
+var SOLO_KEY = "evo-solo-game";
+var SOLO_TTL_MS = 1728e5;
+function persistSolo(state) {
+	if (typeof window === "undefined") return;
+	try {
+		if (!state || state.phase === "gameOver") localStorage.removeItem(SOLO_KEY);
+		else localStorage.setItem(SOLO_KEY, JSON.stringify({
+			savedAt: Date.now(),
+			state
+		}));
+	} catch {}
+}
+/** Восстановить прерванную соло-партию; false — сохранёнки нет или старая. */
+function loadSolo() {
+	if (typeof window === "undefined") return null;
+	try {
+		const raw = localStorage.getItem(SOLO_KEY);
+		if (!raw) return null;
+		const parsed = JSON.parse(raw);
+		if (!parsed?.state || Date.now() - parsed.savedAt > SOLO_TTL_MS) {
+			localStorage.removeItem(SOLO_KEY);
+			return null;
+		}
+		return parsed.state;
+	} catch {
+		return null;
+	}
+}
 var useGameStore = create((set, get) => ({
 	state: null,
 	thinking: false,
@@ -518,6 +1128,7 @@ var useGameStore = create((set, get) => ({
 		const seed = Date.now() % 1e6;
 		const state = createGame(players, difficulty, seed, void 0, get().modules);
 		lastBotActor = null;
+		persistSolo(state);
 		set({
 			state,
 			thinking: false,
@@ -529,6 +1140,7 @@ var useGameStore = create((set, get) => ({
 	setModules: (modules) => set({ modules }),
 	reset: () => {
 		clearAi();
+		if (get().mode === "solo") persistSolo(null);
 		if (get().mode === "net") {
 			netSession?.stop();
 			netSession = null;
@@ -541,6 +1153,21 @@ var useGameStore = create((set, get) => ({
 			thinkingWho: null,
 			intent: { kind: "none" }
 		});
+	},
+	resumeSolo: () => {
+		const saved = loadSolo();
+		if (!saved) return false;
+		clearAi();
+		lastBotActor = null;
+		set({
+			state: saved,
+			mode: "solo",
+			thinking: false,
+			thinkingWho: null,
+			intent: { kind: "none" }
+		});
+		queueMicrotask(() => get().tickAI());
+		return true;
 	},
 	dispatch: (action) => {
 		if (get().mode === "net") {
@@ -561,6 +1188,7 @@ var useGameStore = create((set, get) => ({
 		if (state.phase === "gameOver") return;
 		const next = applyAction(state, action);
 		lastBotActor = null;
+		persistSolo(next);
 		set({
 			state: next,
 			intent: { kind: "none" },
@@ -704,6 +1332,13 @@ var useGameStore = create((set, get) => ({
 			intent: { kind: "none" }
 		});
 	},
+	clearNetError: () => {
+		const cur = get().net;
+		if (cur?.error) set({ net: {
+			...cur,
+			error: null
+		} });
+	},
 	/**
 	* Драйвер автоматики: кубики кормовой базы, показ вымирания и ходы ботов.
 	* Каждое микро-действие бота — отдельный таймер с паузой по весу действия,
@@ -789,6 +1424,7 @@ var useGameStore = create((set, get) => ({
 			}
 			const next = applyAction(cur.state, action);
 			lastBotActor = who.id;
+			persistSolo(next);
 			set({ state: next });
 			queueMicrotask(() => get().tickAI());
 		}, delay);
@@ -1175,58 +1811,75 @@ function FloraGlyph({ kind, className }) {
 }
 /**
 * Кубик-фишка еды (как в настольной игре): изометрический куб с тремя
-* видимыми гранями разной яркости. Красный — еда из кормовой базы, синий —
-* от свойств (охота, сотрудничество…), жёлтый — жир, зелёный — еда растений.
+* видимыми гранями разной яркости — верхняя со световым бликом и светлым
+* ребром, чтобы фишка читалась объёмной даже в 14 пикселях. Красный — еда
+* из кормовой базы, синий — от свойств (охота, сотрудничество…), жёлтый —
+* жир, зелёный — еда растений.
 */
 var CUBE_TONES = {
 	red: [
-		"#d4705c",
-		"#a83f2f",
-		"#8c3123"
+		"#e0685a",
+		"#b23c2d",
+		"#8c2f22"
 	],
 	blue: [
-		"#5f9cc9",
-		"#3c6f96",
-		"#2f5a7c"
+		"#6ca6cf",
+		"#3f7199",
+		"#30587a"
 	],
 	yellow: [
-		"#e3bd63",
-		"#b8913a",
-		"#9a7728"
+		"#eec871",
+		"#bb923c",
+		"#96762e"
 	],
 	green: [
-		"#85b96a",
-		"#5c8f42",
-		"#497534"
+		"#90c173",
+		"#5e9043",
+		"#4a7635"
 	]
 };
 function FoodCube({ tone, className, title }) {
 	const [top, left, right] = CUBE_TONES[tone];
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 		viewBox: "0 0 20 21",
 		className: cn("shrink-0", className),
 		"aria-hidden": !title,
 		role: title ? "img" : void 0,
 		"aria-label": title,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", {
-			stroke: "rgba(18,14,8,0.4)",
-			strokeWidth: "0.6",
-			strokeLinejoin: "round",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polygon", {
-					points: "10,1 19,6.2 10,11.4 1,6.2",
-					fill: top
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polygon", {
-					points: "1,6.2 10,11.4 10,20.6 1,15.4",
-					fill: left
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polygon", {
-					points: "19,6.2 10,11.4 10,20.6 19,15.4",
-					fill: right
-				})
-			]
-		})
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", {
+				stroke: "rgba(18,14,8,0.45)",
+				strokeWidth: "0.6",
+				strokeLinejoin: "round",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polygon", {
+						points: "1,6.2 10,11.4 10,20.6 1,15.4",
+						fill: left
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polygon", {
+						points: "19,6.2 10,11.4 10,20.6 19,15.4",
+						fill: right
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polygon", {
+						points: "10,1 19,6.2 10,11.4 1,6.2",
+						fill: top
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polygon", {
+				points: "10,2 17.4,6.2 10,10.2 2.6,6.2",
+				fill: "#ffffff",
+				opacity: "0.24"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polyline", {
+				points: "2.6,6.2 10,10.2 17.4,6.2",
+				fill: "none",
+				stroke: "#ffffff",
+				strokeOpacity: "0.3",
+				strokeWidth: "0.7",
+				strokeLinejoin: "round"
+			})
+		]
 	});
 }
 /** Глиф вида растения для карточки растения (до подключения арта). */
@@ -1800,15 +2453,18 @@ var AnimalCard = (0, import_react.memo)(function AnimalCard({ animal, name, no, 
 		className: cn("animal-card anim-card-in relative shrink-0 cursor-pointer rounded-[var(--radius-lg)] border bg-parchment p-3 text-left text-ink shadow-[var(--shadow-card)] transition-[transform,border-color,opacity,box-shadow] duration-[var(--motion-fast)] ease-[var(--ease-out)]", selected ? "border-clay ring-2 ring-clay/40" : "border-ink/10", highlight ? "ring-2 ring-accent" : "", dimmed ? "opacity-45" : "", dying ? "dying-pulse border-danger/60" : "", dropTarget ? "border-accent ring-2 ring-accent/60" : "", "hover:-translate-y-0.5"),
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "mb-1 flex items-start justify-between gap-2",
+				className: "mb-1 flex flex-wrap items-start justify-between gap-x-2 gap-y-1",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "flex items-baseline gap-1 font-display text-sm tracking-tight",
+					className: "flex min-w-0 flex-1 basis-16 items-baseline gap-1 font-display text-sm tracking-tight",
 					children: [no ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "text-[10px] tabular-nums text-ink-soft",
+						className: "shrink-0 text-[10px] tabular-nums text-ink-soft",
 						children: ["№", no]
-					}) : null, hasTrait(animal, "obligateCarnivore") ? "Облигатный хищник" : hasTrait(animal, "carnivore") ? "Хищник" : hasTrait(animal, "swimming") ? "Водное" : "Животное"]
+					}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "truncate",
+						children: hasTrait(animal, "obligateCarnivore") ? "Облигатный хищник" : hasTrait(animal, "carnivore") ? "Хищник" : hasTrait(animal, "swimming") ? "Водное" : "Животное"
+					})]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "flex items-center gap-1",
+					className: "flex shrink-0 flex-wrap items-center justify-end gap-1",
 					children: [
 						(animal.population ?? 1) > 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							title: `Численность вида: ${animal.population} животного(-ых)`,
@@ -2183,11 +2839,12 @@ function PlantStrip({ state, highlights, dying, onPlantClick, freshSince, zone }
 	});
 }
 /**
-* Настоящие 3D-кости на three.js: кувыркаются, пока идёт бросок, и плавно
-* ложатся гранью с выпавшим значением. Один canvas на набор кубиков,
-* поэтому сцена живёт только пока смонтирован компонент.
+* Настоящие 3D-кости с физикой (cannon-es): падают в лоток кормовой базы,
+* сталкиваются и сваливаются в кучку, а затем мягко перекатываются нужной
+* гранью кверху — значение задаёт движок партии, физика только «оживляет»
+* бросок. Пока значения нет, кубики вечно подбрасываются.
 *
-* Значение грани видно зрителю (камера смотрит с +z):
+* Значение грани видно зрителю (камера смотрит сверху и спереди):
 * материалы BoxGeometry идут в порядке +x,−x,+y,−y,+z,−z — раскладываем
 * очки так, чтобы противоположные грани давали в сумме 7, как на настоящей кости.
 */
@@ -2338,23 +2995,23 @@ function dieFaceTexture(value, paper, tint) {
 	tex.colorSpace = SRGBColorSpace;
 	return tex;
 }
-function Dice3D({ values, rolling, dieSize = 64, gap = 14, className, ariaLabel, tint = "#b4453a" }) {
+function Dice3D({ values, dieSize = 64, gap = 14, className, ariaLabel, tint = "#b4453a" }) {
 	const canvasRef = (0, import_react.useRef)(null);
-	const rollingRef = (0, import_react.useRef)(rolling);
 	const valuesRef = (0, import_react.useRef)(values);
-	rollingRef.current = rolling;
 	valuesRef.current = values;
 	const n = Math.max(values.length, 1);
-	const width = n * dieSize + (n - 1) * gap;
-	const height = Math.round(dieSize * 1.45);
-	const rollKey = values.map((v) => v ?? "?").join(",") + (rolling ? "|rolling" : "");
+	const width = Math.max(n * dieSize + (n - 1) * gap, Math.round(dieSize * 2.3));
+	const height = Math.round(dieSize * 1.6);
+	const rollKey = values.map((v) => v ?? "?").join(",");
 	(0, import_react.useEffect)(() => {
 		if (!canvasRef.current) return;
 		let disposed = false;
 		let cleanup;
 		paperImage().then((paper) => {
-			if (disposed || !canvasRef.current) return;
-			cleanup = buildScene(canvasRef.current, paper, tint);
+			requestAnimationFrame(() => {
+				if (disposed || !canvasRef.current) return;
+				cleanup = buildScene(canvasRef.current, paper, tint);
+			});
 		});
 		return () => {
 			disposed = true;
@@ -2374,19 +3031,89 @@ function Dice3D({ values, rolling, dieSize = 64, gap = 14, className, ariaLabel,
 			antialias: true,
 			preserveDrawingBuffer: true
 		});
-		renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+		renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 		renderer.setSize(width, height, false);
+		renderer.shadowMap.enabled = true;
+		renderer.shadowMap.type = 2;
+		renderer.shadowMap.autoUpdate = false;
+		const aspect = width / height;
+		const frustumH = 2.5;
+		const frustumW = frustumH * aspect;
+		const camera = new OrthographicCamera(-frustumW / 2, frustumW / 2, frustumH / 2, -2.5 / 2, .1, 50);
+		camera.position.set(0, 4.6, 3.4);
+		camera.lookAt(0, .3, 0);
 		const scene = new Scene();
-		const camera = new PerspectiveCamera(34, width / height, .1, 50);
-		camera.position.set(0, 1.7, 5.4);
-		camera.lookAt(0, 0, 0);
-		scene.add(new AmbientLight(16774886, 1.05));
-		const key = new DirectionalLight(16777215, 1.7);
-		key.position.set(3, 5, 4);
+		scene.add(new AmbientLight(16774886, .95));
+		const key = new DirectionalLight(16777215, 1.8);
+		key.position.set(2, 9, 1.5);
+		key.castShadow = true;
+		key.shadow.mapSize.set(512, 512);
+		key.shadow.camera.left = -5;
+		key.shadow.camera.right = 5;
+		key.shadow.camera.top = 5;
+		key.shadow.camera.bottom = -5;
 		scene.add(key);
-		const fill = new DirectionalLight(10466504, .55);
-		fill.position.set(-4, 1.5, -2);
+		const fill = new DirectionalLight(10466504, .5);
+		fill.position.set(-4, 2, -2);
 		scene.add(fill);
+		const floor = new Mesh(new PlaneGeometry(40, 40), new ShadowMaterial({ opacity: .32 }));
+		floor.rotation.x = -Math.PI / 2;
+		floor.receiveShadow = true;
+		scene.add(floor);
+		const world = new World({ gravity: new Vec3(0, -20, 0) });
+		world.broadphase = new SAPBroadphase(world);
+		world.allowSleep = true;
+		const diceMaterial = new Material("dice");
+		const floorMaterial = new Material("floor");
+		world.addContactMaterial(new ContactMaterial(floorMaterial, diceMaterial, {
+			restitution: .25,
+			friction: .55
+		}));
+		world.addContactMaterial(new ContactMaterial(diceMaterial, diceMaterial, {
+			restitution: .15,
+			friction: .12
+		}));
+		const ground = new Body({
+			mass: 0,
+			shape: new Plane(),
+			material: floorMaterial
+		});
+		ground.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+		world.addBody(ground);
+		const wallX = Math.max(frustumW / 2 - 1.3, .6);
+		const wallZ = .7;
+		const wallShape = new Box(new Vec3(10, 4, .25));
+		for (const [x, z, rz] of [
+			[
+				-wallX,
+				0,
+				Math.PI / 2
+			],
+			[
+				wallX,
+				0,
+				Math.PI / 2
+			],
+			[
+				0,
+				-.7,
+				0
+			],
+			[
+				0,
+				wallZ,
+				0
+			]
+		]) {
+			const wall = new Body({
+				mass: 0,
+				shape: wallShape,
+				material: floorMaterial
+			});
+			wall.position.set(x, 2, z);
+			wall.quaternion.setFromEuler(0, 0, rz);
+			world.addBody(wall);
+		}
 		const geometry = new BoxGeometry(1, 1, 1);
 		const materialsByValue = /* @__PURE__ */ new Map();
 		const materialFor = (value) => {
@@ -2406,55 +3133,104 @@ function Dice3D({ values, rolling, dieSize = 64, gap = 14, className, ariaLabel,
 		for (let i = 0; i < diceCount; i++) {
 			const materials = FACE_BY_MATERIAL.map((v) => materialFor(v));
 			const mesh = new Mesh(geometry, materials);
-			mesh.position.x = (i - (diceCount - 1) / 2) * 1.75;
+			mesh.castShadow = true;
+			mesh.receiveShadow = true;
 			scene.add(mesh);
+			const body = new Body({
+				mass: 1,
+				shape: new Box(new Vec3(.5, .5, .5)),
+				material: diceMaterial,
+				sleepSpeedLimit: .6,
+				sleepTimeLimit: .25
+			});
+			body.position.set((Math.random() * 2 - 1) * Math.max(wallX - .4, .1), 1.3 + i * .6, (Math.random() * 2 - 1) * .25);
+			body.quaternion.setFromEuler(Math.random() * Math.PI * 2, Math.random() * Math.PI * 2, Math.random() * Math.PI * 2);
+			body.velocity.set((Math.random() * 2 - 1) * 2, -4 - Math.random() * 2, (Math.random() * 2 - 1) * 2);
+			body.angularVelocity.set((Math.random() * 2 - 1) * 8, (Math.random() * 2 - 1) * 8, (Math.random() * 2 - 1) * 8);
+			world.addBody(body);
 			dice.push({
 				mesh,
-				spin: new Vector3(4 + Math.random() * 5, 5 + Math.random() * 5, 3 + Math.random() * 4)
+				body,
+				target: null
 			});
 		}
 		const targetOf = (value) => {
-			if (!value) return null;
 			const e = FACE_EULER[value] ?? FACE_EULER[3];
 			return new Quaternion().setFromEuler(new Euler(e[0], e[1], e[2]));
 		};
-		for (const d of dice) d.mesh.quaternion.setFromEuler(new Euler(Math.random() * Math.PI * 2, Math.random() * Math.PI * 2, Math.random() * Math.PI * 2));
-		const delta = new Quaternion();
-		const step = new Euler();
-		const settle = 1 - Math.exp(-11 / 60);
 		let raf = 0;
 		let last = performance.now();
+		let elapsed = 0;
+		let settleT = 0;
+		let settled = false;
+		let done = false;
+		let nudgeAt = 0;
 		const loop = (now) => {
 			const dt = Math.min((now - last) / 1e3, .05);
 			last = now;
-			const vals = valuesRef.current;
-			const isRolling = rollingRef.current;
-			for (let i = 0; i < dice.length; i++) {
-				const d = dice[i];
-				const value = vals[i] ?? null;
-				if (isRolling || !value) {
-					step.set(d.spin.x * dt, d.spin.y * dt, d.spin.z * dt);
-					delta.setFromEuler(step);
-					d.mesh.quaternion.multiply(delta).normalize();
-					d.mesh.position.y = Math.abs(Math.sin(now / 140 + i * 1.7)) * .22;
-				} else {
-					const target = targetOf(value);
-					if (target) d.mesh.quaternion.slerp(target, settle);
-					d.mesh.position.y += (0 - d.mesh.position.y) * settle;
+			elapsed += dt;
+			if (!done) renderer.shadowMap.needsUpdate = true;
+			if (!settled) {
+				world.step(1 / 60, dt, 3);
+				for (const d of dice) {
+					d.mesh.position.copy(d.body.position);
+					d.mesh.quaternion.copy(d.body.quaternion);
 				}
+				if (elapsed > .3 && dice.every((d) => d.body.sleepState === Body.SLEEPING || d.body.velocity.lengthSquared() < .35 && d.body.angularVelocity.lengthSquared() < 1.2) || elapsed > 1.5) {
+					const vals = valuesRef.current;
+					if (vals.length >= dice.length && vals.slice(0, dice.length).every((v) => v != null)) {
+						settled = true;
+						settleT = 0;
+						for (let i = 0; i < dice.length; i++) dice[i].target = targetOf(vals[i] ?? 3);
+					} else if (elapsed - nudgeAt > .9) {
+						nudgeAt = elapsed;
+						for (const d of dice) {
+							d.body.wakeUp();
+							d.body.velocity.set((Math.random() * 2 - 1) * 1.6, 3 + Math.random() * 2, (Math.random() * 2 - 1) * 1.6);
+							d.body.angularVelocity.set((Math.random() * 2 - 1) * 8, (Math.random() * 2 - 1) * 8, (Math.random() * 2 - 1) * 8);
+						}
+					}
+				}
+				renderer.render(scene, camera);
+				raf = requestAnimationFrame(loop);
+				return;
 			}
-			renderer.render(scene, camera);
-			raf = requestAnimationFrame(loop);
+			if (!done) {
+				settleT += dt;
+				const p = Math.min(settleT / .5, 1);
+				for (const d of dice) {
+					if (!d.target) continue;
+					d.mesh.quaternion.slerp(d.target, Math.min(1, dt * 8));
+					const targetY = .5 + .3 * Math.sin(Math.PI * p);
+					d.mesh.position.y += (targetY - d.mesh.position.y) * Math.min(1, dt * 12);
+				}
+				if (p >= 1) {
+					done = true;
+					for (const d of dice) {
+						if (!d.target) continue;
+						d.mesh.quaternion.copy(d.target);
+						d.mesh.position.y = .5;
+					}
+					renderer.render(scene, camera);
+					raf = 0;
+					return;
+				}
+				renderer.render(scene, camera);
+				raf = requestAnimationFrame(loop);
+			}
 		};
 		raf = requestAnimationFrame(loop);
 		return () => {
-			cancelAnimationFrame(raf);
+			if (raf) cancelAnimationFrame(raf);
 			geometry.dispose();
 			for (const m of materialsByValue.values()) {
 				m.map?.dispose();
 				m.dispose();
 			}
+			floor.geometry.dispose();
+			floor.material.dispose();
 			renderer.dispose();
+			if (!canvas.isConnected) renderer.forceContextLoss();
 		};
 	}
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("canvas", {
@@ -2849,6 +3625,166 @@ function LobbyScreen() {
 		]
 	});
 }
+/** Тумблер звука: сохраняется в localStorage, как и скорость игры. */
+function SoundToggle() {
+	const [on, setOn] = (0, import_react.useState)(sfx.enabled);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+		variant: "ghost",
+		size: "icon",
+		"aria-label": on ? "Выключить звук" : "Включить звук",
+		title: on ? "Выключить звук" : "Включить звук",
+		onClick: () => {
+			const next = !on;
+			setOn(next);
+			sfx.setEnabled(next);
+		},
+		children: on ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Volume2, { className: "size-4" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VolumeX, { className: "size-4" })
+	});
+}
+var PHASES = [
+	"Развитие",
+	"Кормовая база",
+	"Питание",
+	"Вымирание"
+];
+var SLIDES = [
+	{
+		title: "Как играть в «Эволюцию»",
+		paragraphs: [
+			"Вы разводите виды и ведёте их через голодные годы. Год состоит из четырёх фаз — они показаны в шапке стола.",
+			"Побеждает тот, чья популяция после последнего года наберёт больше очков: 2 очка за каждое животное вида и по очку за каждое свойство.",
+			"Партия занимает 10–20 минут: выберите число игроков, сложность ботов и дополнения — и вперёд."
+		]
+	},
+	{
+		art: "/img/tutorial/place-card.jpg",
+		title: "Развитие",
+		paragraphs: [
+			"Разыгрывайте по одной карте за круг: как новое животное или как свойство на свой вид. Двойная карта — одно из двух свойств на выбор.",
+			"Подсветка подсказывает, куда карту можно положить; наведение на чип свойства открывает его правило. Парные свойства (симбиоз, сотрудничество) кладутся между двумя животными.",
+			"Когда все спасуют, фаза заканчивается."
+		]
+	},
+	{
+		art: "/img/tutorial/feeding.jpg",
+		title: "Питание",
+		paragraphs: [
+			"Кормовая база бросается кубиками — это красные фишки. Накормите животных по потребности: кликните по подсвеченной карточке или кнопке «Взять еду».",
+			"Хищники берут синие фишки с добычи, «жировой запас» откладывает еду на голодный год. Накормленное животное свойствами больше не пользуется.",
+			"Фаза идёт по кругу, пока есть еда и желающие: один ход — до нажатия «Закончить ход»."
+		]
+	},
+	{
+		art: "/img/tutorial/hunt.jpg",
+		title: "Охота",
+		paragraphs: [
+			"Кнопка «Охота» у хищника подсвечивает допустимых жертв: крупного не взять, водное — только в океане, стадность защищается числом.",
+			"Жертва может спастись: «Быстрое» бросает кубик, маскировка прячется, хвостоплавник отбрасывает хвост. Съеденная добыча даёт хищнику +2 синие фишки.",
+			"Защищаться нужно вовремя — стол сам спросит модальным окном, когда нападут на вас."
+		]
+	},
+	{
+		art: "/img/tutorial/extinction.jpg",
+		title: "Вымирание и финал",
+		paragraphs: [
+			"Ненакормленные животные погибают; за выживших добираются карты из колоды. Когда колода пуста — наступает последний год.",
+			"В финале очки считают по живым животным, свойствам и бонусам: хищник и большой вес дают дополнительно.",
+			"Счёт каждого игрока виден на его табло рядом со сбросом — следите за отрывом."
+		]
+	}
+];
+function TutorialScreen({ onClose, onStart }) {
+	const [i, setI] = (0, import_react.useState)(0);
+	const slide = SLIDES[i];
+	const last = i === SLIDES.length - 1;
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			if (e.key === "Escape") onClose();
+			if (e.key === "ArrowRight") setI((v) => Math.min(v + 1, SLIDES.length - 1));
+			if (e.key === "ArrowLeft") setI((v) => Math.max(v - 1, 0));
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [onClose]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-0 sm:items-center sm:p-6",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) onClose();
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "flex max-h-[92dvh] w-full max-w-xl flex-col overflow-hidden rounded-t-[var(--radius-xl)] border border-border bg-surface sm:rounded-[var(--radius-xl)]",
+			children: [
+				slide.art ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+					src: slide.art,
+					alt: "",
+					className: "h-40 w-full shrink-0 object-cover sm:h-52"
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					"aria-hidden": true,
+					className: "flex h-40 shrink-0 items-center justify-center gap-2 bg-gradient-to-b from-good/15 to-transparent px-6 sm:h-52",
+					children: PHASES.map((p, k) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "flex items-center gap-2",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "flex items-center rounded-[var(--radius-sm)] border border-border bg-bg px-2.5 py-1.5 text-xs font-medium text-fg",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "mr-1.5 font-display text-[10px] text-muted",
+								children: k + 1
+							}), p]
+						}), k < PHASES.length - 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "text-muted",
+							children: "→"
+						}) : null]
+					}, p))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "min-h-0 flex-1 overflow-y-auto p-5 sm:p-7",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "text-[11px] font-medium uppercase tracking-[0.24em] text-muted",
+							children: [
+								"Обучение · ",
+								i + 1,
+								" из ",
+								SLIDES.length
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+							className: "mt-2 text-2xl",
+							children: slide.title
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "mt-3 space-y-2.5 text-sm text-muted",
+							children: slide.paragraphs.map((p, k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: p }, k))
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "flex items-center justify-between gap-3 border-t border-border px-5 py-4 sm:px-7",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "flex items-center gap-1.5",
+						children: SLIDES.map((s, k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: cn("h-1.5 rounded-full transition-colors", k === i ? "w-5 bg-accent" : "w-1.5 bg-ink/25") }, s.title))
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex items-center gap-2",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
+							variant: "ghost",
+							size: "sm",
+							disabled: i === 0,
+							onClick: () => setI((v) => Math.max(v - 1, 0)),
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChevronLeft, { className: "size-4" }), "Назад"]
+						}), last ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
+							size: "sm",
+							onClick: onStart,
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Play, { className: "size-4" }), "Начать партию"]
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
+							size: "sm",
+							onClick: () => setI((v) => Math.min(v + 1, SLIDES.length - 1)),
+							children: ["Далее", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChevronRight, { className: "size-4" })]
+						})]
+					})]
+				})
+			]
+		})
+	});
+}
 var SPEEDS = [
 	[
 		"slow",
@@ -2871,6 +3807,8 @@ var MODULES = [];
 function MenuScreen({ onStart, onRules }) {
 	const [players, setPlayers] = (0, import_react.useState)(2);
 	const [difficulty, setDifficulty] = (0, import_react.useState)("normal");
+	const [statsOpen, setStatsOpen] = (0, import_react.useState)(false);
+	const [tutorialOpen, setTutorialOpen] = (0, import_react.useState)(false);
 	const speed = useGameStore((s) => s.speed);
 	const setSpeed = useGameStore((s) => s.setSpeed);
 	const continents = useGameStore((s) => Boolean(s.modules.continents));
@@ -2879,217 +3817,267 @@ function MenuScreen({ onStart, onRules }) {
 	const mutations = useGameStore((s) => Boolean(s.modules.randomMutations));
 	const modules = useGameStore((s) => s.modules);
 	const setModules = useGameStore((s) => s.setModules);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		"aria-hidden": true,
-		className: "pointer-events-none fixed inset-0 -z-10",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
-			src: BG.menu,
-			alt: "",
-			className: "h-full w-full object-cover opacity-45"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "absolute inset-0 bg-gradient-to-b from-bg/80 via-bg/55 to-bg" })]
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "relative mx-auto flex min-h-dvh w-full max-w-3xl flex-col justify-center px-5 py-16",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "mb-5 flex justify-center",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
-					src: LOGO,
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			"aria-hidden": true,
+			className: "pointer-events-none fixed inset-0 -z-10",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+					src: BG.valley,
 					alt: "",
-					className: "size-24 rounded-full border border-border-strong object-cover shadow-[var(--shadow-card)]"
-				})
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "relative mb-3 text-center text-[11px] font-medium uppercase tracking-[0.28em] text-muted",
-				children: "Правильные игры · Кнорре"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
-				className: "relative text-center text-5xl text-fg sm:text-6xl",
-				children: "Эволюция"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "relative mx-auto mt-3 max-w-md text-center text-muted",
-				children: "Настольная игра о происхождении видов. Комбинируйте свойства, кормите популяцию и переживайте голодные годы."
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "relative mt-10 space-y-6 rounded-[var(--radius-xl)] border border-border bg-surface p-5 sm:p-7",
+					className: "h-full w-full object-cover opacity-40"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "absolute inset-0 bg-gradient-to-b from-bg/80 via-bg/55 to-bg" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "absolute inset-0 paper-desk opacity-[0.14]" })
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "relative flex min-h-dvh flex-col",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+				className: "sticky top-0 z-20 flex items-center gap-3 border-b border-border bg-bg/90 px-3 py-2.5 backdrop-blur-sm sm:px-5",
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NetMenuPanel, {}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", { children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("legend", {
-							className: "mb-3 flex items-center gap-2 text-sm font-medium text-muted",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "size-4" }), "Игроков за столом"]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "grid grid-cols-4 gap-2 sm:grid-cols-7",
-							children: [
-								2,
-								3,
-								4,
-								5,
-								6,
-								7,
-								8
-							].map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								onClick: () => setPlayers(n),
-								className: cn("h-12 rounded-[var(--radius-md)] border text-sm font-medium", players === n ? "border-accent bg-accent text-accent-fg" : "border-border bg-bg text-fg hover:bg-surface-2"),
-								children: n
-							}, n))
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-							className: "mt-2 text-xs text-subtle",
-							children: ["Вы против ", players - 1 === 1 ? "одного бота" : `${players - 1} ботов`]
-						})
-					] }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", {
-						className: "mb-3 text-sm font-medium text-muted",
-						children: "Сложность"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "grid grid-cols-3 gap-2",
-						children: [
-							["easy", "Проще"],
-							["normal", "Обычная"],
-							["hard", "Жёстче"]
-						].map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							onClick: () => setDifficulty(id),
-							className: cn("h-12 rounded-[var(--radius-md)] border text-sm font-medium", difficulty === id ? "border-accent bg-accent text-accent-fg" : "border-border bg-bg text-fg hover:bg-surface-2"),
-							children: label
-						}, id))
-					})] }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", {
-						className: "mb-3 text-sm font-medium text-muted",
-						children: "Темп игры"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "grid gap-2 sm:grid-cols-3",
-						children: SPEEDS.map(([id, label, hint]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							title: hint,
-							onClick: () => setSpeed(id),
-							className: cn("h-11 rounded-[var(--radius-md)] border text-sm font-medium", speed === id ? "border-accent bg-accent text-accent-fg" : "border-border bg-bg text-fg hover:bg-surface-2"),
-							children: label
-						}, id))
-					})] }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", {
-						className: "mb-3 text-sm font-medium text-muted",
-						children: "Дополнения"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "grid gap-2",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								type: "button",
-								onClick: () => setModules({
-									...modules,
-									continents: !continents
-								}),
-								"aria-pressed": continents,
-								title: "Континенты: Лавразия и Гондвана с отдельными кормовыми базами, Океан для водоплавающих, миграция, прилипала, стадность, стрекательные клетки, эдификатор, регенерация, рекомбинация, неоплазия",
-								className: cn("flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left", continents ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2"),
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "block text-sm font-medium text-fg",
-									children: "Континенты"
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "mt-0.5 block text-xs text-muted",
-									children: "две кормовые базы и океан · миграция · новые свойства"
-								})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: cn("rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide", continents ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted"),
-									children: continents ? "вкл" : "выкл"
-								})]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								type: "button",
-								onClick: () => setModules({
-									...modules,
-									plants: !plants
-								}),
-								"aria-pressed": plants,
-								title: "Растения: еда этого года — на общих растениях, кубик не нужен; фаза роста, убежища, хищные растения, микориза и паразиты. Совместимо с Континентами.",
-								className: cn("flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left", plants ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2"),
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "block text-sm font-medium text-fg",
-									children: "Растения"
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "mt-0.5 block text-xs text-muted",
-									children: "еда на общих растениях · убежища · фаза роста · хищные растения"
-								})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: cn("rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide", plants ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted"),
-									children: plants ? "вкл" : "выкл"
-								})]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								type: "button",
-								onClick: () => setModules({
-									...modules,
-									fungi: !fungi
-								}),
-								"aria-pressed": fungi,
-								title: "Трава и грибы: еда этого года — на общих картах трав и грибов; метки последствий (Яд, Сон, Бешенство…), новые свойства «Прозрачное» и «Насекомоядное». Совместимо с Континентами и Растениями.",
-								className: cn("flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left", fungi ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2"),
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "block text-sm font-medium text-fg",
-									children: "Трава и грибы"
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "mt-0.5 block text-xs text-muted",
-									children: "еда на травах и грибах · метки последствий · флора играет на победу"
-								})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: cn("rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide", fungi ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted"),
-									children: fungi ? "вкл" : "выкл"
-								})]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								type: "button",
-								onClick: () => setModules({
-									...modules,
-									randomMutations: !mutations
-								}),
-								"aria-pressed": mutations,
-								title: "Случайные мутации: вместо руки — личная слепая колода; объявите розыгрыш и вскройте карту. Новые свойства, в том числе вредные мутации. Совместимо со всеми дополнениями.",
-								className: cn("flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left", mutations ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2"),
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "block text-sm font-medium text-fg",
-									children: "Случайные мутации"
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "mt-0.5 block text-xs text-muted",
-									children: "личная слепая колода · численность видов · вредные мутации"
-								})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: cn("rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide", mutations ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted"),
-									children: mutations ? "вкл" : "выкл"
-								})]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-								className: "grid gap-2 sm:grid-cols-2",
-								children: MODULES.map(([name, hint]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-									title: `${name}: ${hint}. Готовится — официальный пересказ правил следующим обновлением.`,
-									className: "flex cursor-not-allowed items-center justify-between rounded-[var(--radius-md)] border border-dashed border-border bg-bg px-3 py-2.5 opacity-60",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "text-sm text-fg",
-										children: name
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "rounded-full bg-ink/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted",
-										children: "скоро"
-									})]
-								}, name))
-							})
-						]
-					})] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+						src: LOGO,
+						alt: "",
+						className: "size-8 shrink-0 rounded-full border border-border object-cover"
+					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex flex-col gap-2 sm:flex-row",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
-							className: "flex-1",
-							size: "lg",
-							onClick: () => onStart(players, difficulty),
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Play, { className: "size-4" }), "Начать год"]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
-							variant: "secondary",
-							size: "lg",
-							onClick: onRules,
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BookOpen, { className: "size-4" }), "Правила"]
+						className: "min-w-0 flex-1",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "font-display text-lg leading-none",
+							children: "Эволюция"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "mt-1 truncate text-xs text-muted",
+							children: "Правильные игры · Кнорре"
 						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex items-center gap-1",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
+								variant: "ghost",
+								size: "sm",
+								onClick: () => setTutorialOpen(true),
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GraduationCap, { className: "size-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "hidden sm:inline",
+									children: "Обучение"
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
+								variant: "ghost",
+								size: "sm",
+								onClick: onRules,
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BookOpen, { className: "size-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "hidden sm:inline",
+									children: "Правила"
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
+								variant: "ghost",
+								size: "sm",
+								onClick: () => setStatsOpen(true),
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChartColumn, { className: "size-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "hidden sm:inline",
+									children: "Статистика"
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SoundToggle, {})
+						]
 					})
 				]
-			})
-		]
-	})] });
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "relative mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-5 py-10",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
+						className: "relative text-center text-5xl text-fg sm:text-6xl",
+						children: "Эволюция"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "relative mx-auto mt-3 max-w-md text-center text-muted",
+						children: "Настольная игра о происхождении видов. Комбинируйте свойства, кормите популяцию и переживайте голодные годы."
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "relative mt-10 space-y-6 rounded-[var(--radius-xl)] border border-border bg-surface p-5 sm:p-7",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NetMenuPanel, {}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", { children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("legend", {
+									className: "mb-3 flex items-center gap-2 text-sm font-medium text-muted",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "size-4" }), "Игроков за столом"]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "grid grid-cols-4 gap-2 sm:grid-cols-7",
+									children: [
+										2,
+										3,
+										4,
+										5,
+										6,
+										7,
+										8
+									].map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										onClick: () => setPlayers(n),
+										className: cn("h-12 rounded-[var(--radius-md)] border text-sm font-medium", players === n ? "border-accent bg-accent text-accent-fg" : "border-border bg-bg text-fg hover:bg-surface-2"),
+										children: n
+									}, n))
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "mt-2 text-xs text-subtle",
+									children: ["Вы против ", players - 1 === 1 ? "одного бота" : `${players - 1} ботов`]
+								})
+							] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", {
+								className: "mb-3 text-sm font-medium text-muted",
+								children: "Сложность"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "grid grid-cols-3 gap-2",
+								children: [
+									["easy", "Проще"],
+									["normal", "Обычная"],
+									["hard", "Жёстче"]
+								].map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									onClick: () => setDifficulty(id),
+									className: cn("h-12 rounded-[var(--radius-md)] border text-sm font-medium", difficulty === id ? "border-accent bg-accent text-accent-fg" : "border-border bg-bg text-fg hover:bg-surface-2"),
+									children: label
+								}, id))
+							})] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", {
+								className: "mb-3 text-sm font-medium text-muted",
+								children: "Темп игры"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "grid gap-2 sm:grid-cols-3",
+								children: SPEEDS.map(([id, label, hint]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									title: hint,
+									onClick: () => setSpeed(id),
+									className: cn("h-11 rounded-[var(--radius-md)] border text-sm font-medium", speed === id ? "border-accent bg-accent text-accent-fg" : "border-border bg-bg text-fg hover:bg-surface-2"),
+									children: label
+								}, id))
+							})] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", {
+								className: "mb-3 text-sm font-medium text-muted",
+								children: "Дополнения"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "grid gap-2",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+										type: "button",
+										onClick: () => setModules({
+											...modules,
+											continents: !continents
+										}),
+										"aria-pressed": continents,
+										title: "Континенты: Лавразия и Гондвана с отдельными кормовыми базами, Океан для водоплавающих, миграция, прилипала, стадность, стрекательные клетки, эдификатор, регенерация, рекомбинация, неоплазия",
+										className: cn("flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left", continents ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2"),
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "block text-sm font-medium text-fg",
+											children: "Континенты"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "mt-0.5 block text-xs text-muted",
+											children: "две кормовые базы и океан · миграция · новые свойства"
+										})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: cn("rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide", continents ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted"),
+											children: continents ? "вкл" : "выкл"
+										})]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+										type: "button",
+										onClick: () => setModules({
+											...modules,
+											plants: !plants
+										}),
+										"aria-pressed": plants,
+										title: "Растения: еда этого года — на общих растениях, кубик не нужен; фаза роста, убежища, хищные растения, микориза и паразиты. Совместимо с Континентами.",
+										className: cn("flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left", plants ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2"),
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "block text-sm font-medium text-fg",
+											children: "Растения"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "mt-0.5 block text-xs text-muted",
+											children: "еда на общих растениях · убежища · фаза роста · хищные растения"
+										})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: cn("rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide", plants ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted"),
+											children: plants ? "вкл" : "выкл"
+										})]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+										type: "button",
+										onClick: () => setModules({
+											...modules,
+											fungi: !fungi
+										}),
+										"aria-pressed": fungi,
+										title: "Трава и грибы: еда этого года — на общих картах трав и грибов; метки последствий (Яд, Сон, Бешенство…), новые свойства «Прозрачное» и «Насекомоядное». Совместимо с Континентами и Растениями.",
+										className: cn("flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left", fungi ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2"),
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "block text-sm font-medium text-fg",
+											children: "Трава и грибы"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "mt-0.5 block text-xs text-muted",
+											children: "еда на травах и грибах · метки последствий · флора играет на победу"
+										})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: cn("rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide", fungi ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted"),
+											children: fungi ? "вкл" : "выкл"
+										})]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+										type: "button",
+										onClick: () => setModules({
+											...modules,
+											randomMutations: !mutations
+										}),
+										"aria-pressed": mutations,
+										title: "Случайные мутации: вместо руки — личная слепая колода; объявите розыгрыш и вскройте карту. Новые свойства, в том числе вредные мутации. Совместимо со всеми дополнениями.",
+										className: cn("flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left", mutations ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2"),
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "block text-sm font-medium text-fg",
+											children: "Случайные мутации"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "mt-0.5 block text-xs text-muted",
+											children: "личная слепая колода · численность видов · вредные мутации"
+										})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: cn("rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide", mutations ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted"),
+											children: mutations ? "вкл" : "выкл"
+										})]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+										className: "grid gap-2 sm:grid-cols-2",
+										children: MODULES.map(([name, hint]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+											title: `${name}: ${hint}. Готовится — официальный пересказ правил следующим обновлением.`,
+											className: "flex cursor-not-allowed items-center justify-between rounded-[var(--radius-md)] border border-dashed border-border bg-bg px-3 py-2.5 opacity-60",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "text-sm text-fg",
+												children: name
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "rounded-full bg-ink/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted",
+												children: "скоро"
+											})]
+										}, name))
+									})
+								]
+							})] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
+								className: "flex-1",
+								size: "lg",
+								onClick: () => onStart(players, difficulty),
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Play, { className: "size-4" }), "Начать год"]
+							})
+						]
+					})
+				]
+			})]
+		}),
+		tutorialOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TutorialScreen, {
+			onClose: () => setTutorialOpen(false),
+			onStart: () => {
+				setTutorialOpen(false);
+				onStart(players, difficulty);
+			}
+		}) : null,
+		statsOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatsScreen, { onClose: () => setStatsOpen(false) }) : null
+	] });
 }
 var RULES_TABS = [
 	{
@@ -3317,8 +4305,18 @@ function RuleCard({ src, label }) {
 }
 function RulesPanel({ onClose }) {
 	const [tab, setTab] = (0, import_react.useState)("base");
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			if (e.key === "Escape") onClose();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [onClose]);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-0 sm:items-center sm:p-6",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) onClose();
+		},
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-t-[var(--radius-xl)] border border-border bg-surface p-5 sm:rounded-[var(--radius-xl)] sm:p-8",
 			children: [
@@ -3668,70 +4666,375 @@ function RulesPanel({ onClose }) {
 		})
 	});
 }
+/** Экран статистики из меню: история партий, график очков и достижения. */
+function StatsScreen({ onClose }) {
+	const stats = (0, import_react.useMemo)(() => readStats(), []);
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			if (e.key === "Escape") onClose();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [onClose]);
+	const games = stats.games;
+	const wins = games.filter((g) => g.won).length;
+	const best = games.reduce((m, g) => Math.max(m, g.score), 0);
+	const winRate = games.length ? Math.round(wins / games.length * 100) : 0;
+	const chart = games.slice(-20).map((g, i) => ({
+		i: i + 1,
+		score: g.score
+	}));
+	const topTraits = (0, import_react.useMemo)(() => {
+		const totals = /* @__PURE__ */ new Map();
+		for (const g of games) for (const [t, n] of Object.entries(g.traits)) totals.set(t, (totals.get(t) ?? 0) + n);
+		return [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+	}, [games]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-3 backdrop-blur-sm sm:p-6",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) onClose();
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "relative flex max-h-[92dvh] w-full max-w-2xl flex-col rounded-[var(--radius-xl)] border border-border bg-surface shadow-[var(--shadow-card)]",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "flex items-center justify-between border-b border-border px-5 py-4",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+					className: "text-xl",
+					children: "Статистика"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+					variant: "secondary",
+					size: "sm",
+					onClick: onClose,
+					children: "Закрыть"
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "space-y-6 overflow-y-auto px-5 py-5",
+				children: games.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "py-10 text-center text-sm text-muted",
+					children: "Партий ещё не было — статистика появится после первой игры."
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "grid grid-cols-2 gap-2 sm:grid-cols-4",
+						children: [
+							["Партий", String(games.length)],
+							["Побед", String(wins)],
+							["Винрейт", `${winRate}%`],
+							["Лучший счёт", String(best)]
+						].map(([label, value]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "rounded-[var(--radius-md)] border border-border bg-bg px-3 py-3",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "text-[10px] uppercase tracking-wider text-muted",
+								children: label
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "mt-1 font-display text-2xl tabular-nums",
+								children: value
+							})]
+						}, label))
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+						className: "mb-2 text-sm font-medium text-muted",
+						children: "Очки последних партий"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "h-44 rounded-[var(--radius-md)] border border-border bg-bg p-2",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResponsiveContainer, {
+							width: "100%",
+							height: "100%",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(LineChart, {
+								data: chart,
+								margin: {
+									top: 6,
+									right: 10,
+									bottom: 0,
+									left: -18
+								},
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CartesianGrid, {
+										stroke: "#2a3025",
+										vertical: false
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(XAxis, {
+										dataKey: "i",
+										tick: {
+											fill: "#9aa08f",
+											fontSize: 11
+										},
+										axisLine: { stroke: "#2a3025" },
+										tickLine: false
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(YAxis, {
+										tick: {
+											fill: "#9aa08f",
+											fontSize: 11
+										},
+										axisLine: false,
+										tickLine: false
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tooltip, {
+										contentStyle: {
+											background: "#1c2119",
+											border: "1px solid #2a3025",
+											borderRadius: 8,
+											fontSize: 12
+										},
+										labelFormatter: (i) => `Партия ${i}`,
+										formatter: (v) => [`${v} очков`, "Счёт"]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+										type: "monotone",
+										dataKey: "score",
+										stroke: "#8b9a74",
+										strokeWidth: 2,
+										dot: {
+											r: 2.5,
+											fill: "#8b9a74"
+										},
+										isAnimationActive: false
+									})
+								]
+							})
+						})
+					})] }),
+					topTraits.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+						className: "mb-2 text-sm font-medium text-muted",
+						children: "Любимые свойства"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "flex flex-wrap gap-2",
+						children: topTraits.map(([t, n]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "rounded-full border border-border bg-bg px-3 py-1 text-xs text-fg",
+							children: [
+								TRAITS[t].name,
+								" · ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "font-display tabular-nums",
+									children: n
+								})
+							]
+						}, t))
+					})] }) : null,
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+						className: "mb-2 text-sm font-medium text-muted",
+						children: ["История партий ", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "text-subtle",
+							children: ["· последние ", Math.min(games.length, 10)]
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+						className: "space-y-1.5",
+						children: [...games].reverse().slice(0, 10).map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+							className: "flex items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-border bg-bg px-3 py-2 text-xs",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "min-w-0",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "font-medium text-fg",
+										children: [
+											g.place,
+											"-е место из ",
+											g.players
+										]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "text-muted",
+										children: [
+											" · ",
+											g.mode === "net" ? "сеть" : "соло",
+											" · ",
+											formatDate(g.date)
+										]
+									}),
+									g.modules.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "text-subtle",
+										children: [
+											" · ",
+											g.modules.length,
+											" доп."
+										]
+									}) : null
+								]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "flex shrink-0 items-center gap-2",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "font-display text-sm tabular-nums",
+									children: g.score
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: g.won ? "text-good" : "text-subtle",
+									children: g.won ? "победа" : "—"
+								})]
+							})]
+						}, g.date))
+					})] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+						className: "mb-2 text-sm font-medium text-muted",
+						children: ["Достижения ", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "text-subtle",
+							children: [
+								"· ",
+								Object.keys(stats.achievements).length,
+								" из ",
+								ACHIEVEMENTS.length
+							]
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "grid gap-2 sm:grid-cols-2",
+						children: ACHIEVEMENTS.map((a) => {
+							const got = Boolean(stats.achievements[a.id]);
+							const Icon = a.icon;
+							return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: cn("flex items-start gap-3 rounded-[var(--radius-md)] border px-3 py-2.5", got ? "border-accent/60 bg-accent/10" : "border-border bg-bg opacity-60"),
+								children: [got ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Icon, { className: "mt-0.5 size-5 shrink-0 text-accent" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "mt-0.5 size-5 shrink-0 text-subtle" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "block text-sm font-medium text-fg",
+									children: a.name
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "mt-0.5 block text-xs text-muted",
+									children: a.desc
+								})] })]
+							}, a.id);
+						})
+					})] })
+				] })
+			})]
+		})
+	});
+}
+function formatDate(ms) {
+	return new Date(ms).toLocaleDateString("ru-RU", {
+		day: "2-digit",
+		month: "2-digit",
+		year: "2-digit"
+	});
+}
 function GameOverScreen({ scores, winnerIds, humanId, onAgain, onMenu }) {
 	const won = winnerIds.includes(humanId);
+	const soundedRef = (0, import_react.useRef)(false);
+	(0, import_react.useEffect)(() => {
+		if (soundedRef.current) return;
+		soundedRef.current = true;
+		sfx.play(won ? "win" : "lose");
+	}, [won]);
+	const leaves = (0, import_react.useMemo)(() => Array.from({ length: 14 }, (_, i) => ({
+		id: i,
+		left: Math.round(Math.random() * 96),
+		size: 9 + Math.round(Math.random() * 9),
+		dur: 5 + Math.random() * 5,
+		delay: Math.random() * 5,
+		color: [
+			"var(--color-leaf)",
+			"var(--color-parchment)",
+			"var(--color-clay)",
+			"var(--color-food-yellow)"
+		][i % 4]
+	})), []);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-4",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
-			src: won ? BG.victory : BG.extinction,
-			alt: "",
-			"aria-hidden": true,
-			className: "pointer-events-none absolute inset-0 h-full w-full object-cover opacity-30"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "relative w-full max-w-lg rounded-[var(--radius-xl)] border border-border bg-surface p-6 shadow-[var(--shadow-card)] sm:p-8",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "text-[11px] font-medium uppercase tracking-[0.24em] text-muted",
-					children: "Конец эволюции"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-					className: "mt-2 text-3xl",
-					children: won ? "Ваша популяция доминирует" : "Вас вытеснили"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-					className: "mt-6 space-y-2",
-					children: scores.map((s, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-						className: cn("flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-3", winnerIds.includes(s.playerId) ? "border-accent bg-accent/10" : "border-border bg-bg"),
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "font-medium",
-							children: [
-								i + 1,
-								". ",
-								s.name
-							]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "text-xs text-muted",
-							children: [
-								"животные ",
-								s.animals,
-								" · свойства ",
-								s.traits,
-								" · бонус ",
-								s.extras,
-								" · сброс ",
-								s.discard
-							]
-						})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "font-display text-2xl tabular-nums",
-							children: s.total
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+				src: won ? BG.victory : BG.extinction,
+				alt: "",
+				"aria-hidden": true,
+				className: "pointer-events-none absolute inset-0 h-full w-full object-cover opacity-30"
+			}),
+			won ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				"aria-hidden": true,
+				className: "pointer-events-none absolute inset-0 overflow-hidden",
+				children: leaves.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "leaf-fall",
+					style: {
+						left: `${l.left}%`,
+						width: l.size,
+						height: l.size,
+						background: l.color,
+						animationDuration: `${l.dur}s`,
+						animationDelay: `${l.delay}s`
+					}
+				}, l.id))
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "relative w-full max-w-lg rounded-[var(--radius-xl)] border border-border bg-surface p-6 shadow-[var(--shadow-card)] sm:p-8",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "text-[11px] font-medium uppercase tracking-[0.24em] text-muted",
+						children: "Конец эволюции"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+						className: "mt-2 text-3xl",
+						children: won ? "Ваша популяция доминирует" : "Вас вытеснили"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+						className: "mt-6 space-y-2",
+						children: scores.map((s, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+							className: cn("score-row-in flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-3", winnerIds.includes(s.playerId) ? "border-accent bg-accent/10" : "border-border bg-bg"),
+							style: { animationDelay: `${240 + i * 160}ms` },
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "font-medium",
+								children: [
+									i + 1,
+									". ",
+									s.name
+								]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "text-xs text-muted",
+								children: [
+									"животные ",
+									s.animals,
+									" · свойства ",
+									s.traits,
+									" · бонус ",
+									s.extras,
+									" · сброс ",
+									s.discard
+								]
+							})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CountUp, {
+								to: s.total,
+								delayMs: 240 + i * 160 + 220
+							})]
+						}, s.playerId))
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "mt-6 flex flex-col gap-2 sm:flex-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
+							className: "flex-1",
+							onClick: onAgain,
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RotateCcw, { className: "size-4" }), "Ещё партия"]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+							variant: "secondary",
+							className: "flex-1",
+							onClick: onMenu,
+							children: "В меню"
 						})]
-					}, s.playerId))
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "mt-6 flex flex-col gap-2 sm:flex-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
-						className: "flex-1",
-						onClick: onAgain,
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RotateCcw, { className: "size-4" }), "Ещё партия"]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-						variant: "secondary",
-						className: "flex-1",
-						onClick: onMenu,
-						children: "В меню"
-					})]
-				})
-			]
-		})]
+					})
+				]
+			})
+		]
+	});
+}
+/**
+* Очки места «докручиваются» от нуля на глазах: легче прочувствовать разрыв
+* с соперниками, чем увидеть готовые числа. При reduced-motion — сразу итог.
+*/
+function CountUp({ to, delayMs = 0, durMs = 700 }) {
+	const [v, setV] = (0, import_react.useState)(0);
+	(0, import_react.useEffect)(() => {
+		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+			setV(to);
+			return;
+		}
+		const t0 = performance.now() + delayMs;
+		let raf = 0;
+		const tick = (t) => {
+			const p = Math.min(1, Math.max(0, (t - t0) / durMs));
+			const eased = 1 - Math.pow(1 - p, 3);
+			setV(Math.round(eased * to));
+			if (p < 1) raf = requestAnimationFrame(tick);
+		};
+		raf = requestAnimationFrame(tick);
+		return () => cancelAnimationFrame(raf);
+	}, [
+		to,
+		delayMs,
+		durMs
+	]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "font-display text-2xl tabular-nums",
+		children: v
 	});
 }
 var TONE_BORDER = {
@@ -4195,11 +5498,268 @@ function useActionFx(state) {
 	}, [state]);
 	return badges;
 }
+/**
+* Озвучка событий последнего действия — тот же кадр, что и визуальные бейджи,
+* но звуки выстраиваются каскадом (шаг ~70 мс), чтобы цепочка вроде
+* «атака → кубик → спаслось» звучала по порядку. Первый кадр партии
+* (в сети — вход по снапшоту) не озвучивается.
+*/
+function useSfx(state) {
+	const seqRef = (0, import_react.useRef)(0);
+	const phaseRef = (0, import_react.useRef)("");
+	(0, import_react.useEffect)(() => {
+		if (!state) {
+			seqRef.current = 0;
+			phaseRef.current = "";
+			return;
+		}
+		const firstFrame = seqRef.current === 0;
+		if (state.eventSeq !== seqRef.current) {
+			seqRef.current = state.eventSeq;
+			if (!firstFrame) {
+				const queue = [];
+				for (const e of state.lastEvents) {
+					const at = Math.min(queue.length * .07, .5);
+					switch (e.kind) {
+						case "diceRoll":
+						case "territoryDice":
+							queue.push({
+								id: "roll",
+								at
+							});
+							break;
+						case "huntDeclared":
+							queue.push({
+								id: "hunt",
+								at
+							});
+							break;
+						case "preyKilled":
+							queue.push({
+								id: "kill",
+								at
+							});
+							break;
+						case "defenseUsed":
+							if (e.defense === "running") queue.push({
+								id: "defense",
+								at
+							});
+							else if (e.defense === "mimicry" || e.defense === "tailLoss") queue.push({
+								id: "dodge",
+								at
+							});
+							break;
+						case "foodFromBank":
+							queue.push({
+								id: "food",
+								at
+							});
+							break;
+						case "blueFood":
+							queue.push({
+								id: "foodBlue",
+								at
+							});
+							break;
+						case "foodToFat":
+							queue.push({
+								id: "fat",
+								at
+							});
+							break;
+						case "animalDied":
+							queue.push({
+								id: "death",
+								at
+							});
+							break;
+						case "cardsDrawn":
+							queue.push({
+								id: "draw",
+								at
+							});
+							break;
+						case "cardStolen":
+							queue.push({
+								id: "draw",
+								at
+							});
+							break;
+						case "traitPlaced":
+						case "animalPlaced":
+							queue.push({
+								id: "card",
+								at
+							});
+							break;
+						case "plantPlaced":
+						case "floraPlaced":
+							queue.push({
+								id: "plant",
+								at
+							});
+							break;
+						case "plantFoodTaken":
+						case "floraFoodTaken":
+							queue.push({
+								id: "food",
+								at
+							});
+							break;
+						case "plantAttack":
+							queue.push({
+								id: "hunt",
+								at
+							});
+							break;
+						case "markGained":
+							queue.push({
+								id: "mark",
+								at
+							});
+							break;
+						case "mutationFlipped": queue.push({
+							id: "flip",
+							at
+						});
+					}
+				}
+				for (const { id, at } of queue) sfx.play(id, at);
+			}
+		}
+		if (!firstFrame && state.phase !== phaseRef.current) {
+			phaseRef.current = state.phase;
+			if (state.phase !== "gameOver") sfx.play("phase");
+		} else if (firstFrame) phaseRef.current = state.phase;
+	}, [state]);
+}
+/**
+* Летящая фишка еды: стартует точно от источника (инлайн-трансформ виден ещё
+* до первого кадра анимации) и перелетает к животному через Web Animations
+* API — надёжнее CSS-keyframes с переменными и без «висения» на старте.
+*/
+function FlyingCube({ item, onDone }) {
+	const ref = (0, import_react.useRef)(null);
+	const onDoneRef = (0, import_react.useRef)(onDone);
+	onDoneRef.current = onDone;
+	(0, import_react.useEffect)(() => {
+		const el = ref.current;
+		if (!el) return;
+		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+			onDoneRef.current(item.id);
+			return;
+		}
+		const anim = el.animate([
+			{
+				transform: `translate(${item.from.x}px, ${item.from.y}px) scale(0.9)`,
+				opacity: "0"
+			},
+			{
+				transform: `translate(${item.from.x}px, ${item.from.y}px) scale(1)`,
+				opacity: "1",
+				offset: .15
+			},
+			{
+				transform: `translate(${item.to.x}px, ${item.to.y}px) scale(1.06)`,
+				opacity: "1",
+				offset: .78
+			},
+			{
+				transform: `translate(${item.to.x}px, ${item.to.y}px) scale(0.6)`,
+				opacity: "0"
+			}
+		], {
+			duration: 500,
+			easing: "cubic-bezier(0.22, 0.61, 0.36, 1)"
+		});
+		anim.onfinish = () => onDoneRef.current(item.id);
+		return () => anim.cancel();
+	}, [item]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		ref,
+		className: "food-fly",
+		style: { transform: `translate(${item.from.x}px, ${item.from.y}px)` },
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FoodCube, {
+			tone: item.tone,
+			className: "size-5 drop-shadow-md"
+		})
+	});
+}
+/**
+* Фишка еды «летит» по столу от источника (кормовая база, растение, флора)
+* к карточке животного — вместо простого pop-in на месте. Работает поверх
+* тех же событий последнего действия, что и визуальные бейджи.
+*/
+function useFoodFly(state) {
+	const [items, setItems] = (0, import_react.useState)([]);
+	const seqRef = (0, import_react.useRef)(0);
+	const idRef = (0, import_react.useRef)(0);
+	const remove = (0, import_react.useCallback)((id) => {
+		setItems((prev) => prev.filter((b) => b.id !== id));
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (!state || state.eventSeq === seqRef.current) return;
+		seqRef.current = state.eventSeq;
+		const centerOf = (el) => {
+			if (!el) return null;
+			const r = el.getBoundingClientRect();
+			return {
+				x: Math.round(r.left + r.width / 2),
+				y: Math.round(r.top + r.height / 2)
+			};
+		};
+		const animalEl = (id) => document.querySelector(`[data-animal-id="${id}"]`);
+		const created = [];
+		const push = (from, to, tone) => {
+			if (!from || !to) return;
+			const jx = Math.round(Math.random() * 22 - 11);
+			const jy = Math.round(Math.random() * 14 - 7);
+			idRef.current += 1;
+			created.push({
+				id: idRef.current,
+				tone,
+				from: {
+					x: from.x + jx,
+					y: from.y + jy
+				},
+				to
+			});
+		};
+		const felt = () => centerOf(document.querySelector(".felt"));
+		for (const e of state.lastEvents) switch (e.kind) {
+			case "foodFromBank":
+				push(felt(), centerOf(animalEl(e.animalId)), "red");
+				break;
+			case "plantFoodTaken":
+				push(centerOf(document.querySelector(`[data-plant-id="${e.plantId}"]`)), centerOf(animalEl(e.animalId)), "green");
+				break;
+			case "floraFoodTaken":
+				push(centerOf(document.querySelector(`[data-flora-id="${e.floraId}"]`)), centerOf(animalEl(e.animalId)), "red");
+				break;
+			case "blueFood":
+				push(felt(), centerOf(animalEl(e.animalId)), "blue");
+				break;
+			case "foodToFat": push(felt(), centerOf(animalEl(e.animalId)), "yellow");
+		}
+		if (created.length) {
+			setItems((prev) => [...prev, ...created]);
+			const ids = new Set(created.map((c) => c.id));
+			setTimeout(() => setItems((prev) => prev.filter((b) => !ids.has(b.id))), 2e3);
+		}
+	}, [state]);
+	return {
+		flies: items,
+		remove
+	};
+}
 function GameApp() {
 	const state = useGameStore((s) => s.state);
 	(0, import_react.useEffect)(() => {
 		const saved = loadSpeed();
 		if (saved !== "normal") useGameStore.getState().setSpeed(saved);
+		useGameStore.getState().resumeSolo();
+		delete document.documentElement.dataset.evoResume;
 	}, []);
 	const rulesOpen = useGameStore((s) => s.rulesOpen);
 	const start = useGameStore((s) => s.start);
@@ -4210,10 +5770,14 @@ function GameApp() {
 	const netAgain = useGameStore((s) => s.netAgain);
 	const leaveNet = useGameStore((s) => s.leaveNet);
 	if (mode === "net") {
-		if (!net || net.status === "lobby" || net.status === "connecting") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [net?.status === "connecting" && !state ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "grid min-h-dvh place-items-center text-sm text-muted",
-			children: "Открываем стол…"
-		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LobbyScreen, {}), rulesOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RulesPanel, { onClose: () => setRulesOpen(false) }) : null] });
+		if (!net || net.status === "lobby" || net.status === "connecting") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			net?.status === "connecting" && !state ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "grid min-h-dvh place-items-center text-sm text-muted",
+				children: "Открываем стол…"
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LobbyScreen, {}),
+			rulesOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RulesPanel, { onClose: () => setRulesOpen(false) }) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toaster, { ...TOASTER_OPTS })
+		] });
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "flex min-h-dvh flex-col",
 			children: [
@@ -4232,14 +5796,22 @@ function GameApp() {
 					onAgain: () => void netAgain(),
 					onMenu: leaveNet
 				}) : null,
-				rulesOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RulesPanel, { onClose: () => setRulesOpen(false) }) : null
+				rulesOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RulesPanel, { onClose: () => setRulesOpen(false) }) : null,
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toaster, { ...TOASTER_OPTS })
 			]
 		});
 	}
-	if (!state) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MenuScreen, {
-		onStart: start,
-		onRules: () => setRulesOpen(true)
-	}), rulesOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RulesPanel, { onClose: () => setRulesOpen(false) }) : null] });
+	if (!state) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "menu-screen",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MenuScreen, {
+				onStart: start,
+				onRules: () => setRulesOpen(true)
+			}),
+			rulesOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RulesPanel, { onClose: () => setRulesOpen(false) }) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toaster, { ...TOASTER_OPTS })
+		]
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "flex min-h-dvh flex-col",
 		children: [
@@ -4251,10 +5823,21 @@ function GameApp() {
 				onAgain: () => start(state.players.length, state.difficulty),
 				onMenu: reset
 			}) : null,
-			rulesOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RulesPanel, { onClose: () => setRulesOpen(false) }) : null
+			rulesOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RulesPanel, { onClose: () => setRulesOpen(false) }) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toaster, { ...TOASTER_OPTS })
 		]
 	});
 }
+/** Тосты в теме атласа — для сетевых ошибок и достижений. */
+var TOASTER_OPTS = {
+	position: "top-center",
+	toastOptions: { style: {
+		background: "var(--color-surface)",
+		border: "1px solid var(--color-border)",
+		color: "var(--color-fg)",
+		borderRadius: "var(--radius-md)"
+	} }
+};
 function Table() {
 	const state = useGameStore((s) => s.state);
 	const thinking = useGameStore((s) => s.thinking);
@@ -4269,6 +5852,19 @@ function Table() {
 	const setSpeed = useGameStore((s) => s.setSpeed);
 	const reset = useGameStore((s) => s.reset);
 	const mode = useGameStore((s) => s.mode);
+	const netError = useGameStore((s) => s.net?.error);
+	const clearNetError = useGameStore((s) => s.clearNetError);
+	const [confirmLeave, setConfirmLeave] = (0, import_react.useState)(false);
+	const confirmRef = (0, import_react.useRef)(false);
+	const askLeave = (0, import_react.useCallback)((v) => {
+		confirmRef.current = v;
+		setConfirmLeave(v);
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (!netError) return;
+		toast.error(netError);
+		clearNetError();
+	}, [netError, clearNetError]);
 	const human = player(state, state.humanId);
 	const actor = currentActor(state);
 	const isHumanTurn = actor?.id === human.id && state.madTurn !== human.id;
@@ -4457,7 +6053,11 @@ function Table() {
 	}
 	function onBoardClick(e) {
 		const target = e.target.closest("[data-animal-id]");
-		if (!target || !isHumanTurn || state.pendingAttack) return;
+		if (!target) {
+			if (!e.target.closest("[data-plant-id], [data-flora-id], button, a") && isHumanTurn && intent.kind !== "none") setIntent({ kind: "none" });
+			return;
+		}
+		if (!isHumanTurn || state.pendingAttack) return;
 		const animal = findAnimal(state, target.getAttribute("data-animal-id"));
 		if (!animal) return;
 		handleAnimalClick(animal, {
@@ -4471,6 +6071,17 @@ function Table() {
 			setIntent
 		});
 	}
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			const s = useGameStore.getState();
+			if (s.rulesOpen || s.logOpen) return;
+			if (confirmRef.current) return;
+			if (s.intent.kind !== "none") s.setIntent({ kind: "none" });
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, []);
 	const opponents = state.players.filter((p) => p.id !== human.id);
 	/**
 	* Рассадка вокруг поля. Верх и «низ» (ряд над своим табло) — по одной строке,
@@ -4510,6 +6121,88 @@ function Table() {
 	const lastLog = state.log[state.log.length - 1]?.text;
 	const dying = (0, import_react.useMemo)(() => new Set(state.extinctionDeaths), [state.extinctionDeaths]);
 	const fx = useActionFx(state);
+	useSfx(state);
+	const fly = useFoodFly(state);
+	const prevHandRef = (0, import_react.useRef)(/* @__PURE__ */ new Set());
+	const [freshHand, setFreshHand] = (0, import_react.useState)(/* @__PURE__ */ new Set());
+	(0, import_react.useEffect)(() => {
+		const ids = new Set(human.hand.map((c) => c.id));
+		const fresh = [...ids].filter((id) => !prevHandRef.current.has(id));
+		prevHandRef.current = ids;
+		if (fresh.length) {
+			setFreshHand(new Set(fresh));
+			const t = setTimeout(() => setFreshHand(/* @__PURE__ */ new Set()), 900);
+			return () => clearTimeout(t);
+		}
+	}, [human.hand]);
+	const sessionRef = (0, import_react.useRef)(emptySession());
+	const sessionSeqRef = (0, import_react.useRef)(0);
+	const pendingDeathsRef = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	(0, import_react.useEffect)(() => {
+		if (state.eventSeq < sessionSeqRef.current) {
+			sessionRef.current = emptySession();
+			pendingDeathsRef.current = /* @__PURE__ */ new Map();
+		}
+		for (const id of state.extinctionDeaths) {
+			const a = findAnimal(state, id);
+			if (a && !pendingDeathsRef.current.has(id)) pendingDeathsRef.current.set(id, a.ownerId);
+		}
+		if (state.eventSeq === sessionSeqRef.current) return;
+		sessionSeqRef.current = state.eventSeq;
+		const ses = sessionRef.current;
+		const ownerOf = (id) => findAnimal(state, id)?.ownerId;
+		for (const e of state.lastEvents) switch (e.kind) {
+			case "huntDeclared":
+				if (ownerOf(e.carnivoreId) === human.id) ses.hunts++;
+				break;
+			case "preyKilled":
+				if (ownerOf(e.carnivoreId) === human.id) ses.kills++;
+				break;
+			case "foodFromBank":
+			case "plantFoodTaken":
+			case "floraFoodTaken":
+				if (e.playerId === human.id) ses.food++;
+				break;
+			case "blueFood":
+			case "foodToFat":
+				if (ownerOf(e.animalId) === human.id) ses.food++;
+				break;
+			case "animalDied":
+				if (pendingDeathsRef.current.get(e.animalId) === human.id) ses.deaths++;
+				pendingDeathsRef.current.delete(e.animalId);
+				break;
+			case "defenseUsed":
+				if (e.defense !== "none" && ownerOf(e.preyId) === human.id) ses.dodges++;
+				break;
+			case "traitPlaced": {
+				if (ownerOf(e.animalId) !== human.id) break;
+				ses.traits[e.type] = (ses.traits[e.type] ?? 0) + 1;
+				const n = findAnimal(state, e.animalId)?.traits.length ?? 0;
+				if (n > ses.maxTraits) ses.maxTraits = n;
+				break;
+			}
+		}
+	}, [state, human.id]);
+	const recordedRef = (0, import_react.useRef)(false);
+	(0, import_react.useEffect)(() => {
+		if (state.phase !== "gameOver") {
+			recordedRef.current = false;
+			return;
+		}
+		if (recordedRef.current) return;
+		recordedRef.current = true;
+		const unlocked = recordGame(state, sessionRef.current, mode);
+		for (const a of unlocked) toast.success(`Достижение: ${a.name}`, { description: a.desc });
+	}, [state, mode]);
+	(0, import_react.useEffect)(() => {
+		const unlock = () => sfx.unlock();
+		window.addEventListener("pointerdown", unlock, { once: true });
+		window.addEventListener("keydown", unlock, { once: true });
+		return () => {
+			window.removeEventListener("pointerdown", unlock);
+			window.removeEventListener("keydown", unlock);
+		};
+	}, []);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			"aria-hidden": true,
@@ -4564,6 +6257,7 @@ function Table() {
 					count: state.foodBank,
 					visible: state.phase === "feeding" || state.phase === "foodBank"
 				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SoundToggle, {}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "flex gap-1",
 					children: [
@@ -4585,7 +6279,11 @@ function Table() {
 							variant: "ghost",
 							size: "icon",
 							"aria-label": "Меню",
-							onClick: reset,
+							title: "В меню",
+							onClick: () => {
+								if (state.phase === "gameOver") reset();
+								else askLeave(true);
+							},
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pause, { className: "size-4" })
 						})
 					]
@@ -4736,12 +6434,14 @@ function Table() {
 				onTrait: () => setIntent({ kind: "mutateTrait" }),
 				onPop: () => setIntent({ kind: "mutatePop" }),
 				onPlant: () => setIntent({ kind: "mutatePlant" }),
-				onPass: () => dispatch({ type: "devPass" })
+				onPass: () => dispatch({ type: "devPass" }),
+				onCancel: () => setIntent({ kind: "none" })
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DevDock, {
 				human,
 				intent,
 				disabled: !isHumanTurn || Boolean(state.pendingAttack),
 				continents: Boolean(state.modules.continents),
+				freshIds: freshHand,
 				onPlayAnimal: (cardId, zoneId) => dispatch({
 					type: "devPlayAnimal",
 					cardId,
@@ -4779,7 +6479,8 @@ function Table() {
 						face
 					});
 				},
-				onPass: () => dispatch({ type: "devPass" })
+				onPass: () => dispatch({ type: "devPass" }),
+				onCancel: () => setIntent({ kind: "none" })
 			}) : state.phase === "feeding" && isHumanTurn && !state.pendingAttack ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FeedDock, {
 				acts: feedActs,
 				intentKind: intent.kind,
@@ -4806,12 +6507,61 @@ function Table() {
 				className: "h-6 w-4 rounded-[2px] border border-ink/20 object-cover"
 			}) : null, b.text]
 		}, b.id)),
+		fly.flies.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlyingCube, {
+			item: f,
+			onDone: fly.remove
+		}, f.id)),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(EventSpotlight, {}),
 		state.pendingAttack && state.pendingAttack.waitingFor === human.id ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DefenseDock, {
 			acts: defActs,
 			onPick: (a) => dispatch(a)
+		}) : null,
+		confirmLeave ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConfirmLeaveDialog, {
+			mode,
+			onConfirm: reset,
+			onClose: () => askLeave(false)
 		}) : null
 	] });
+}
+/** «Покинуть партию?» — раньше кнопка меню сбрасывала живую партию мгновенно. */
+function ConfirmLeaveDialog({ mode, onConfirm, onClose }) {
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			if (e.key === "Escape") onClose();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [onClose]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "fixed inset-0 z-50 flex items-center justify-center bg-bg/70 p-4 backdrop-blur-sm",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "w-full max-w-sm rounded-[var(--radius-xl)] border border-border bg-surface p-6 shadow-[var(--shadow-card)]",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+					className: "text-xl",
+					children: mode === "net" ? "Покинуть стол?" : "Покинуть партию?"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "mt-2 text-sm text-muted",
+					children: mode === "net" ? "Ваше место освободится — партия продолжится без вас." : "Прогресс партии будет потерян."
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mt-5 flex flex-col gap-2 sm:flex-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+						variant: "secondary",
+						className: "flex-1",
+						onClick: onClose,
+						children: "Остаться"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+						variant: "danger",
+						className: "flex-1",
+						onClick: onConfirm,
+						children: "Выйти в меню"
+					})]
+				})
+			]
+		})
+	});
 }
 function handleAnimalClick(animal, ctx) {
 	const { state, intent, human, feedActs, devActs, dispatch, setIntent } = ctx;
@@ -4990,6 +6740,8 @@ var PlayerSection = (0, import_react.memo)(function PlayerSection({ p, isHuman, 
 	const dispatch = useGameStore((s) => s.dispatch);
 	const intent = useGameStore((s) => s.intent);
 	const randomMutations = useGameStore((s) => Boolean(s.state?.modules.randomMutations));
+	const gameState = useGameStore((s) => s.state);
+	const score = gameState && gameState.phase !== "gameOver" ? liveScore(gameState, p.id) : null;
 	const [dragId, setDragId] = (0, import_react.useState)(null);
 	const [overId, setOverId] = (0, import_react.useState)(null);
 	const dragIdRef = (0, import_react.useRef)(null);
@@ -5154,7 +6906,12 @@ var PlayerSection = (0, import_react.memo)(function PlayerSection({ p, isHuman, 
 					randomMutations ? `колода ${p.blindDeckCount ?? p.blindDeck?.length ?? 0}` : `рука ${p.handCount ?? p.hand.length}`,
 					" ",
 					"· сброс ",
-					p.discardCount
+					p.discardCount,
+					score !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" · счёт ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						title: "Текущие очки: 2 за каждое животное вида + по очку за свойство и его бонус",
+						className: "font-display tabular-nums text-fg",
+						children: score
+					})] }) : null
 				]
 			})]
 		}), continents ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -5441,9 +7198,10 @@ function BankPile({ count, active, oceanOnly }) {
 	});
 }
 /**
-* Кубики кормовой базы: настоящие 3D-кости кувыркаются ~0.9 с после броска,
-* затем ложатся выпавшими гранями. Компонент перемонтируется только со новым
-* броском (ключ — значения кубиков), поэтому бросок проигрывается один раз.
+* Кубики кормовой базы: физические 3D-кости (cannon-es) падают, сталкиваются
+* и сваливаются в кучку (~0.8 с), затем перекатываются выпавшими гранями
+* (~0.45 с). Итог появляется, когда кучка улеглась. Компонент перемонтируется
+* только со новым броском (ключ — значения кубиков).
 */
 function DiceTray({ roll }) {
 	const [rolling, setRolling] = (0, import_react.useState)(Boolean(roll));
@@ -5452,7 +7210,7 @@ function DiceTray({ roll }) {
 	(0, import_react.useEffect)(() => {
 		if (!rollId) return;
 		setRolling(true);
-		timer.current = setTimeout(() => setRolling(false), 900);
+		timer.current = setTimeout(() => setRolling(false), 1300);
 		return () => {
 			if (timer.current) clearTimeout(timer.current);
 		};
@@ -5490,6 +7248,7 @@ function DiceTray({ roll }) {
 }
 function FoodBankChip({ count, visible }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		"data-food-bank": "",
 		className: "flex items-center gap-2 rounded-[var(--radius-md)] border border-border bg-surface px-2.5 py-1.5",
 		title: "Кормовая база",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -5505,7 +7264,7 @@ function FoodBankChip({ count, visible }) {
 * Док фазы развития «Случайных мутаций»: карты в слепой колоде — игрок
 * сначала объявляет способ розыгрыша, потом движок вскрывает верхнюю карту.
 */
-function MutateDock({ human, intent, disabled, continents, canPlant, onNewAnimal, onTrait, onPop, onPlant, onPass }) {
+function MutateDock({ human, intent, disabled, continents, canPlant, onNewAnimal, onTrait, onPop, onPlant, onPass, onCancel }) {
 	const left = human.blindDeck?.length ?? human.blindDeckCount ?? 0;
 	const mutating = intent.kind === "mutateTrait" || intent.kind === "mutatePop" || intent.kind === "mutatePlant";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -5614,6 +7373,13 @@ function MutateDock({ human, intent, disabled, continents, canPlant, onNewAnimal
 						children: "если в колоде есть такая грань"
 					})]
 				}) : null,
+				mutating ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+					variant: "ghost",
+					size: "sm",
+					onClick: onCancel,
+					title: "Отменить выбор (Esc)",
+					children: "Отмена"
+				}) : null,
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
 					variant: "secondary",
 					size: "sm",
@@ -5625,7 +7391,7 @@ function MutateDock({ human, intent, disabled, continents, canPlant, onNewAnimal
 		})]
 	});
 }
-function DevDock({ human, intent, disabled, continents, onPlayAnimal, onPlaceAnimal, onPickTrait, onPass }) {
+function DevDock({ human, intent, disabled, continents, freshIds, onPlayAnimal, onPlaceAnimal, onPickTrait, onPass, onCancel }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "space-y-2",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -5633,27 +7399,43 @@ function DevDock({ human, intent, disabled, continents, onPlayAnimal, onPlaceAni
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "text-xs text-muted",
 				children: disabled ? "Ход соперника — карты остаются у вас" : intent.kind === "placeAnimal" ? "Выберите территорию на столе — животное разместится туда" : intent.kind === "playPlantTrait" ? intent.kind === "playPlantTrait" && "cardId" in intent ? "Выберите растение для свойства" : "" : intent.kind === "playPlantPair" && !("first" in intent && intent.first) ? "Микориза: выберите первое растение" : intent.kind === "playPlantPair" ? "Второе растение микоризы" : intent.kind === "playTrait" ? "Выберите животное для свойства" : intent.kind === "playPair" && !("first" in intent && intent.first) ? "Парное свойство: выберите первое животное" : intent.kind === "playPair" ? "Второе животное пары" : continents ? "Карта как животное (затем клик по континенту) или свойство" : "Карта как животное или свойство"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-				variant: "secondary",
-				size: "sm",
-				onClick: onPass,
-				disabled,
-				children: "Пас"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "flex shrink-0 gap-1",
+				children: [intent.kind !== "none" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+					variant: "ghost",
+					size: "sm",
+					onClick: onCancel,
+					title: "Отменить выбор (Esc)",
+					children: "Отмена"
+				}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+					variant: "secondary",
+					size: "sm",
+					onClick: onPass,
+					disabled,
+					children: "Пас"
+				})]
 			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			"data-hand-row": true,
 			className: "flex gap-2 overflow-x-auto pb-1",
-			children: human.hand.map((card) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HandCard, {
-				card,
-				disabled,
-				selected: intent.kind !== "none" && "cardId" in intent && intent.cardId === card.id || intent.kind === "placeAnimal" && intent.cardId === card.id,
-				selectedFace: "face" in intent && intent.cardId === card.id ? intent.face : null,
-				onSelect: (face) => {
-					if (face === "animal" && continents && onPlaceAnimal) onPlaceAnimal(card.id);
-					else if (face === "animal") onPlayAnimal(card.id);
-					else onPickTrait(card.id, face);
-				}
-			}, card.id))
+			children: human.hand.map((card, i) => {
+				const fresh = freshIds?.has(card.id);
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: fresh ? "hand-card-in" : void 0,
+					style: fresh ? { animationDelay: `${Math.min(i, 8) * 70}ms` } : void 0,
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HandCard, {
+						card,
+						disabled,
+						selected: intent.kind !== "none" && "cardId" in intent && intent.cardId === card.id || intent.kind === "placeAnimal" && intent.cardId === card.id,
+						selectedFace: "face" in intent && intent.cardId === card.id ? intent.face : null,
+						onSelect: (face) => {
+							if (face === "animal" && continents && onPlaceAnimal) onPlaceAnimal(card.id);
+							else if (face === "animal") onPlayAnimal(card.id);
+							else onPickTrait(card.id, face);
+						}
+					})
+				}, card.id);
+			})
 		})]
 	});
 }
@@ -5813,6 +7595,13 @@ function FeedDock({ acts, intentKind, bank, rageTurn, onIntent, onEndTurn, onSki
 				onClick: onEndTurn,
 				children: "Закончить ход"
 			}),
+			intentKind !== "none" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+				variant: "ghost",
+				size: "sm",
+				onClick: () => onIntent({ kind: "none" }),
+				title: "Отменить выбор (Esc)",
+				children: "Отмена"
+			}) : null,
 			canSkip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
 				variant: "ghost",
 				size: "sm",

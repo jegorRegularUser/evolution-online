@@ -1,6 +1,6 @@
 import { n as TSS_SERVER_FUNCTION, t as createServerFn } from "./ssr.mjs";
-import { A as legalFeedActions, D as joinRoomInput, M as pollInput, O as legalDefenseActions, _ as chooseAIAction, b as createRoomInput, d as actionInput, f as applyAction, k as legalDevActions, o as PACE, p as botsInput, v as codeTokenInput, x as currentActor, y as createGame } from "./ai-CKs4XESH.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/api-V85Drz8i.js
+import { A as legalFeedActions, D as joinRoomInput, N as pollInput, O as legalDefenseActions, _ as chooseAIAction, b as createRoomInput, d as actionInput, f as applyAction, k as legalDevActions, o as PACE, p as botsInput, v as codeTokenInput, x as currentActor, y as createGame } from "./ai-Zhf9JnZS.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/api-B58F9c2u.js
 var createServerRpc = (serverFnMeta, splitImportFn) => {
 	const url = "/_serverFn/" + serverFnMeta.id;
 	return Object.assign(splitImportFn, {
