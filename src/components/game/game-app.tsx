@@ -434,7 +434,9 @@ function useFoodFly(state: GameState | null): { flies: FlyingFood[]; remove: (id
     for (const e of state.lastEvents) {
       switch (e.kind) {
         case "foodFromBank":
-          push(centerOf(document.querySelector("[data-food-bank]") ?? document.querySelector(".felt")), centerOf(animalEl(e.animalId)), "red");
+          // Еда лежит на сукне в центре стола — фишка летит оттуда наружу
+          // к животному, с какой бы стороны стола игрок ни сидел.
+          push(felt(), centerOf(animalEl(e.animalId)), "red");
           break;
         case "plantFoodTaken":
           push(centerOf(document.querySelector(`[data-plant-id="${e.plantId}"]`)), centerOf(animalEl(e.animalId)), "green");

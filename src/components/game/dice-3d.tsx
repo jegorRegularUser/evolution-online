@@ -176,7 +176,10 @@ export function Dice3D({
   valuesRef.current = values;
 
   const n = Math.max(values.length, 1);
-  const width = n * dieSize + (n - 1) * gap;
+  // Минимальная ширина лотка даже для одного кубика: кадр обязан быть шире
+  // кубика «на углу» (полу-описанная окружность ~0.87 юнита) с тенью —
+  // иначе кучка упирается в край канваса.
+  const width = Math.max(n * dieSize + (n - 1) * gap, Math.round(dieSize * 2.3));
   const height = Math.round(dieSize * 1.6);
   // Ключ — только значения: сцена строится заново на новый бросок, а смена
   // rolling физику не перезапускает (доводка граней идёт своим чередом).
@@ -205,7 +208,7 @@ export function Dice3D({
   function buildScene(canvas: HTMLCanvasElement, paper: HTMLImageElement | null, tint: string) {
     // preserveDrawingBuffer — чтобы кубики попадали в скриншоты (QA, шеринг).
     const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     renderer.setSize(width, height, false);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -216,7 +219,7 @@ export function Dice3D({
     // Ортографическая камера с наклоном сверху: «настольный» вид, кубики
     // одинакового размера в любой точке лотка, верхняя грань всегда читается.
     const aspect = width / height;
-    const frustumH = 2.35;
+    const frustumH = 2.5;
     const frustumW = frustumH * aspect;
     const camera = new THREE.OrthographicCamera(-frustumW / 2, frustumW / 2, frustumH / 2, -frustumH / 2, 0.1, 50);
     camera.position.set(0, 4.6, 3.4);
@@ -225,7 +228,8 @@ export function Dice3D({
     const scene = new THREE.Scene();
     scene.add(new THREE.AmbientLight(0xfff6e6, 0.95));
     const key = new THREE.DirectionalLight(0xffffff, 1.8);
-    key.position.set(3, 6, 2);
+    // Свет высокий и почти отвесный: тени короткие и не вылезают за кадр.
+    key.position.set(2, 9, 1.5);
     key.castShadow = true;
     key.shadow.mapSize.set(512, 512);
     key.shadow.camera.left = -5;
@@ -250,7 +254,7 @@ export function Dice3D({
     const diceMaterial = new CANNON.Material("dice");
     const floorMaterial = new CANNON.Material("floor");
     world.addContactMaterial(
-      new CANNON.ContactMaterial(floorMaterial, diceMaterial, { restitution: 0.32, friction: 0.5 }),
+      new CANNON.ContactMaterial(floorMaterial, diceMaterial, { restitution: 0.25, friction: 0.55 }),
     );
     world.addContactMaterial(new CANNON.ContactMaterial(diceMaterial, diceMaterial, { restitution: 0.15, friction: 0.12 }));
 
@@ -258,10 +262,12 @@ export function Dice3D({
     ground.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
     world.addBody(ground);
 
-    // Борта внутри кадра: кучка не расползается за края канваса.
-    const wallX = Math.max(frustumW / 2 - 0.55, 1.0);
-    const wallZ = 0.85;
-    const wallShape = new CANNON.Box(new CANNON.Vec3(10, 2, 0.25));
+    // Борта внутри кадра: кучка не расползается за края канваса. Запас от
+    // края — больше полукуба с поворотом и тени, чтобы кучка не «выпадала
+    // из квадратика». Стены высокие — с разгона не перелететь.
+    const wallX = Math.max(frustumW / 2 - 1.3, 0.6);
+    const wallZ = 0.7;
+    const wallShape = new CANNON.Box(new CANNON.Vec3(10, 4, 0.25));
     for (const [x, z, rz] of [
       [-wallX, 0, Math.PI / 2],
       [wallX, 0, Math.PI / 2],
@@ -269,7 +275,7 @@ export function Dice3D({
       [0, wallZ, 0],
     ] as const) {
       const wall = new CANNON.Body({ mass: 0, shape: wallShape, material: floorMaterial });
-      wall.position.set(x, 1, z);
+      wall.position.set(x, 2, z);
       wall.quaternion.setFromEuler(0, 0, rz);
       world.addBody(wall);
     }
@@ -298,25 +304,28 @@ export function Dice3D({
         mass: 1,
         shape: new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5)),
         material: diceMaterial,
-        sleepSpeedLimit: 0.45,
-        sleepTimeLimit: 0.4,
+        // Кубики засыпают охотно: без этого дрожат на полу и доводка граней
+        // начинается только по таймауту — бросок «зависает».
+        sleepSpeedLimit: 0.6,
+        sleepTimeLimit: 0.25,
       });
-      // Разбросанный спавн этажами над лотком — кубики прилетают не строем.
+      // Разбросанный спавн этажами над лотком — кубики прилетают не строем
+      // и не с большой высоты: бросок укладывается примерно за секунду.
       body.position.set(
-        (Math.random() * 2 - 1) * Math.max(wallX - 0.7, 0.3),
-        1.6 + i * 0.8,
-        (Math.random() * 2 - 1) * 0.4,
+        (Math.random() * 2 - 1) * Math.max(wallX - 0.4, 0.1),
+        1.3 + i * 0.6,
+        (Math.random() * 2 - 1) * 0.25,
       );
       body.quaternion.setFromEuler(
         Math.random() * Math.PI * 2,
         Math.random() * Math.PI * 2,
         Math.random() * Math.PI * 2,
       );
-      body.velocity.set((Math.random() * 2 - 1) * 2, -2 - Math.random() * 2, (Math.random() * 2 - 1) * 2);
+      body.velocity.set((Math.random() * 2 - 1) * 2, -4 - Math.random() * 2, (Math.random() * 2 - 1) * 2);
       body.angularVelocity.set(
-        (Math.random() * 2 - 1) * 9,
-        (Math.random() * 2 - 1) * 9,
-        (Math.random() * 2 - 1) * 9,
+        (Math.random() * 2 - 1) * 8,
+        (Math.random() * 2 - 1) * 8,
+        (Math.random() * 2 - 1) * 8,
       );
       world.addBody(body);
       dice.push({ mesh, body, target: null });
@@ -349,10 +358,16 @@ export function Dice3D({
           d.mesh.position.copy(d.body.position as unknown as THREE.Vector3);
           d.mesh.quaternion.copy(d.body.quaternion as unknown as THREE.Quaternion);
         }
+        // Порог спокойствия щедрый: мелкая дрожь кубиков на полу не мешает
+        // доводке. Жёсткий таймаут короткий — бросок не «зависает».
         const calm =
-          elapsed > 0.35 &&
-          dice.every((d) => d.body.sleepState === CANNON.Body.SLEEPING || d.body.velocity.lengthSquared() < 0.02);
-        if (calm || elapsed > 2.2) {
+          elapsed > 0.3 &&
+          dice.every(
+            (d) =>
+              d.body.sleepState === CANNON.Body.SLEEPING ||
+              (d.body.velocity.lengthSquared() < 0.35 && d.body.angularVelocity.lengthSquared() < 1.2),
+          );
+        if (calm || elapsed > 1.5) {
           const vals = valuesRef.current;
           if (vals.length >= dice.length && vals.slice(0, dice.length).every((v) => v != null)) {
             // Значения известны — переходим к доводке граней.
@@ -380,17 +395,18 @@ export function Dice3D({
         return;
       }
 
-      // Фаза 2 — доводка: кубик приподнимается и перекатывается нужной гранью
-      // кверху, занимая место в кучке. Горизонтальные позиции сохраняются.
+      // Фаза 2 — доводка: кубик приподнимается и плавно перекатывается нужной
+      // гранью кверху, занимая место в кучке. Горизонтальные позиции — от
+      // физики, так что кучка сохраняется.
       if (!done) {
         settleT += dt;
-        const p = Math.min(settleT / 0.45, 1);
+        const p = Math.min(settleT / 0.5, 1);
         for (const d of dice) {
           if (!d.target) continue;
-          d.mesh.quaternion.slerp(d.target, Math.min(1, dt * 10));
+          d.mesh.quaternion.slerp(d.target, Math.min(1, dt * 8));
           const lift = 0.3 * Math.sin(Math.PI * p);
           const targetY = 0.5 + lift;
-          d.mesh.position.y += (targetY - d.mesh.position.y) * Math.min(1, dt * 14);
+          d.mesh.position.y += (targetY - d.mesh.position.y) * Math.min(1, dt * 12);
         }
         if (p >= 1) {
           done = true;
