@@ -2044,9 +2044,10 @@ function BankPile({ count, active, oceanOnly }: { count: number; active: boolean
 }
 
 /**
- * Кубики кормовой базы: настоящие 3D-кости кувыркаются ~0.9 с после броска,
- * затем ложатся выпавшими гранями. Компонент перемонтируется только со новым
- * броском (ключ — значения кубиков), поэтому бросок проигрывается один раз.
+ * Кубики кормовой базы: физические 3D-кости (cannon-es) падают, сталкиваются
+ * и сваливаются в кучку (~0.8 с), затем перекатываются выпавшими гранями
+ * (~0.45 с). Итог появляется, когда кучка улеглась. Компонент перемонтируется
+ * только со новым броском (ключ — значения кубиков).
  */
 function DiceTray({ roll }: { roll: number[] | null }) {
   const [rolling, setRolling] = useState(Boolean(roll));
@@ -2056,7 +2057,7 @@ function DiceTray({ roll }: { roll: number[] | null }) {
   useEffect(() => {
     if (!rollId) return;
     setRolling(true);
-    timer.current = setTimeout(() => setRolling(false), 900);
+    timer.current = setTimeout(() => setRolling(false), 1300);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };

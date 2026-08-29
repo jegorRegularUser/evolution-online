@@ -1,13 +1,15 @@
 import { useEffect, useRef } from "react";
+import * as CANNON from "cannon-es";
 import * as THREE from "three";
 import { cn } from "@/lib/utils";
 
 /**
- * Настоящие 3D-кости на three.js: кувыркаются, пока идёт бросок, и плавно
- * ложатся гранью с выпавшим значением. Один canvas на набор кубиков,
- * поэтому сцена живёт только пока смонтирован компонент.
+ * Настоящие 3D-кости с физикой (cannon-es): падают в лоток кормовой базы,
+ * сталкиваются и сваливаются в кучку, а затем мягко перекатываются нужной
+ * гранью кверху — значение задаёт движок партии, физика только «оживляет»
+ * бросок. Пока значения нет, кубики вечно подбрасываются.
  *
- * Значение грани видно зрителю (камера смотрит с +z):
+ * Значение грани видно зрителю (камера смотрит сверху и спереди):
  * материалы BoxGeometry идут в порядке +x,−x,+y,−y,+z,−z — раскладываем
  * очки так, чтобы противоположные грани давали в сумме 7, как на настоящей кости.
  */
@@ -143,12 +145,13 @@ function dieFaceTexture(value: number, paper: HTMLImageElement | null, tint: str
 
 interface Die {
   mesh: THREE.Mesh;
-  spin: THREE.Vector3;
+  body: CANNON.Body;
+  /** Целевой кватернион «нужная грань кверху»; null — значение ещё неизвестно. */
+  target: THREE.Quaternion | null;
 }
 
 export function Dice3D({
   values,
-  rolling,
   dieSize = 64,
   gap = 14,
   className,
@@ -157,7 +160,8 @@ export function Dice3D({
 }: {
   /** Выпавшие значения; null — кубик ещё летит без значения. */
   values: Array<number | null>;
-  /** Идёт бросок: кубики кувыркаются; false — ложатся на значения. */
+  /** Идёт бросок. Физика сама проходит фазы, поэтому не влияет на сцену —
+   * проп оставлен для совместимости вызовов. */
   rolling?: boolean;
   /** Размер одного кубика в пикселях CSS. */
   dieSize?: number;
@@ -168,15 +172,15 @@ export function Dice3D({
   tint?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const rollingRef = useRef(rolling);
   const valuesRef = useRef(values);
-  rollingRef.current = rolling;
   valuesRef.current = values;
 
   const n = Math.max(values.length, 1);
   const width = n * dieSize + (n - 1) * gap;
-  const height = Math.round(dieSize * 1.45);
-  const rollKey = values.map((v) => v ?? "?").join(",") + (rolling ? "|rolling" : "");
+  const height = Math.round(dieSize * 1.6);
+  // Ключ — только значения: сцена строится заново на новый бросок, а смена
+  // rolling физику не перезапускает (доводка граней идёт своим чередом).
+  const rollKey = values.map((v) => v ?? "?").join(",");
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -192,7 +196,6 @@ export function Dice3D({
       disposed = true;
       cleanup?.();
     };
-    // Пересоздаём сцену только на новый бросок или смену числа кубиков.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rollKey, n, width, height, tint]);
 
@@ -201,19 +204,69 @@ export function Dice3D({
     const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(width, height, false);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    // Ортографическая камера с наклоном сверху: «настольный» вид, кубики
+    // одинакового размера в любой точке лотка, верхняя грань всегда читается.
+    const aspect = width / height;
+    const frustumH = 2.35;
+    const frustumW = frustumH * aspect;
+    const camera = new THREE.OrthographicCamera(-frustumW / 2, frustumW / 2, frustumH / 2, -frustumH / 2, 0.1, 50);
+    camera.position.set(0, 4.6, 3.4);
+    camera.lookAt(0, 0.3, 0);
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(34, width / height, 0.1, 50);
-    camera.position.set(0, 1.7, 5.4);
-    camera.lookAt(0, 0, 0);
-
-    scene.add(new THREE.AmbientLight(0xfff6e6, 1.05));
-    const key = new THREE.DirectionalLight(0xffffff, 1.7);
-    key.position.set(3, 5, 4);
+    scene.add(new THREE.AmbientLight(0xfff6e6, 0.95));
+    const key = new THREE.DirectionalLight(0xffffff, 1.8);
+    key.position.set(3, 6, 2);
+    key.castShadow = true;
+    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.camera.left = -5;
+    key.shadow.camera.right = 5;
+    key.shadow.camera.top = 5;
+    key.shadow.camera.bottom = -5;
     scene.add(key);
-    const fill = new THREE.DirectionalLight(0x9fb4c8, 0.55);
-    fill.position.set(-4, 1.5, -2);
+    const fill = new THREE.DirectionalLight(0x9fb4c8, 0.5);
+    fill.position.set(-4, 2, -2);
     scene.add(fill);
+
+    // Пол ловит только тень — фон канваса остаётся прозрачным.
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.ShadowMaterial({ opacity: 0.32 }));
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    // ── Физика: лоток с невидимыми бортами, кубики падают и кучкуются ──
+    const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -20, 0) });
+    world.broadphase = new CANNON.SAPBroadphase(world);
+    world.allowSleep = true;
+    const diceMaterial = new CANNON.Material("dice");
+    const floorMaterial = new CANNON.Material("floor");
+    world.addContactMaterial(
+      new CANNON.ContactMaterial(floorMaterial, diceMaterial, { restitution: 0.32, friction: 0.5 }),
+    );
+    world.addContactMaterial(new CANNON.ContactMaterial(diceMaterial, diceMaterial, { restitution: 0.15, friction: 0.12 }));
+
+    const ground = new CANNON.Body({ mass: 0, shape: new CANNON.Plane(), material: floorMaterial });
+    ground.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+    world.addBody(ground);
+
+    // Борта внутри кадра: кучка не расползается за края канваса.
+    const wallX = Math.max(frustumW / 2 - 0.55, 1.0);
+    const wallZ = 0.85;
+    const wallShape = new CANNON.Box(new CANNON.Vec3(10, 2, 0.25));
+    for (const [x, z, rz] of [
+      [-wallX, 0, Math.PI / 2],
+      [wallX, 0, Math.PI / 2],
+      [0, -wallZ, 0],
+      [0, wallZ, 0],
+    ] as const) {
+      const wall = new CANNON.Body({ mass: 0, shape: wallShape, material: floorMaterial });
+      wall.position.set(x, 1, z);
+      wall.quaternion.setFromEuler(0, 0, rz);
+      world.addBody(wall);
+    }
 
     const geometry = new THREE.BoxGeometry(1, 1, 1);
     const materialsByValue = new Map<number, THREE.MeshStandardMaterial>();
@@ -231,63 +284,132 @@ export function Dice3D({
     for (let i = 0; i < diceCount; i++) {
       const materials = FACE_BY_MATERIAL.map((v) => materialFor(v));
       const mesh = new THREE.Mesh(geometry, materials);
-      mesh.position.x = (i - (diceCount - 1) / 2) * 1.75;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
       scene.add(mesh);
-      dice.push({
-        mesh,
-        spin: new THREE.Vector3(4 + Math.random() * 5, 5 + Math.random() * 5, 3 + Math.random() * 4),
+
+      const body = new CANNON.Body({
+        mass: 1,
+        shape: new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5)),
+        material: diceMaterial,
+        sleepSpeedLimit: 0.45,
+        sleepTimeLimit: 0.4,
       });
+      // Разбросанный спавн этажами над лотком — кубики прилетают не строем.
+      body.position.set(
+        (Math.random() * 2 - 1) * Math.max(wallX - 0.7, 0.3),
+        1.6 + i * 0.8,
+        (Math.random() * 2 - 1) * 0.4,
+      );
+      body.quaternion.setFromEuler(
+        Math.random() * Math.PI * 2,
+        Math.random() * Math.PI * 2,
+        Math.random() * Math.PI * 2,
+      );
+      body.velocity.set((Math.random() * 2 - 1) * 2, -2 - Math.random() * 2, (Math.random() * 2 - 1) * 2);
+      body.angularVelocity.set(
+        (Math.random() * 2 - 1) * 9,
+        (Math.random() * 2 - 1) * 9,
+        (Math.random() * 2 - 1) * 9,
+      );
+      world.addBody(body);
+      dice.push({ mesh, body, target: null });
     }
 
-    const targetOf = (value: number | null) => {
-      if (!value) return null;
+    const targetOf = (value: number) => {
       const e = FACE_EULER[value] ?? FACE_EULER[3]!;
       return new THREE.Quaternion().setFromEuler(new THREE.Euler(e[0], e[1], e[2]));
     };
 
-    // Новый бросок: каждый кубик стартует со случайной ориентации.
-    for (const d of dice) {
-      d.mesh.quaternion.setFromEuler(
-        new THREE.Euler(Math.random() * Math.PI * 2, Math.random() * Math.PI * 2, Math.random() * Math.PI * 2),
-      );
-    }
-
-    const delta = new THREE.Quaternion();
-    const step = new THREE.Euler();
-    const settle = 1 - Math.exp(-11 / 60);
     let raf = 0;
     let last = performance.now();
+    let elapsed = 0;
+    let settleT = 0;
+    let settled = false;
+    let done = false;
+    let nudgeAt = 0;
+
     const loop = (now: number) => {
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
-      const vals = valuesRef.current;
-      const isRolling = rollingRef.current;
-      for (let i = 0; i < dice.length; i++) {
-        const d = dice[i]!;
-        const value = vals[i] ?? null;
-        if (isRolling || !value) {
-          step.set(d.spin.x * dt, d.spin.y * dt, d.spin.z * dt);
-          delta.setFromEuler(step);
-          d.mesh.quaternion.multiply(delta).normalize();
-          d.mesh.position.y = Math.abs(Math.sin(now / 140 + i * 1.7)) * 0.22;
-        } else {
-          const target = targetOf(value);
-          if (target) d.mesh.quaternion.slerp(target, settle);
-          d.mesh.position.y += (0 - d.mesh.position.y) * settle;
+      elapsed += dt;
+
+      // Фаза 1 — физика: падение, столкновения, кучкование.
+      if (!settled) {
+        world.step(1 / 60, dt, 3);
+        for (const d of dice) {
+          d.mesh.position.copy(d.body.position as unknown as THREE.Vector3);
+          d.mesh.quaternion.copy(d.body.quaternion as unknown as THREE.Quaternion);
         }
+        const calm =
+          elapsed > 0.35 &&
+          dice.every((d) => d.body.sleepState === CANNON.Body.SLEEPING || d.body.velocity.lengthSquared() < 0.02);
+        if (calm || elapsed > 2.2) {
+          const vals = valuesRef.current;
+          if (vals.length >= dice.length && vals.slice(0, dice.length).every((v) => v != null)) {
+            // Значения известны — переходим к доводке граней.
+            settled = true;
+            settleT = 0;
+            for (let i = 0; i < dice.length; i++) {
+              dice[i]!.target = targetOf(vals[i] ?? 3);
+            }
+          } else if (elapsed - nudgeAt > 0.9) {
+            // Бросок ещё идёт — подбрасываем снова.
+            nudgeAt = elapsed;
+            for (const d of dice) {
+              d.body.wakeUp();
+              d.body.velocity.set((Math.random() * 2 - 1) * 1.6, 3 + Math.random() * 2, (Math.random() * 2 - 1) * 1.6);
+              d.body.angularVelocity.set(
+                (Math.random() * 2 - 1) * 8,
+                (Math.random() * 2 - 1) * 8,
+                (Math.random() * 2 - 1) * 8,
+              );
+            }
+          }
+        }
+        renderer.render(scene, camera);
+        raf = requestAnimationFrame(loop);
+        return;
       }
-      renderer.render(scene, camera);
-      raf = requestAnimationFrame(loop);
+
+      // Фаза 2 — доводка: кубик приподнимается и перекатывается нужной гранью
+      // кверху, занимая место в кучке. Горизонтальные позиции сохраняются.
+      if (!done) {
+        settleT += dt;
+        const p = Math.min(settleT / 0.45, 1);
+        for (const d of dice) {
+          if (!d.target) continue;
+          d.mesh.quaternion.slerp(d.target, Math.min(1, dt * 10));
+          const lift = 0.3 * Math.sin(Math.PI * p);
+          const targetY = 0.5 + lift;
+          d.mesh.position.y += (targetY - d.mesh.position.y) * Math.min(1, dt * 14);
+        }
+        if (p >= 1) {
+          done = true;
+          for (const d of dice) {
+            if (!d.target) continue;
+            d.mesh.quaternion.copy(d.target);
+            d.mesh.position.y = 0.5;
+          }
+          renderer.render(scene, camera);
+          raf = 0;
+          return;
+        }
+        renderer.render(scene, camera);
+        raf = requestAnimationFrame(loop);
+      }
     };
     raf = requestAnimationFrame(loop);
 
     return () => {
-      cancelAnimationFrame(raf);
+      if (raf) cancelAnimationFrame(raf);
       geometry.dispose();
       for (const m of materialsByValue.values()) {
         m.map?.dispose();
         m.dispose();
       }
+      floor.geometry.dispose();
+      (floor.material as THREE.Material).dispose();
       renderer.dispose();
       // Отдаём контекст браузеру только когда канвас реально уходит из DOM:
       // без этого каждый бросок кубиков оставляет живой контекст и после ~16
