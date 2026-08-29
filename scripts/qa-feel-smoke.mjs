@@ -47,6 +47,17 @@ try {
   await page.getByRole("button", { name: /Включить звук|Выключить звук/ }).first().click();
   console.log("OK: тумблер звука кликабелен в меню");
 
+  // Обучение: слайды, стрелки, закрытие по Esc.
+  await page.getByRole("button", { name: /Обучение/ }).click();
+  await page.getByText("Как играть в «Эволюцию»").waitFor({ timeout: 5000 });
+  console.log("OK: обучение открывается");
+  await page.getByRole("button", { name: "Далее" }).click();
+  await page.getByText("Развитие").first().waitFor({ timeout: 5000 });
+  console.log("OK: слайды обучения листаются");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Начать год" }).waitFor({ timeout: 5000 });
+  console.log("OK: Esc закрывает обучение");
+
   await page.getByRole("button", { name: "Начать год" }).click();
   await page.getByText("Развитие").first().waitFor({ timeout: 20000 });
   console.log("OK: партия стартовала");

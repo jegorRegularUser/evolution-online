@@ -221,18 +221,23 @@ export const AnimalCard = memo(function AnimalCard({
         "hover:-translate-y-0.5",
       )}
     >
-      <div className="mb-1 flex items-start justify-between gap-2">
-        <span className="flex items-baseline gap-1 font-display text-sm tracking-tight">
-          {no ? <span className="text-[10px] tabular-nums text-ink-soft">№{no}</span> : null}
-          {hasTrait(animal, "obligateCarnivore")
-            ? "Облигатный хищник"
-            : hasTrait(animal, "carnivore")
-              ? "Хищник"
-              : hasTrait(animal, "swimming")
-                ? "Водное"
-                : "Животное"}
+      {/* Шапка переносится при нехватке места: название усекается, бейджи
+          (численность, убежище, сон, метки) уходят на вторую строку, а не
+          выпадают за край карточки. */}
+      <div className="mb-1 flex flex-wrap items-start justify-between gap-x-2 gap-y-1">
+        <span className="flex min-w-0 flex-1 basis-16 items-baseline gap-1 font-display text-sm tracking-tight">
+          {no ? <span className="shrink-0 text-[10px] tabular-nums text-ink-soft">№{no}</span> : null}
+          <span className="truncate">
+            {hasTrait(animal, "obligateCarnivore")
+              ? "Облигатный хищник"
+              : hasTrait(animal, "carnivore")
+                ? "Хищник"
+                : hasTrait(animal, "swimming")
+                  ? "Водное"
+                  : "Животное"}
+          </span>
         </span>
-        <span className="flex items-center gap-1">
+        <span className="flex shrink-0 flex-wrap items-center justify-end gap-1">
           {(animal.population ?? 1) > 1 ? (
             <span
               title={`Численность вида: ${animal.population} животного(-ых)`}

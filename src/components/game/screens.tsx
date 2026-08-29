@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, Lock, Play, RotateCcw, Users } from "lucide-react";
+import { BarChart3, BookOpen, GraduationCap, Lock, Play, RotateCcw, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { Dice3D } from "./dice-3d";
 import { FloraGlyph, FoodCube, TraitGlyph } from "./icons";
 import { SoundToggle } from "./sound-toggle";
+import { TutorialScreen } from "./tutorial";
 import { useGameStore } from "@/store/game-store";
 
 const SPEEDS: Array<["slow" | "normal" | "fast", string, string]> = [
@@ -47,6 +48,7 @@ export function MenuScreen({
   const [players, setPlayers] = useState(2);
   const [difficulty, setDifficulty] = useState<Difficulty>("normal");
   const [statsOpen, setStatsOpen] = useState(false);
+  const [tutorialOpen, setTutorialOpen] = useState(false);
   const speed = useGameStore((s) => s.speed);
   const setSpeed = useGameStore((s) => s.setSpeed);
   const continents = useGameStore((s) => Boolean(s.modules.continents));
@@ -59,8 +61,11 @@ export function MenuScreen({
   return (
     <>
       <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
-        <img src={BG.menu} alt="" className="h-full w-full object-cover opacity-45" />
+        {/* Зелёная долина — тот же фон, что лежит под столом в партии,
+            плюс бумажная текстура атласа. */}
+        <img src={BG.valley} alt="" className="h-full w-full object-cover opacity-40" />
         <div className="absolute inset-0 bg-gradient-to-b from-bg/80 via-bg/55 to-bg" />
+        <div className="absolute inset-0 paper-desk opacity-[0.14]" />
       </div>
       <div className="relative flex min-h-dvh flex-col">
         {/* Полоса навигации — как шапка игрового стола: лого и название
@@ -73,6 +78,10 @@ export function MenuScreen({
             <div className="mt-1 truncate text-xs text-muted">Правильные игры · Кнорре</div>
           </div>
           <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" onClick={() => setTutorialOpen(true)}>
+              <GraduationCap className="size-4" />
+              <span className="hidden sm:inline">Обучение</span>
+            </Button>
             <Button variant="ghost" size="sm" onClick={onRules}>
               <BookOpen className="size-4" />
               <span className="hidden sm:inline">Правила</span>
@@ -295,6 +304,15 @@ export function MenuScreen({
       </div>
         </div>
       </div>
+      {tutorialOpen ? (
+        <TutorialScreen
+          onClose={() => setTutorialOpen(false)}
+          onStart={() => {
+            setTutorialOpen(false);
+            onStart(players, difficulty);
+          }}
+        />
+      ) : null}
       {statsOpen ? <StatsScreen onClose={() => setStatsOpen(false)} /> : null}
     </>
   );
