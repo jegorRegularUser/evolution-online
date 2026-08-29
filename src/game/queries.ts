@@ -454,3 +454,23 @@ export function canFeedOnFlora(state: GameState, animal: Animal, flora: FloraCar
   }
   return true;
 }
+
+/**
+ * Текущие очки игрока по живым животным — та же формула, что и финальный
+ * подсчёт (finishGame): 2 очка за каждое животное вида, по очку за свойство
+ * и его бонус. В настольной игре счёт скрыт до конца партии, поэтому
+ * в UI он показывается опциональным тумблером.
+ */
+export function liveScore(state: GameState, playerId: number): number {
+  const p = state.players.find((x) => x.id === playerId);
+  if (!p) return 0;
+  let total = 0;
+  for (const a of p.animals) {
+    total += 2 * (a.population ?? 1);
+    for (const t of a.traits) {
+      if (t.disabled) continue;
+      total += 1 + TRAITS[t.type].scoreBonus;
+    }
+  }
+  return total;
+}

@@ -281,6 +281,50 @@
   animation: felt-flash-kf 0.9s var(--ease-out);
 }
 
+/* ── Полёт фишки еды от источника к животному ─────────────────────────── */
+/* Координаты --from-*/--to-* подставляет JS из getBoundingClientRect. */
+.food-fly {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 55;
+  pointer-events: none;
+  animation: food-fly-kf 0.5s var(--ease-out) forwards;
+}
+@keyframes food-fly-kf {
+  0% { transform: translate(var(--from-x), var(--from-y)) scale(0.9); opacity: 0; }
+  12% { opacity: 1; }
+  75% { transform: translate(var(--to-x), var(--to-y)) scale(1.08); opacity: 1; }
+  100% { transform: translate(var(--to-x), var(--to-y)) scale(0.55); opacity: 0; }
+}
+
+/* Каскадный влёт новых карт руки — задержку задаёт инлайн-стиль. */
+.hand-card-in {
+  animation: card-in 0.45s var(--ease-out) backwards;
+}
+
+/* ── Финальный экран: каскад мест и осенний листопад победы ──────────── */
+
+/* Строка итога появляется со сдвигом — задержку задаёт инлайн-стиль. */
+.score-row-in {
+  animation: fade-in 0.4s var(--ease-out) backwards;
+}
+
+/* Лист медленно падает через весь экран; параметры — инлайн-стилем. */
+.leaf-fall {
+  position: absolute;
+  top: -24px;
+  border-radius: 62% 0 62% 0;
+  pointer-events: none;
+  animation: leaf-fall-kf linear infinite;
+}
+@keyframes leaf-fall-kf {
+  0% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 0; }
+  6% { opacity: 0.85; }
+  90% { opacity: 0.85; }
+  100% { transform: translateY(112vh) translateX(9vw) rotate(430deg); opacity: 0; }
+}
+
 /* ── Оверлей важных событий ──────────────────────────────────────────── */
 
 /* Фон: всё за карточкой замыливается и слегка затемняется. */

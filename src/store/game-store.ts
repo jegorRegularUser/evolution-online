@@ -71,6 +71,8 @@ interface GameStore {
   rulesOpen: boolean;
   logOpen: boolean;
   speed: GameSpeed;
+  /** Показывать текущие очки на табло игроков (тумблер из меню). */
+  showScore: boolean;
   /** Дополнения, выбранные в меню — применяются к новой solo-партии. */
   modules: Partial<Record<ModuleId, boolean>>;
   /** solo — партия против ботов на этом устройстве; net — сетевой стол. */
@@ -84,6 +86,7 @@ interface GameStore {
   setRulesOpen: (v: boolean) => void;
   setLogOpen: (v: boolean) => void;
   setSpeed: (v: GameSpeed) => void;
+  setShowScore: (v: boolean) => void;
   tickAI: () => void;
   startNetCreate: (cfg: NetCreateConfig) => Promise<void>;
   startNetJoin: (code: string, name: string) => Promise<void>;
@@ -93,6 +96,8 @@ interface GameStore {
   netStart: () => Promise<void>;
   netAgain: () => Promise<void>;
   leaveNet: () => void;
+  /** Погасить сетевую ошибку после показа тостом (чтобы не мигала повторно). */
+  clearNetError: () => void;
 }
 
 let aiTimer: ReturnType<typeof setTimeout> | null = null;
@@ -166,6 +171,15 @@ export function loadSpeed(): GameSpeed {
   return "normal";
 }
 
+/** Показывать текущий счёт на табло (в настольной игре очки скрыты). */
+export function loadShowScore(): boolean {
+  try {
+    return localStorage.getItem("evo-show-score") === "on";
+  } catch {
+    return false;
+  }
+}
+
 export const useGameStore = create<GameStore>((set, get) => ({
   state: null,
   thinking: false,
@@ -174,6 +188,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   rulesOpen: false,
   logOpen: false,
   speed: "normal",
+  showScore: false,
   modules: {},
   mode: "solo",
   net: null,
@@ -240,6 +255,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
       // приватный режим — скорость просто не сохранится
     }
     set({ speed });
+  },
+
+  setShowScore: (showScore) => {
+    try {
+      localStorage.setItem("evo-show-score", showScore ? "on" : "off");
+    } catch {
+      // приватный режим — настройка просто не сохранится
+    }
+    set({ showScore });
   },
 
   // ── сетевой стол ──────────────────────────────────────────────────────────
@@ -367,6 +391,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
       thinkingWho: null,
       intent: { kind: "none" },
     });
+  },
+
+  clearNetError: () => {
+    const cur = get().net;
+    if (cur?.error) set({ net: { ...cur, error: null } });
   },
 
   /**

@@ -1,14 +1,17 @@
-import { BookOpen, List, Pause } from "lucide-react";
+import { BookOpen, List, Pause, Volume2, VolumeX } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Toaster, toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { TRAITS } from "@/game/traits";
 import type { Animal, FloraCard, GameAction, GameSpeed, GameState, Plant, Player, TerritoryId, TraitId } from "@/game/types";
 import { TERRITORIES } from "@/game/types";
 import { currentActor, legalDefenseActions, legalDevActions, legalFeedActions } from "@/game/engine";
-import { canAttack, canPlantAttackTarget, canReceiveFood, canRageAttack, findAnimal, foodNeeded, hasTrait, player } from "@/game/queries";
+import { canAttack, canPlantAttackTarget, canReceiveFood, canRageAttack, findAnimal, foodNeeded, hasTrait, liveScore, player } from "@/game/queries";
 import { cn } from "@/lib/utils";
+import { sfx, type SfxId } from "@/lib/sfx";
+import { emptySession, recordGame, type SessionCounters } from "@/lib/stats";
 import { BG, LOGO, MUTATION_ART, PHASE_ICON, TERRITORY_ART } from "@/lib/art";
-import { loadSpeed, useGameStore, type UiIntent } from "@/store/game-store";
+import { loadShowScore, loadSpeed, useGameStore, type UiIntent } from "@/store/game-store";
 import { AnimalCard, HandCard, PAIR_COLORS, PairPlate, type PairMark } from "./cards";
 import { FloraStrip } from "./cards-flora";
 import { PlantStrip } from "./cards-plants";
@@ -247,13 +250,180 @@ function useActionFx(state: GameState | null): FxBadge[] {
   return badges;
 }
 
+/**
+ * Озвучка событий последнего действия — тот же кадр, что и визуальные бейджи,
+ * но звуки выстраиваются каскадом (шаг ~70 мс), чтобы цепочка вроде
+ * «атака → кубик → спаслось» звучала по порядку. Первый кадр партии
+ * (в сети — вход по снапшоту) не озвучивается.
+ */
+function useSfx(state: GameState | null) {
+  const seqRef = useRef(0);
+  const phaseRef = useRef<string>("");
+  useEffect(() => {
+    if (!state) {
+      seqRef.current = 0;
+      phaseRef.current = "";
+      return;
+    }
+    const firstFrame = seqRef.current === 0;
+    if (state.eventSeq !== seqRef.current) {
+      seqRef.current = state.eventSeq;
+      if (!firstFrame) {
+        const queue: Array<{ id: SfxId; at: number }> = [];
+        for (const e of state.lastEvents) {
+          const at = Math.min(queue.length * 0.07, 0.5);
+          switch (e.kind) {
+            case "diceRoll":
+            case "territoryDice":
+              queue.push({ id: "roll", at });
+              break;
+            case "huntDeclared":
+              queue.push({ id: "hunt", at });
+              break;
+            case "preyKilled":
+              queue.push({ id: "kill", at });
+              break;
+            case "defenseUsed":
+              if (e.defense === "running") queue.push({ id: "defense", at });
+              else if (e.defense === "mimicry" || e.defense === "tailLoss") queue.push({ id: "dodge", at });
+              break;
+            case "foodFromBank":
+              queue.push({ id: "food", at });
+              break;
+            case "blueFood":
+              queue.push({ id: "foodBlue", at });
+              break;
+            case "foodToFat":
+              queue.push({ id: "fat", at });
+              break;
+            case "animalDied":
+              queue.push({ id: "death", at });
+              break;
+            case "cardsDrawn":
+              queue.push({ id: "draw", at });
+              break;
+            case "cardStolen":
+              queue.push({ id: "draw", at });
+              break;
+            case "traitPlaced":
+            case "animalPlaced":
+              queue.push({ id: "card", at });
+              break;
+            case "plantPlaced":
+            case "floraPlaced":
+              queue.push({ id: "plant", at });
+              break;
+            case "plantFoodTaken":
+            case "floraFoodTaken":
+              queue.push({ id: "food", at });
+              break;
+            case "plantAttack":
+              queue.push({ id: "hunt", at });
+              break;
+            case "markGained":
+              queue.push({ id: "mark", at });
+              break;
+            case "mutationFlipped":
+              queue.push({ id: "flip", at });
+              break;
+            default:
+              break;
+          }
+        }
+        for (const { id, at } of queue) sfx.play(id, at);
+      }
+    }
+    // Смена фазы года — тихий пергаментный свуш.
+    if (!firstFrame && state.phase !== phaseRef.current) {
+      phaseRef.current = state.phase;
+      if (state.phase !== "gameOver") sfx.play("phase");
+    } else if (firstFrame) {
+      phaseRef.current = state.phase;
+    }
+  }, [state]);
+}
+
+// ── Полёт фишек еды от источника к животному ────────────────────────────────
+
+interface FlyingFood {
+  id: number;
+  tone: "red" | "blue" | "yellow" | "green";
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+}
+
+/**
+ * Фишка еды «летит» по столу от источника (кормовая база, растение, флора)
+ * к карточке животного — вместо простого pop-in на месте. Работает поверх
+ * тех же событий последнего действия, что и визуальные бейджи.
+ */
+function useFoodFly(state: GameState | null): FlyingFood[] {
+  const [items, setItems] = useState<FlyingFood[]>([]);
+  const seqRef = useRef(0);
+  const idRef = useRef(0);
+
+  useEffect(() => {
+    if (!state || state.eventSeq === seqRef.current) return;
+    seqRef.current = state.eventSeq;
+
+    const centerOf = (el: Element | null): { x: number; y: number } | null => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    };
+    const animalEl = (id: string) => document.querySelector(`[data-animal-id="${id}"]`);
+
+    const created: FlyingFood[] = [];
+    const push = (from: { x: number; y: number } | null, to: { x: number; y: number } | null, tone: FlyingFood["tone"]) => {
+      if (!from || !to) return;
+      // Лёгкий разброс стартовых точек — несколько фишек летят не строем.
+      const jx = Math.round(Math.random() * 22 - 11);
+      const jy = Math.round(Math.random() * 14 - 7);
+      idRef.current += 1;
+      created.push({ id: idRef.current, tone, from: { x: from.x + jx, y: from.y + jy }, to });
+    };
+    const felt = () => centerOf(document.querySelector(".felt"));
+
+    for (const e of state.lastEvents) {
+      switch (e.kind) {
+        case "foodFromBank":
+          push(centerOf(document.querySelector("[data-food-bank]") ?? document.querySelector(".felt")), centerOf(animalEl(e.animalId)), "red");
+          break;
+        case "plantFoodTaken":
+          push(centerOf(document.querySelector(`[data-plant-id="${e.plantId}"]`)), centerOf(animalEl(e.animalId)), "green");
+          break;
+        case "floraFoodTaken":
+          push(centerOf(document.querySelector(`[data-flora-id="${e.floraId}"]`)), centerOf(animalEl(e.animalId)), "red");
+          break;
+        case "blueFood":
+          push(felt(), centerOf(animalEl(e.animalId)), "blue");
+          break;
+        case "foodToFat":
+          push(felt(), centerOf(animalEl(e.animalId)), "yellow");
+          break;
+        default:
+          break;
+      }
+    }
+
+    if (created.length) {
+      setItems((prev) => [...prev, ...created]);
+      const ids = new Set(created.map((c) => c.id));
+      setTimeout(() => setItems((prev) => prev.filter((b) => !ids.has(b.id))), 600);
+    }
+  }, [state]);
+
+  return items;
+}
+
 export function GameApp() {
   const state = useGameStore((s) => s.state);
-  // Скорость из localStorage подмешиваем после гидратации, чтобы SSR-разметка
-  // всегда совпадала с первым клиентским рендером.
+  // Скорость и тумблер счёта из localStorage подмешиваем после гидратации,
+  // чтобы SSR-разметка всегда совпадала с первым клиентским рендером.
   useEffect(() => {
     const saved = loadSpeed();
     if (saved !== "normal") useGameStore.getState().setSpeed(saved);
+    if (loadShowScore()) useGameStore.getState().setShowScore(true);
   }, []);
   const rulesOpen = useGameStore((s) => s.rulesOpen);
   const start = useGameStore((s) => s.start);
@@ -274,6 +444,7 @@ export function GameApp() {
             <LobbyScreen />
           )}
           {rulesOpen ? <RulesPanel onClose={() => setRulesOpen(false)} /> : null}
+          <Toaster {...TOASTER_OPTS} />
         </>
       );
     }
@@ -299,6 +470,7 @@ export function GameApp() {
           />
         ) : null}
         {rulesOpen ? <RulesPanel onClose={() => setRulesOpen(false)} /> : null}
+        <Toaster {...TOASTER_OPTS} />
       </div>
     );
   }
@@ -308,6 +480,7 @@ export function GameApp() {
       <>
         <MenuScreen onStart={start} onRules={() => setRulesOpen(true)} />
         {rulesOpen ? <RulesPanel onClose={() => setRulesOpen(false)} /> : null}
+        <Toaster {...TOASTER_OPTS} />
       </>
     );
   }
@@ -325,9 +498,23 @@ export function GameApp() {
         />
       ) : null}
       {rulesOpen ? <RulesPanel onClose={() => setRulesOpen(false)} /> : null}
+      <Toaster {...TOASTER_OPTS} />
     </div>
   );
 }
+
+/** Тосты в теме атласа — для сетевых ошибок и достижений. */
+const TOASTER_OPTS = {
+  position: "top-center" as const,
+  toastOptions: {
+    style: {
+      background: "var(--color-surface)",
+      border: "1px solid var(--color-border)",
+      color: "var(--color-fg)",
+      borderRadius: "var(--radius-md)",
+    },
+  },
+};
 
 function Table() {
   const state = useGameStore((s) => s.state)!;
@@ -343,6 +530,22 @@ function Table() {
   const setSpeed = useGameStore((s) => s.setSpeed);
   const reset = useGameStore((s) => s.reset);
   const mode = useGameStore((s) => s.mode);
+  const netError = useGameStore((s) => s.net?.error);
+  const clearNetError = useGameStore((s) => s.clearNetError);
+  // Подтверждение выхода в меню: ref — чтобы Esc-обработчик с deps [] видел.
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const confirmRef = useRef(false);
+  const askLeave = useCallback((v: boolean) => {
+    confirmRef.current = v;
+    setConfirmLeave(v);
+  }, []);
+
+  // Ошибка сетевого хода раньше нигде не показывалась: молча гасилась в сторе.
+  useEffect(() => {
+    if (!netError) return;
+    toast.error(netError);
+    clearNetError();
+  }, [netError, clearNetError]);
 
   const human = player(state, state.humanId);
   const actor = currentActor(state);
@@ -516,11 +719,32 @@ function Table() {
 
   function onBoardClick(e: React.MouseEvent) {
     const target = (e.target as HTMLElement).closest("[data-animal-id]");
-    if (!target || !isHumanTurn || state.pendingAttack) return;
+    if (!target) {
+      // Клик мимо животных — по пустому сукну: отменяет начатый выбор.
+      // Кликам по растениям, флоре и кнопкам стола это не мешает.
+      const hit = (e.target as HTMLElement).closest("[data-plant-id], [data-flora-id], button, a");
+      if (!hit && isHumanTurn && intent.kind !== "none") setIntent({ kind: "none" });
+      return;
+    }
+    if (!isHumanTurn || state.pendingAttack) return;
     const animal = findAnimal(state, target.getAttribute("data-animal-id")!);
     if (!animal) return;
     handleAnimalClick(animal, { state, intent, isHumanTurn, human, feedActs, devActs, dispatch, setIntent });
   }
+
+  // Esc сбрасывает начатый выбор (карта, охота, убежище…), если не занят
+  // оверлеями: правила и журнал закрываются своими обработчиками.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const s = useGameStore.getState();
+      if (s.rulesOpen || s.logOpen) return;
+      if (confirmRef.current) return; // диалог подтверждения закрывает себя сам
+      if (s.intent.kind !== "none") s.setIntent({ kind: "none" });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const opponents = state.players.filter((p) => p.id !== human.id);
   /**
@@ -550,6 +774,104 @@ function Table() {
   const lastLog = state.log[state.log.length - 1]?.text;
   const dying = useMemo(() => new Set(state.extinctionDeaths), [state.extinctionDeaths]);
   const fx = useActionFx(state);
+  useSfx(state);
+  const fly = useFoodFly(state);
+
+  // Новые карты влетают в руку каскадом: diff id карт между кадрами состояния.
+  const prevHandRef = useRef<Set<string>>(new Set());
+  const [freshHand, setFreshHand] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    const ids = new Set(human.hand.map((c) => c.id));
+    const fresh = [...ids].filter((id) => !prevHandRef.current.has(id));
+    prevHandRef.current = ids;
+    if (fresh.length) {
+      setFreshHand(new Set(fresh));
+      const t = setTimeout(() => setFreshHand(new Set()), 900);
+      return () => clearTimeout(t);
+    }
+  }, [human.hand]);
+
+  // ── Счётчики партии для статистики и достижений ──
+  // Копятся из событий последнего действия; в финале уходят в историю.
+  const sessionRef = useRef<SessionCounters>(emptySession());
+  const sessionSeqRef = useRef(0);
+  // Стадия показа вымирания: пока животные ещё на столе, запоминаем владельцев.
+  const pendingDeathsRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    if (state.eventSeq < sessionSeqRef.current) {
+      // eventSeq пошёл заново — началась новая партия.
+      sessionRef.current = emptySession();
+      pendingDeathsRef.current = new Map();
+    }
+    for (const id of state.extinctionDeaths) {
+      const a = findAnimal(state, id);
+      if (a && !pendingDeathsRef.current.has(id)) pendingDeathsRef.current.set(id, a.ownerId);
+    }
+    if (state.eventSeq === sessionSeqRef.current) return;
+    sessionSeqRef.current = state.eventSeq;
+    const ses = sessionRef.current;
+    const ownerOf = (id: string) => findAnimal(state, id)?.ownerId;
+    for (const e of state.lastEvents) {
+      switch (e.kind) {
+        case "huntDeclared":
+          if (ownerOf(e.carnivoreId) === human.id) ses.hunts++;
+          break;
+        case "preyKilled":
+          if (ownerOf(e.carnivoreId) === human.id) ses.kills++;
+          break;
+        case "foodFromBank":
+        case "plantFoodTaken":
+        case "floraFoodTaken":
+          if (e.playerId === human.id) ses.food++;
+          break;
+        case "blueFood":
+        case "foodToFat":
+          if (ownerOf(e.animalId) === human.id) ses.food++;
+          break;
+        case "animalDied": {
+          if (pendingDeathsRef.current.get(e.animalId) === human.id) ses.deaths++;
+          pendingDeathsRef.current.delete(e.animalId);
+          break;
+        }
+        case "defenseUsed": {
+          if (e.defense !== "none" && ownerOf(e.preyId) === human.id) ses.dodges++;
+          break;
+        }
+        case "traitPlaced": {
+          if (ownerOf(e.animalId) !== human.id) break;
+          ses.traits[e.type] = (ses.traits[e.type] ?? 0) + 1;
+          const n = findAnimal(state, e.animalId)?.traits.length ?? 0;
+          if (n > ses.maxTraits) ses.maxTraits = n;
+          break;
+        }
+        default:
+          break;
+      }
+    }
+  }, [state, human.id]);
+
+  // Финал партии: одна запись в историю, тосты о новых достижениях.
+  const recordedRef = useRef(false);
+  useEffect(() => {
+    if (state.phase !== "gameOver") {
+      recordedRef.current = false;
+      return;
+    }
+    if (recordedRef.current) return;
+    recordedRef.current = true;
+    const unlocked = recordGame(state, sessionRef.current, mode);
+    for (const a of unlocked) toast.success(`Достижение: ${a.name}`, { description: a.desc });
+  }, [state, mode]);
+  // AudioContext живёт только после пользовательского жеста — будим по первому.
+  useEffect(() => {
+    const unlock = () => sfx.unlock();
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
 
   return (
     <>
@@ -590,6 +912,7 @@ function Table() {
           </div>
         ) : null}
         <FoodBankChip count={state.foodBank} visible={state.phase === "feeding" || state.phase === "foodBank"} />
+        <SoundToggle />
         <div className="flex gap-1">
           <Button variant="ghost" size="icon" aria-label="Журнал" onClick={() => setLogOpen(!logOpen)}>
             <List className="size-4" />
@@ -597,7 +920,17 @@ function Table() {
           <Button variant="ghost" size="icon" aria-label="Правила" onClick={() => setRulesOpen(true)}>
             <BookOpen className="size-4" />
           </Button>
-          <Button variant="ghost" size="icon" aria-label="Меню" onClick={reset}>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Меню"
+            title="В меню"
+            onClick={() => {
+              // Законченную партию покидаем сразу; живую — только с подтверждением.
+              if (state.phase === "gameOver") reset();
+              else askLeave(true);
+            }}
+          >
             <Pause className="size-4" />
           </Button>
         </div>
@@ -800,6 +1133,7 @@ function Table() {
               onPop={() => setIntent({ kind: "mutatePop" })}
               onPlant={() => setIntent({ kind: "mutatePlant" })}
               onPass={() => dispatch({ type: "devPass" })}
+              onCancel={() => setIntent({ kind: "none" })}
             />
           ) : (
             <DevDock
@@ -807,6 +1141,7 @@ function Table() {
               intent={intent}
               disabled={!isHumanTurn || Boolean(state.pendingAttack)}
               continents={Boolean(state.modules.continents)}
+              freshIds={freshHand}
               onPlayAnimal={(cardId, zoneId) => dispatch({ type: "devPlayAnimal", cardId, zoneId })}
               onPlaceAnimal={(cardId) => setIntent({ kind: "placeAnimal", cardId })}
               onPickTrait={(cardId, face) => {
@@ -824,6 +1159,7 @@ function Table() {
                 else setIntent({ kind: "playTrait", cardId, face });
               }}
               onPass={() => dispatch({ type: "devPass" })}
+              onCancel={() => setIntent({ kind: "none" })}
             />
           )
         ) : state.phase === "feeding" && isHumanTurn && !state.pendingAttack ? (
@@ -868,12 +1204,70 @@ function Table() {
         </div>
       ))}
 
+      {fly.map((f) => (
+        <div
+          key={f.id}
+          className="food-fly"
+          style={
+            {
+              "--from-x": `${f.from.x}px`,
+              "--from-y": `${f.from.y}px`,
+              "--to-x": `${f.to.x}px`,
+              "--to-y": `${f.to.y}px`,
+            } as React.CSSProperties
+          }
+        >
+          <FoodCube tone={f.tone} className="size-5" />
+        </div>
+      ))}
+
       <EventSpotlight />
 
       {state.pendingAttack && state.pendingAttack.waitingFor === human.id ? (
         <DefenseDock acts={defActs} onPick={(a) => dispatch(a)} />
       ) : null}
+
+      {confirmLeave ? <ConfirmLeaveDialog mode={mode} onConfirm={reset} onClose={() => askLeave(false)} /> : null}
     </>
+  );
+}
+
+/** «Покинуть партию?» — раньше кнопка меню сбрасывала живую партию мгновенно. */
+function ConfirmLeaveDialog({
+  mode,
+  onConfirm,
+  onClose,
+}: {
+  mode: "solo" | "net";
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg/70 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-sm rounded-[var(--radius-xl)] border border-border bg-surface p-6 shadow-[var(--shadow-card)]">
+        <h2 className="text-xl">{mode === "net" ? "Покинуть стол?" : "Покинуть партию?"}</h2>
+        <p className="mt-2 text-sm text-muted">
+          {mode === "net"
+            ? "Ваше место освободится — партия продолжится без вас."
+            : "Прогресс партии будет потерян."}
+        </p>
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+          <Button variant="secondary" className="flex-1" onClick={onClose}>
+            Остаться
+          </Button>
+          <Button variant="danger" className="flex-1" onClick={onConfirm}>
+            Выйти в меню
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1120,6 +1514,10 @@ const PlayerSection = memo(function PlayerSection({
   const intent = useGameStore((s) => s.intent);
   // «Случайные мутации»: рука скрыта — показываем счётчик слепой колоды.
   const randomMutations = useGameStore((s) => Boolean(s.state?.modules.randomMutations));
+  // Живой счёт — опциональный тумблер (в настольной игре очки скрыты до конца).
+  const gameState = useGameStore((s) => s.state);
+  const showScore = useGameStore((s) => s.showScore);
+  const score = gameState && showScore && gameState.phase !== "gameOver" ? liveScore(gameState, p.id) : null;
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   // Ссылка на перетаскиваемое для drop по зоне (замыкание зон не тянет стейт).
@@ -1313,6 +1711,14 @@ const PlayerSection = memo(function PlayerSection({
           ) : null}
         </span>
         <span className="flex items-center gap-1.5 text-xs text-muted">
+          {score !== null ? (
+            <span
+              title="Текущие очки: 2 за животное вида + свойство и его бонус. В настольной игре счёт скрыт до конца партии."
+              className="rounded-full border border-border bg-surface-2 px-2 py-0.5 font-display text-xs tabular-nums text-fg"
+            >
+              {score}
+            </span>
+          ) : null}
           {randomMutations ? (
             <img
               src={MUTATION_ART.deckBack}
@@ -1677,10 +2083,34 @@ function DiceTray({ roll }: { roll: number[] | null }) {
 
 function FoodBankChip({ count, visible }: { count: number; visible: boolean }) {
   return (
-    <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-border bg-surface px-2.5 py-1.5" title="Кормовая база">
+    <div
+      data-food-bank=""
+      className="flex items-center gap-2 rounded-[var(--radius-md)] border border-border bg-surface px-2.5 py-1.5"
+      title="Кормовая база"
+    >
       <span className="text-[10px] uppercase tracking-wider text-muted">База</span>
       <span className="font-display text-lg tabular-nums leading-none">{visible ? count : "—"}</span>
     </div>
+  );
+}
+
+/** Тумблер звука в шапке: сохраняется в localStorage, как и скорость игры. */
+function SoundToggle() {
+  const [on, setOn] = useState(sfx.enabled);
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label={on ? "Выключить звук" : "Включить звук"}
+      title={on ? "Выключить звук" : "Включить звук"}
+      onClick={() => {
+        const next = !on;
+        setOn(next);
+        sfx.setEnabled(next);
+      }}
+    >
+      {on ? <Volume2 className="size-4" /> : <VolumeX className="size-4" />}
+    </Button>
   );
 }
 
@@ -1699,6 +2129,7 @@ function MutateDock({
   onPop,
   onPlant,
   onPass,
+  onCancel,
 }: {
   human: Player;
   intent: UiIntent;
@@ -1710,6 +2141,7 @@ function MutateDock({
   onPop: () => void;
   onPlant: () => void;
   onPass: () => void;
+  onCancel: () => void;
 }) {
   const left = human.blindDeck?.length ?? human.blindDeckCount ?? 0;
   const mutating = intent.kind === "mutateTrait" || intent.kind === "mutatePop" || intent.kind === "mutatePlant";
@@ -1824,6 +2256,11 @@ function MutateDock({
             <span className="text-[10px] font-normal text-muted">если в колоде есть такая грань</span>
           </button>
         ) : null}
+        {mutating ? (
+          <Button variant="ghost" size="sm" onClick={onCancel} title="Отменить выбор (Esc)">
+            Отмена
+          </Button>
+        ) : null}
         <Button variant="secondary" size="sm" onClick={onPass} disabled={disabled}>
           Пас
         </Button>
@@ -1837,21 +2274,26 @@ function DevDock({
   intent,
   disabled,
   continents,
+  freshIds,
   onPlayAnimal,
   onPlaceAnimal,
   onPickTrait,
   onPass,
+  onCancel,
 }: {
   human: Player;
   intent: UiIntent;
   disabled?: boolean;
   /** «Континенты»: карта-животное кладётся с выбором континента. */
   continents?: boolean;
+  /** Только что добранные карты — влетают каскадом с задержкой по индексу. */
+  freshIds?: ReadonlySet<string>;
   onPlayAnimal: (id: string, zoneId?: TerritoryId) => void;
   /** «Континенты»: вместо немедленного хода — режим выбора территории кликом. */
   onPlaceAnimal?: (id: string) => void;
   onPickTrait: (id: string, face: number) => void;
   onPass: () => void;
+  onCancel: () => void;
 }) {
   return (
     <div className="space-y-2">
@@ -1879,32 +2321,47 @@ function DevDock({
                             ? "Карта как животное (затем клик по континенту) или свойство"
                             : "Карта как животное или свойство"}
         </p>
-        <Button variant="secondary" size="sm" onClick={onPass} disabled={disabled}>
-          Пас
-        </Button>
+        <div className="flex shrink-0 gap-1">
+          {intent.kind !== "none" ? (
+            <Button variant="ghost" size="sm" onClick={onCancel} title="Отменить выбор (Esc)">
+              Отмена
+            </Button>
+          ) : null}
+          <Button variant="secondary" size="sm" onClick={onPass} disabled={disabled}>
+            Пас
+          </Button>
+        </div>
       </div>
       <div data-hand-row className="flex gap-2 overflow-x-auto pb-1">
-        {human.hand.map((card) => (
-          <HandCard
-            key={card.id}
-            card={card}
-            disabled={disabled}
-            selected={
-              (intent.kind !== "none" && "cardId" in intent && intent.cardId === card.id) ||
-              (intent.kind === "placeAnimal" && intent.cardId === card.id)
-            }
-            selectedFace={"face" in intent && intent.cardId === card.id ? (intent.face as number) : null}
-            onSelect={(face) => {
-              if (face === "animal" && continents && onPlaceAnimal) {
-                onPlaceAnimal(card.id);
-              } else if (face === "animal") {
-                onPlayAnimal(card.id);
-              } else {
-                onPickTrait(card.id, face);
-              }
-            }}
-          />
-        ))}
+        {human.hand.map((card, i) => {
+          const fresh = freshIds?.has(card.id);
+          return (
+            <div
+              key={card.id}
+              className={fresh ? "hand-card-in" : undefined}
+              style={fresh ? { animationDelay: `${Math.min(i, 8) * 70}ms` } : undefined}
+            >
+              <HandCard
+                card={card}
+                disabled={disabled}
+                selected={
+                  (intent.kind !== "none" && "cardId" in intent && intent.cardId === card.id) ||
+                  (intent.kind === "placeAnimal" && intent.cardId === card.id)
+                }
+                selectedFace={"face" in intent && intent.cardId === card.id ? (intent.face as number) : null}
+                onSelect={(face) => {
+                  if (face === "animal" && continents && onPlaceAnimal) {
+                    onPlaceAnimal(card.id);
+                  } else if (face === "animal") {
+                    onPlayAnimal(card.id);
+                  } else {
+                    onPickTrait(card.id, face);
+                  }
+                }}
+              />
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -2094,6 +2551,11 @@ function FeedDock({
       <Button variant="secondary" size="sm" onClick={onEndTurn}>
         Закончить ход
       </Button>
+      {intentKind !== "none" ? (
+        <Button variant="ghost" size="sm" onClick={() => onIntent({ kind: "none" })} title="Отменить выбор (Esc)">
+          Отмена
+        </Button>
+      ) : null}
       {canSkip ? (
         <Button variant="ghost" size="sm" onClick={onSkip} title="Пас до конца фазы питания">
           Пас

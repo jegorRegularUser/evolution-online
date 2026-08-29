@@ -1,5 +1,6 @@
-import { BookOpen, Play, RotateCcw, Users } from "lucide-react";
-import { useState } from "react";
+import { BarChart3, BookOpen, Lock, Play, RotateCcw, Users } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
 import { NetMenuPanel } from "@/components/game/net-screens";
 import { FLORA, MARKS } from "@/game/flora";
@@ -7,6 +8,8 @@ import { PLANTS } from "@/game/plants";
 import { CONTINENTS_TRAIT_IDS, FUNGI_TRAIT_IDS, MUTATIONS_TRAIT_IDS, PLANTS_TRAIT_IDS, TRAITS, TRAIT_ORDER } from "@/game/traits";
 import { TERRITORIES } from "@/game/types";
 import type { Difficulty, FloraKind, MarkKind, PlantKind, ScoreBreakdown, TerritoryId, TraitId } from "@/game/types";
+import { sfx } from "@/lib/sfx";
+import { ACHIEVEMENTS, readStats } from "@/lib/stats";
 import {
   BG,
   DARK_ART,
@@ -42,8 +45,11 @@ export function MenuScreen({
 }) {
   const [players, setPlayers] = useState(2);
   const [difficulty, setDifficulty] = useState<Difficulty>("normal");
+  const [statsOpen, setStatsOpen] = useState(false);
   const speed = useGameStore((s) => s.speed);
   const setSpeed = useGameStore((s) => s.setSpeed);
+  const showScore = useGameStore((s) => s.showScore);
+  const setShowScore = useGameStore((s) => s.setShowScore);
   const continents = useGameStore((s) => Boolean(s.modules.continents));
   const plants = useGameStore((s) => Boolean(s.modules.plants));
   const fungi = useGameStore((s) => Boolean(s.modules.fungi));
@@ -155,6 +161,29 @@ export function MenuScreen({
         <fieldset>
           <legend className="mb-3 text-sm font-medium text-muted">Дополнения</legend>
           <div className="grid gap-2">
+            <button
+              type="button"
+              onClick={() => setShowScore(!showScore)}
+              aria-pressed={showScore}
+              title="В настольной игре очки скрыты до конца партии; включите, чтобы видеть текущий счёт каждого игрока на его табло"
+              className={cn(
+                "flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left",
+                showScore ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2",
+              )}
+            >
+              <span>
+                <span className="block text-sm font-medium text-fg">Показывать счёт</span>
+                <span className="mt-0.5 block text-xs text-muted">текущие очки на табло игроков</span>
+              </span>
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
+                  showScore ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
+                )}
+              >
+                {showScore ? "вкл" : "выкл"}
+              </span>
+            </button>
             <button
               type="button"
               onClick={() => setModules({ ...modules, continents: !continents })}
@@ -279,9 +308,14 @@ export function MenuScreen({
             <BookOpen className="size-4" />
             Правила
           </Button>
+          <Button variant="secondary" size="lg" onClick={() => setStatsOpen(true)}>
+            <BarChart3 className="size-4" />
+            Статистика
+          </Button>
         </div>
       </div>
       </div>
+      {statsOpen ? <StatsScreen onClose={() => setStatsOpen(false)} /> : null}
     </>
   );
 }
@@ -707,6 +741,157 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** Экран статистики из меню: история партий, график очков и достижения. */
+export function StatsScreen({ onClose }: { onClose: () => void }) {
+  const stats = useMemo(() => readStats(), []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const games = stats.games;
+  const wins = games.filter((g) => g.won).length;
+  const best = games.reduce((m, g) => Math.max(m, g.score), 0);
+  const winRate = games.length ? Math.round((wins / games.length) * 100) : 0;
+  const chart = games.slice(-20).map((g, i) => ({ i: i + 1, score: g.score }));
+  const topTraits = useMemo(() => {
+    const totals = new Map<TraitId, number>();
+    for (const g of games) {
+      for (const [t, n] of Object.entries(g.traits) as Array<[TraitId, number]>) {
+        totals.set(t, (totals.get(t) ?? 0) + n);
+      }
+    }
+    return [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  }, [games]);
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-3 backdrop-blur-sm sm:p-6">
+      <div className="relative flex max-h-[92dvh] w-full max-w-2xl flex-col rounded-[var(--radius-xl)] border border-border bg-surface shadow-[var(--shadow-card)]">
+        <div className="flex items-center justify-between border-b border-border px-5 py-4">
+          <h2 className="text-xl">Статистика</h2>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            Закрыть
+          </Button>
+        </div>
+        <div className="space-y-6 overflow-y-auto px-5 py-5">
+          {games.length === 0 ? (
+            <p className="py-10 text-center text-sm text-muted">
+              Партий ещё не было — статистика появится после первой игры.
+            </p>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {[
+                  ["Партий", String(games.length)],
+                  ["Побед", String(wins)],
+                  ["Винрейт", `${winRate}%`],
+                  ["Лучший счёт", String(best)],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-[var(--radius-md)] border border-border bg-bg px-3 py-3">
+                    <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
+                    <div className="mt-1 font-display text-2xl tabular-nums">{value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <section>
+                <h3 className="mb-2 text-sm font-medium text-muted">Очки последних партий</h3>
+                <div className="h-44 rounded-[var(--radius-md)] border border-border bg-bg p-2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chart} margin={{ top: 6, right: 10, bottom: 0, left: -18 }}>
+                      <CartesianGrid stroke="#2a3025" vertical={false} />
+                      <XAxis dataKey="i" tick={{ fill: "#9aa08f", fontSize: 11 }} axisLine={{ stroke: "#2a3025" }} tickLine={false} />
+                      <YAxis tick={{ fill: "#9aa08f", fontSize: 11 }} axisLine={false} tickLine={false} />
+                      <Tooltip
+                        contentStyle={{ background: "#1c2119", border: "1px solid #2a3025", borderRadius: 8, fontSize: 12 }}
+                        labelFormatter={(i) => `Партия ${i}`}
+                        formatter={(v) => [`${v} очков`, "Счёт"]}
+                      />
+                      <Line type="monotone" dataKey="score" stroke="#8b9a74" strokeWidth={2} dot={{ r: 2.5, fill: "#8b9a74" }} isAnimationActive={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </section>
+
+              {topTraits.length ? (
+                <section>
+                  <h3 className="mb-2 text-sm font-medium text-muted">Любимые свойства</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {topTraits.map(([t, n]) => (
+                      <span key={t} className="rounded-full border border-border bg-bg px-3 py-1 text-xs text-fg">
+                        {TRAITS[t].name} · <span className="font-display tabular-nums">{n}</span>
+                      </span>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
+              <section>
+                <h3 className="mb-2 text-sm font-medium text-muted">
+                  История партий <span className="text-subtle">· последние {Math.min(games.length, 10)}</span>
+                </h3>
+                <ul className="space-y-1.5">
+                  {[...games].reverse().slice(0, 10).map((g) => (
+                    <li key={g.date} className="flex items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-border bg-bg px-3 py-2 text-xs">
+                      <span className="min-w-0">
+                        <span className="font-medium text-fg">{g.place}-е место из {g.players}</span>
+                        <span className="text-muted"> · {g.mode === "net" ? "сеть" : "соло"} · {formatDate(g.date)}</span>
+                        {g.modules.length ? <span className="text-subtle"> · {g.modules.length} доп.</span> : null}
+                      </span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <span className="font-display text-sm tabular-nums">{g.score}</span>
+                        <span className={g.won ? "text-good" : "text-subtle"}>{g.won ? "победа" : "—"}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+
+              <section>
+                <h3 className="mb-2 text-sm font-medium text-muted">
+                  Достижения <span className="text-subtle">· {Object.keys(stats.achievements).length} из {ACHIEVEMENTS.length}</span>
+                </h3>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {ACHIEVEMENTS.map((a) => {
+                    const got = Boolean(stats.achievements[a.id]);
+                    const Icon = a.icon;
+                    return (
+                      <div
+                        key={a.id}
+                        className={cn(
+                          "flex items-start gap-3 rounded-[var(--radius-md)] border px-3 py-2.5",
+                          got ? "border-accent/60 bg-accent/10" : "border-border bg-bg opacity-60",
+                        )}
+                      >
+                        {got ? (
+                          <Icon className="mt-0.5 size-5 shrink-0 text-accent" />
+                        ) : (
+                          <Lock className="mt-0.5 size-5 shrink-0 text-subtle" />
+                        )}
+                        <span>
+                          <span className="block text-sm font-medium text-fg">{a.name}</span>
+                          <span className="mt-0.5 block text-xs text-muted">{a.desc}</span>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatDate(ms: number): string {
+  return new Date(ms).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit" });
+}
+
 export function GameOverScreen({
   scores,
   winnerIds,
@@ -721,6 +906,26 @@ export function GameOverScreen({
   onMenu: () => void;
 }) {
   const won = winnerIds.includes(humanId);
+  // Строгий режим монтирует эффект дважды — звук играет один раз.
+  const soundedRef = useRef(false);
+  useEffect(() => {
+    if (soundedRef.current) return;
+    soundedRef.current = true;
+    sfx.play(won ? "win" : "lose");
+  }, [won]);
+  // Листопад — только на победном экране; параметры листьев стабильны.
+  const leaves = useMemo(
+    () =>
+      Array.from({ length: 14 }, (_, i) => ({
+        id: i,
+        left: Math.round(Math.random() * 96),
+        size: 9 + Math.round(Math.random() * 9),
+        dur: 5 + Math.random() * 5,
+        delay: Math.random() * 5,
+        color: ["var(--color-leaf)", "var(--color-parchment)", "var(--color-clay)", "var(--color-food-yellow)"][i % 4]!,
+      })),
+    [],
+  );
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-4">
       <img
@@ -729,6 +934,24 @@ export function GameOverScreen({
         aria-hidden
         className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-30"
       />
+      {won ? (
+        <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+          {leaves.map((l) => (
+            <span
+              key={l.id}
+              className="leaf-fall"
+              style={{
+                left: `${l.left}%`,
+                width: l.size,
+                height: l.size,
+                background: l.color,
+                animationDuration: `${l.dur}s`,
+                animationDelay: `${l.delay}s`,
+              }}
+            />
+          ))}
+        </div>
+      ) : null}
       <div className="relative w-full max-w-lg rounded-[var(--radius-xl)] border border-border bg-surface p-6 shadow-[var(--shadow-card)] sm:p-8">
         <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-muted">Конец эволюции</p>
         <h2 className="mt-2 text-3xl">{won ? "Ваша популяция доминирует" : "Вас вытеснили"}</h2>
@@ -737,9 +960,10 @@ export function GameOverScreen({
             <li
               key={s.playerId}
               className={cn(
-                "flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-3",
+                "score-row-in flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-3",
                 winnerIds.includes(s.playerId) ? "border-accent bg-accent/10" : "border-border bg-bg",
               )}
+              style={{ animationDelay: `${240 + i * 160}ms` }}
             >
               <div>
                 <div className="font-medium">
@@ -749,7 +973,7 @@ export function GameOverScreen({
                   животные {s.animals} · свойства {s.traits} · бонус {s.extras} · сброс {s.discard}
                 </div>
               </div>
-              <div className="font-display text-2xl tabular-nums">{s.total}</div>
+              <CountUp to={s.total} delayMs={240 + i * 160 + 220} />
             </li>
           ))}
         </ul>
@@ -765,4 +989,29 @@ export function GameOverScreen({
       </div>
     </div>
   );
+}
+
+/**
+ * Очки места «докручиваются» от нуля на глазах: легче прочувствовать разрыв
+ * с соперниками, чем увидеть готовые числа. При reduced-motion — сразу итог.
+ */
+function CountUp({ to, delayMs = 0, durMs = 700 }: { to: number; delayMs?: number; durMs?: number }) {
+  const [v, setV] = useState(0);
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setV(to);
+      return;
+    }
+    const t0 = performance.now() + delayMs;
+    let raf = 0;
+    const tick = (t: number) => {
+      const p = Math.min(1, Math.max(0, (t - t0) / durMs));
+      const eased = 1 - Math.pow(1 - p, 3);
+      setV(Math.round(eased * to));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [to, delayMs, durMs]);
+  return <div className="font-display text-2xl tabular-nums">{v}</div>;
 }
