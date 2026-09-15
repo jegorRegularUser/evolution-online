@@ -38,7 +38,7 @@ import { TutorialScreen } from "./tutorial";
 import { TopBar } from "./top-bar";
 import { useGameStore, type NetUiState } from "@/store/game-store";
 import { cn } from "@/lib/utils";
-import { useT } from "@/lib/i18n";
+import { scientistName, useLang, useT } from "@/lib/i18n";
 
 import type { TFn } from "@/lib/i18n";
 
@@ -757,6 +757,7 @@ function SeatList({
   onColor?: (color: PlayerColor) => void;
 }) {
   const tt = useT();
+  const lang = useLang();
   const rows = Math.max(capacity, ...seats.map((s) => s.seat + 1), 0);
   // Правка имени: карандаш у своей строки, Enter — сохранить, Esc — отменить.
   const [editing, setEditing] = useState<number | null>(null);
@@ -840,7 +841,9 @@ function SeatList({
                 ) : (
                   <span className="size-2 shrink-0 rounded-full bg-ink/15" />
                 )}
-                <span className="min-w-0 truncate">{seat ? seat.name : tt("seat.free")}</span>
+                {/* Имя места: боты-учёные показываются на языке интерфейса,
+                    люди — как назвались. Черновик правки хранит серверное имя. */}
+                <span className="min-w-0 truncate">{seat ? scientistName(seat.name, lang) : tt("seat.free")}</span>
                 {/* Действия своего места — сразу за именем (просил владелец),
                     бейджи идут после: карандаш не прячется за «хост»/«это вы». */}
                 {isMe && seat && onRename ? (
@@ -920,33 +923,53 @@ function SeatList({
             ) : !seat && canManage ? (
               <span className="shrink-0 text-[10px] uppercase tracking-wide text-subtle">{tt("seat.waiting")}</span>
             ) : null}
-            {/* Палитра своего места: выбор цвета в ожидании партии. */}
+            {/* Палитра своего места: выбор цвета в ожидании партии. Цвет
+                эксклюзивен в пределах стола: занятые другими (включая ботов)
+                цвета приглушены и не кликаются, под кружком — имя владельца. */}
             {pickColor && palette === seatNo ? (
               <div className="flex w-full flex-wrap items-center gap-1.5 rounded-[var(--radius-sm)] border border-border bg-bg px-2 py-1.5">
                 <span className="mr-1 text-[10px] uppercase tracking-wide text-muted">{tt("seat.colorLabel")}</span>
                 {PLAYER_COLORS.map((c) => {
                   const active = seat.color.toLowerCase() === c.toLowerCase();
+                  const owner = seats.find(
+                    (s) =>
+                      s.seat !== seatNo &&
+                      typeof s.color === "string" &&
+                      s.color.toLowerCase() === c.toLowerCase(),
+                  );
                   return (
-                    <button
-                      key={c}
-                      type="button"
-                      aria-pressed={active}
-                      aria-label={tt("seat.colorAria", { color: c })}
-                      title={c}
-                      onClick={() => {
-                        setPalette(null);
-                        // Текущий цвет повторно не отправляем: сервер всё равно
-                        // ответит тем же, а лишний запрос ни к чему.
-                        if (!active) onColor(c);
-                      }}
-                      className={cn(
-                        "size-6 shrink-0 rounded-full border transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
-                        active
-                          ? "scale-110 border-fg ring-2 ring-accent/60"
-                          : "border-ink/20 hover:scale-110",
-                      )}
-                      style={{ background: c }}
-                    />
+                    <span key={c} className="flex w-8 shrink-0 flex-col items-center gap-0.5">
+                      <button
+                        type="button"
+                        disabled={Boolean(owner)}
+                        aria-pressed={active}
+                        aria-label={tt("seat.colorAria", { color: c })}
+                        title={owner ? `${c} — ${scientistName(owner.name, lang)}` : c}
+                        onClick={() => {
+                          setPalette(null);
+                          // Текущий цвет повторно не отправляем: сервер всё равно
+                          // ответит тем же, а лишний запрос ни к чему.
+                          if (!active) onColor(c);
+                        }}
+                        className={cn(
+                          "size-6 rounded-full border transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
+                          active
+                            ? "scale-110 border-fg ring-2 ring-accent/60"
+                            : owner
+                              ? "cursor-not-allowed border-ink/20 opacity-40"
+                              : "border-ink/20 hover:scale-110",
+                        )}
+                        style={{ background: c }}
+                      />
+                      {/* Метка владельца под занятым цветом; пустой spacer
+                          держит все кружки на одной линии. */}
+                      <span
+                        className="max-w-full truncate text-[9px] leading-tight text-muted"
+                        title={owner ? scientistName(owner.name, lang) : undefined}
+                      >
+                        {owner ? scientistName(owner.name, lang) : "\u00A0"}
+                      </span>
+                    </span>
                   );
                 })}
               </div>
@@ -1276,6 +1299,14 @@ export function LobbyScreen() {
                   setPasswordState(null);
                 }}
                 onBlur={() => void savePassword()}
+                onKeyDown={(e) => {
+                  // Esc — отмена правки без сохранения (как у имени места).
+                  if (e.key === "Escape") {
+                    setEditingPassword(false);
+                    setPasswordDraft("");
+                    setPasswordState(null);
+                  }
+                }}
                 inputMode="numeric"
                 maxLength={4}
                 autoFocus

@@ -31,6 +31,7 @@ import {
   floraName,
   markName,
   plantName,
+  scientistName,
   territoryName,
   traitName,
   translate,
@@ -1217,6 +1218,9 @@ function Table() {
   // «Ваш ход»: карточка показывается только на реальном переходе хода к человеку.
   // Ключ последнего хода человека отсекает повтор: после своей же атаки актор на
   // миг становится защищающимся и возвращается — это тот же ход, не новый.
+  // turnSeq различает круги одной фазы одного года: без него возврат хода к
+  // человеку после круга ботов (второй круг развития/питания) выглядел тем же
+  // ключом и карточка не показывалась.
   const [turnCard, setTurnCard] = useState<string | null>(null);
   const [turnCardClosing, setTurnCardClosing] = useState(false);
   // Идёт показ модалки события: индикатор новой фазы ждёт своей очереди —
@@ -1233,7 +1237,7 @@ function Table() {
     }, 200);
   }, []);
   useEffect(() => {
-    const key = `${state.year}:${state.phase}:${state.currentPlayerId ?? -1}:${state.madTurn ?? -1}`;
+    const key = `${state.year}:${state.phase}:${state.currentPlayerId ?? -1}:${state.madTurn ?? -1}:${state.turnSeq ?? 0}`;
     const on = isHumanTurn && !state.pendingAttack && !state.rageTurn;
     if (!on) {
       setTurnCard(null);
@@ -1245,7 +1249,7 @@ function Table() {
     if (spotlightActive) return;
     lastHumanKeyRef.current = key;
     setTurnCard(key);
-  }, [isHumanTurn, state.pendingAttack, state.rageTurn, state.year, state.phase, state.currentPlayerId, state.madTurn, spotlightActive]);
+  }, [isHumanTurn, state.pendingAttack, state.rageTurn, state.year, state.phase, state.currentPlayerId, state.madTurn, state.turnSeq, spotlightActive]);
   // Карточка живёт в два раза короче прежнего: она лишь подтверждает переход хода.
   useEffect(() => {
     if (!turnCard || turnCardClosing) return;
@@ -1905,20 +1909,22 @@ function Table() {
   useEffect(() => () => sfx.setAmbient(null), []);
 
   // «Ваш ход» — мягкий аккорд ровно на переходе хода к человеку. Ключ хода
-  // (год/фаза/активный игрок) отсекает повтор: после своей же атаки актор
-  // на миг становится защищающимся и возвращается — это тот же ход, не новый.
+  // (год/фаза/активный игрок/счётчик передач) отсекает повтор: после своей же
+  // атаки актор на миг становится защищающимся и возвращается — это тот же
+  // ход, не новый. Ключ тот же, что у карточки «Ваш ход», — звук и карточка
+  // не расходятся.
   const prevHumanTurnRef = useRef<boolean | null>(null);
   const prevTurnKeyRef = useRef<string | null>(null);
   useEffect(() => {
     const prevHuman = prevHumanTurnRef.current;
     const prevKey = prevTurnKeyRef.current;
-    const key = `${state.year}:${state.phase}:${state.currentPlayerId ?? -1}:${state.madTurn ?? -1}`;
+    const key = `${state.year}:${state.phase}:${state.currentPlayerId ?? -1}:${state.madTurn ?? -1}:${state.turnSeq ?? 0}`;
     prevHumanTurnRef.current = isHumanTurn;
     prevTurnKeyRef.current = key;
     if (prevHuman === false && isHumanTurn && !state.pendingAttack && prevKey !== key) {
       sfx.play("yourTurn");
     }
-  }, [isHumanTurn, state.pendingAttack, state.year, state.phase, state.currentPlayerId, state.madTurn]);
+  }, [isHumanTurn, state.pendingAttack, state.year, state.phase, state.currentPlayerId, state.madTurn, state.turnSeq]);
 
   const openRulesModal = useCallback(() => {
     sfx.play("modal");
@@ -2039,7 +2045,7 @@ function Table() {
         style={{ backgroundImage: `url(${BG.valley})` }}
       />
       <TopBar
-        subtitle={`${t("game.yearN", { year: state.year })}${state.lastYear ? ` · ${t("game.yearLast")}` : ""} · ${t(PHASE_LABEL[state.phase] ?? ("phase.development" as const))}${actor ? ` · ${actor.name}` : ""}`}
+        subtitle={`${t("game.yearN", { year: state.year })}${state.lastYear ? ` · ${t("game.yearLast")}` : ""} · ${t(PHASE_LABEL[state.phase] ?? ("phase.development" as const))}${actor ? ` · ${scientistName(actor.name, lang)}` : ""}`}
         subtitleShort={`${t("game.yearN", { year: state.year })} · ${t(PHASE_LABEL[state.phase] ?? ("phase.development" as const))}`}
       >
         <div className="flex items-center gap-2">
@@ -2264,7 +2270,7 @@ function Table() {
           deckLeft={state.deckCount ?? state.deck.length}
           foodRoll={state.foodRoll}
           lastLog={lastLog}
-          actorName={actor?.name}
+          actorName={actor ? scientistName(actor.name, lang) : undefined}
           deaths={state.extinctionDeaths.length}
           plantsInfo={
             plantsOn
@@ -2325,7 +2331,9 @@ function Table() {
         <PlayerSection
           p={human}
           isHuman
-          canReorder={isHumanTurn && (state.phase === "development" || state.phase === "feeding")}
+          canReorder={
+            isHumanTurn && !state.pendingAttack && (state.phase === "development" || state.phase === "feeding")
+          }
           dnd={dndHints}
           actorId={actor?.id ?? null}
           interactions={getInteraction}
@@ -2448,9 +2456,9 @@ function Table() {
                 : state.phase === "growth"
                   ? t("game.wait.growth")
                   : state.madTurn === (actor?.id ?? -2)
-                    ? t("game.wait.madness", { name: actor?.name ?? "" })
+                    ? t("game.wait.madness", { name: actor ? scientistName(actor.name, lang) : "" })
                     : actor && actor.id !== human.id
-                      ? t("game.wait.actor", { name: actor.name })
+                      ? t("game.wait.actor", { name: scientistName(actor.name, lang) })
                       : t("game.wait.waiting")}
           </div>
         )}
@@ -2931,6 +2939,16 @@ const PlayerSection = memo(function PlayerSection({
   const intent = useGameStore((s) => s.intent);
   const t = useT();
   const lang = useLang();
+  // Кличка своего животного (косметика, как перестановка): стабильная ссылка —
+  // мемоизация карточек не ломается на каждом рендере секции. Звук — тихий
+  // ui-клик: переименование не игровое событие, в ленту ничего не падает.
+  const renameAnimal = useCallback(
+    (animalId: string, name: string) => {
+      sfx.play("click");
+      dispatch({ type: "renameAnimal", animalId, name });
+    },
+    [dispatch],
+  );
   // «Случайные мутации»: рука скрыта — показываем счётчик слепой колоды.
   const randomMutations = useGameStore((s) => Boolean(s.state?.modules.randomMutations));
   // Цвет места игрока: в сети — из net.seats (место совпадает с id игрока),
@@ -3025,6 +3043,7 @@ const PlayerSection = memo(function PlayerSection({
         insertSide={dnd?.insert?.id === a.id ? dnd.insert.side : undefined}
         dying={dying.has(a.id)}
         freshSince={freshSince}
+        onRename={isHuman && canReorder ? renameAnimal : undefined}
       />
     );
   };
@@ -3103,11 +3122,11 @@ const PlayerSection = memo(function PlayerSection({
             className="size-2.5 shrink-0 rounded-full border border-ink/25"
             style={{ background: seatTintColor }}
           />
-          {isHuman ? t("game.yourPopulation") : p.name}
+          {isHuman ? t("game.yourPopulation") : scientistName(p.name, lang)}
           <TurnTimer
             deadlineAt={active ? turnDeadlineAt : null}
             offsetMs={serverOffsetMs}
-            who={p.name}
+            who={scientistName(p.name, lang)}
             isHuman={Boolean(isHuman)}
           />
           {active ? (

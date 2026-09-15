@@ -3,6 +3,7 @@ import { FLORA, FLORA_MAX_TOKENS, MARKS } from "@/game/flora";
 import type { FloraCard, GameState, MarkKind, TerritoryId } from "@/game/types";
 import { FLORA_ART, MARK_ART } from "@/lib/art";
 import { cn } from "@/lib/utils";
+import { floraDesc, floraName, markDesc, markName, markShort, territoryName, useLang, useT } from "@/lib/i18n";
 import { FloraGlyph, FoodCube } from "./icons";
 import { TraitTooltip, type TipDef } from "./trait-tip";
 import { useTraitTip } from "./use-trait-tip";
@@ -21,12 +22,13 @@ const MARK_TONE: Record<MarkKind, string> = {
 
 /** Чип метки последствий на животном: жетон-картинка и цвет по виду, правило — в подсказке. */
 export const MarkChip = memo(function MarkChip({ mark }: { mark: MarkKind }) {
-  const def = MARKS[mark];
+  const lang = useLang();
+  const t = useT();
   const tip = useTraitTip({ isolateClick: true });
   const tipDef: TipDef = {
     id: mark,
-    name: `Метка «${def.name}»`,
-    description: def.description,
+    name: t("card.markLabel", { name: markName(mark, lang) }),
+    description: markDesc(mark, lang),
     image: MARK_ART[mark],
   };
   return (
@@ -42,7 +44,7 @@ export const MarkChip = memo(function MarkChip({ mark }: { mark: MarkKind }) {
       )}
     >
       <img src={MARK_ART[mark]} alt="" loading="lazy" className="size-3.5 shrink-0 rounded-full object-cover" />
-      {def.short}
+      {markShort(mark, lang)}
       {tip.anchorRect ? <TraitTooltip def={tipDef} anchorRect={tip.anchorRect} id={tip.tipId} /> : null}
     </span>
   );
@@ -66,14 +68,17 @@ export const FloraCardView = memo(function FloraCardView({
   selected?: boolean;
   onClick?: () => void;
 }) {
+  const lang = useLang();
+  const t = useT();
   const def = FLORA[flora.kind];
   const art = FLORA_ART[flora.kind];
   // Подсказка — то же мини-окно, что у свойств; тап выбирает карту (питание).
   const tip = useTraitTip({ toggleOnTap: false });
+  const kindLabel = def.isFungus ? t("card.fungus") : t("card.grass");
   const tipDef: TipDef = {
     id: flora.kind,
-    name: `${def.name} · ${def.isFungus ? "гриб" : "трава"}`,
-    description: def.description,
+    name: `${floraName(flora.kind, lang)} · ${kindLabel}`,
+    description: floraDesc(flora.kind, lang),
     image: art,
   };
   const interactive = Boolean(onClick);
@@ -84,7 +89,7 @@ export const FloraCardView = memo(function FloraCardView({
         tip.anchorRef.current = el;
       }}
       {...tip.triggerProps}
-      aria-label={`${def.name} — ${def.isFungus ? "гриб" : "трава"}`}
+      aria-label={`${floraName(flora.kind, lang)} — ${kindLabel}`}
       role={interactive ? "button" : undefined}
       onClick={interactive ? onClick : undefined}
       onKeyDown={
@@ -125,22 +130,22 @@ export const FloraCardView = memo(function FloraCardView({
             def.isFungus ? "bg-virus/80" : "bg-leaf/80",
           )}
         >
-          {def.name}
+          {floraName(flora.kind, lang)}
         </span>
       </div>
       <div className="flex items-center gap-1.5 px-2 py-1.5">
-        <span className="flex items-center gap-0.5" title={`Фишек еды: ${flora.food} (максимум ${FLORA_MAX_TOKENS})`}>
+        <span className="flex items-center gap-0.5" title={t("card.foodTokens", { n: flora.food, m: FLORA_MAX_TOKENS })}>
           {Array.from({ length: flora.food }).map((_, i) => (
             <FoodCube key={i} tone="red" className="token-pop size-3" />
           ))}
-          {flora.food === 0 ? <span className="text-[10px] text-ink-soft">без еды</span> : null}
+          {flora.food === 0 ? <span className="text-[10px] text-ink-soft">{t("card.noFood")}</span> : null}
         </span>
         {def.mark ? (
           <img
             src={MARK_ART[def.mark]}
-            alt={`Метка «${MARKS[def.mark].name}»`}
+            alt={t("card.markLabel", { name: markName(def.mark, lang) })}
             loading="lazy"
-            title={`Даёт метку «${MARKS[def.mark].name}»`}
+            title={t("card.givesMark", { name: markName(def.mark, lang) })}
             className="ml-auto size-4 shrink-0 rounded-full object-cover ring-1 ring-border-strong/40"
           />
         ) : null}
@@ -166,6 +171,8 @@ export function FloraStrip({
   /** «Континенты»: показать флору только этого континента. */
   zone?: TerritoryId;
 }) {
+  const t = useT();
+  const lang = useLang();
   const flora = (state.flora ?? []).filter((f) =>
     zone ? (f.zoneId ?? "gondwana") === zone : true,
   );
@@ -173,16 +180,25 @@ export function FloraStrip({
   const interactive = Boolean(onFloraClick);
   return (
     <section
-      aria-label={zone ? `Трава и грибы (${zone === "laurasia" ? "Лавразия" : "Гондвана"})` : "Трава и грибы"}
+      aria-label={
+        zone
+          ? t("card.floraStripZone", { zone: territoryName(zone, lang) })
+          : t("card.floraStrip")
+      }
       className="paper-sheet flex min-h-[110px] flex-wrap items-stretch gap-2 rounded-[var(--radius-lg)] border border-border bg-surface p-3"
     >
       <div className="flex w-full items-center justify-between text-xs text-muted">
         <span className="font-medium">
-          {zone ? (zone === "laurasia" ? "Флора Лавразии" : "Флора Гондваны") : "Трава и грибы · общие"}
+          {zone
+            ? t("card.floraZone", { zone: territoryName(zone, lang) })
+            : t("card.floraCommon")}
         </span>
         {zone ? null : (
           <span className="tabular-nums">
-            колода {state.floraDeckCount ?? state.floraDeck?.length ?? 0} · сброс {state.floraDiscard ?? 0}
+            {t("card.floraDeck", {
+              n: state.floraDeckCount ?? state.floraDeck?.length ?? 0,
+              m: state.floraDiscard ?? 0,
+            })}
           </span>
         )}
       </div>

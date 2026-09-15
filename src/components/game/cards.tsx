@@ -1,11 +1,12 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import type { DraggableSyntheticListeners } from "@dnd-kit/core";
-import { Crosshair } from "lucide-react";
+import { Check, Crosshair, Pencil, X } from "lucide-react";
 import { TRAITS } from "@/game/traits";
 import type { Animal, Card, TraitId } from "@/game/types";
 import { hasTrait, isCarnivoreLike, isFed, speciesNeed } from "@/game/queries";
 import { cn } from "@/lib/utils";
 import { DARK_ART, TOKEN, TRAIT_ART, speciesArt } from "@/lib/art";
+import { traitDesc, traitName, traitShort, useLang, useT } from "@/lib/i18n";
 import { MarkChip } from "./cards-flora";
 import { FoodCube, TraitGlyph } from "./icons";
 import { TraitTooltip } from "./trait-tip";
@@ -40,6 +41,7 @@ const FoodSlot = memo(function FoodSlot() {
 });
 
 export const FoodDots = memo(function FoodDots({ animal }: { animal: Animal }) {
+  const t = useT();
   const need = speciesNeed(animal);
   const blue = Math.min(animal.blueFood, animal.food);
   const red = animal.food - blue;
@@ -47,22 +49,24 @@ export const FoodDots = memo(function FoodDots({ animal }: { animal: Animal }) {
   return (
     <div
       className="flex items-center gap-1.5"
-      title={`Еда ${animal.food} / ${need}${blue > 0 ? ` · синих ${blue}` : ""}${
-        animal.fatTokens > 0 ? ` · жир ${animal.fatTokens}` : ""
-      }`}
+      title={
+        t("card.foodTitle", { food: animal.food, need }) +
+        (blue > 0 ? t("card.foodBlue", { n: blue }) : "") +
+        (animal.fatTokens > 0 ? t("card.foodFat", { n: animal.fatTokens }) : "")
+      }
     >
       <div className="flex flex-wrap items-center gap-1">
         {Array.from({ length: red }).map((_, i) => (
-          <FoodCube key={`r${i}`} tone="red" title="Красная фишка" className="token-pop size-3.5" />
+          <FoodCube key={`r${i}`} tone="red" title={t("card.redToken")} className="token-pop size-3.5" />
         ))}
         {Array.from({ length: blue }).map((_, i) => (
-          <FoodCube key={`b${i}`} tone="blue" title="Синяя фишка" className="token-pop size-3.5" />
+          <FoodCube key={`b${i}`} tone="blue" title={t("card.blueToken")} className="token-pop size-3.5" />
         ))}
         {Array.from({ length: empty }).map((_, i) => (
           <FoodSlot key={`e${i}`} />
         ))}
         {Array.from({ length: animal.fatTokens }).map((_, i) => (
-          <FoodCube key={`f${i}`} tone="yellow" title="Жир" className="token-pop size-3.5" />
+          <FoodCube key={`f${i}`} tone="yellow" title={t("card.fatToken")} className="token-pop size-3.5" />
         ))}
       </div>
       <span className="text-[10px] tabular-nums text-ink-soft">
@@ -117,12 +121,14 @@ export const TraitChip = memo(function TraitChip({
   disabled?: boolean;
   fresh?: boolean;
 }) {
+  const lang = useLang();
+  const t = useT();
   const def = TRAITS[type];
   const tip = useTraitTip({ isolateClick: true });
   const anchorRef = (el: HTMLElement | null) => { tip.anchorRef.current = el; };
   const bubble = tip.anchorRect ? (
     <TraitTooltip
-      def={def}
+      def={{ ...def, name: traitName(type, lang), description: traitDesc(type, lang) }}
       pair={pair}
       pairNote={mark?.note}
       pairColor={mark?.color}
@@ -162,9 +168,9 @@ export const TraitChip = memo(function TraitChip({
       ) : (
         <TraitGlyph id={type} className="size-3.5" />
       )}
-      {def.short}
+      {traitShort(type, lang)}
       {def.extraFood > 0 ? (
-        <span className="text-[9px] font-semibold text-clay" title={`+${def.extraFood} к потребности в еде`}>
+        <span className="text-[9px] font-semibold text-clay" title={t("card.extraFoodNeed", { n: def.extraFood })}>
           +{def.extraFood}
         </span>
       ) : null}
@@ -173,7 +179,7 @@ export const TraitChip = memo(function TraitChip({
           {mark.note}
         </span>
       ) : pair ? (
-        <span className="text-[9px] opacity-70">пара</span>
+        <span className="text-[9px] opacity-70">{t("card.pair")}</span>
       ) : null}
       {fresh ? <span className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-clay" /> : null}
       {bubble}
@@ -206,6 +212,7 @@ export const AnimalCard = memo(function AnimalCard({
   insertSide,
   dragRef,
   dragListeners,
+  onRename,
 }: {
   animal: Animal;
   name?: string;
@@ -232,8 +239,26 @@ export const AnimalCard = memo(function AnimalCard({
   /** ref и слушатели датчиков @dnd-kit (мыши/пальца). */
   dragRef?: (el: HTMLDivElement | null) => void;
   dragListeners?: DraggableSyntheticListeners;
+  /**
+   * Переименовать это животное (косметика). Передаётся только своим животным
+   * в свой ход фаз развития/питания — по нему карточка показывает карандаш.
+   */
+  onRename?: (animalId: string, name: string) => void;
 }) {
+  const t = useT();
   const fed = isFed(animal);
+  // Inline-правка клички: карандаш у имени раскрывает поле, галочка —
+  // сохранить, крестик/Esc — отменить. Номер «№N» не редактируется.
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState("");
+  const startRename = () => {
+    setDraft(animal.name ?? "");
+    setRenaming(true);
+  };
+  const commitRename = () => {
+    setRenaming(false);
+    onRename?.(animal.id, draft.trim());
+  };
   // Много свойств — карточка растёт в ширину, а не только в высоту.
   const width = 168 + Math.min(Math.max(animal.traits.length - 3, 0), 3) * 38;
   return (
@@ -287,22 +312,86 @@ export const AnimalCard = memo(function AnimalCard({
           (численность, убежище, сон, метки) уходят на вторую строку, а не
           выпадают за край карточки. */}
       <div className="mb-1 flex flex-wrap items-start justify-between gap-x-2 gap-y-1">
-        <span className="flex min-w-0 flex-1 basis-16 items-baseline gap-1 font-display text-sm tracking-tight">
-          {no ? <span className="shrink-0 text-[10px] tabular-nums text-ink-soft">№{no}</span> : null}
-          <span className="truncate">
-            {hasTrait(animal, "obligateCarnivore")
-              ? "Облигатный хищник"
-              : hasTrait(animal, "carnivore")
-                ? "Хищник"
-                : hasTrait(animal, "swimming")
-                  ? "Водное"
-                  : "Животное"}
+        {renaming && onRename ? (
+          /* Правка клички: поле вместо имени, галочка сохраняет, крестик/Esc
+             отменяют. События не всплывают — клики не выбирают животное и не
+             запускают перетаскивание карточки. */
+          <span
+            className="flex min-w-0 flex-1 items-center gap-0.5"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {no ? <span className="shrink-0 text-[10px] tabular-nums text-ink-soft">№{no}</span> : null}
+            <input
+              autoFocus
+              value={draft}
+              maxLength={24}
+              aria-label={t("card.renameInput")}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRename();
+                if (e.key === "Escape") setRenaming(false);
+              }}
+              className="min-w-0 flex-1 rounded-[var(--radius-xs)] border border-ink/20 bg-parchment-2 px-1.5 py-0.5 font-display text-sm tracking-tight text-ink outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            />
+            <button
+              type="button"
+              aria-label={t("card.renameSave")}
+              title={t("card.renameSave")}
+              onClick={commitRename}
+              className="grid size-7 shrink-0 place-items-center rounded text-ink-soft transition-colors hover:bg-ink/10 hover:text-good focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            >
+              <Check className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label={t("card.renameCancel")}
+              title={t("card.renameCancel")}
+              onClick={() => setRenaming(false)}
+              className="grid size-7 shrink-0 place-items-center rounded text-ink-soft transition-colors hover:bg-ink/10 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            >
+              <X className="size-3.5" />
+            </button>
           </span>
-        </span>
+        ) : (
+          <span className="flex min-w-0 flex-1 basis-16 items-baseline gap-1 font-display text-sm tracking-tight">
+            {no ? <span className="shrink-0 text-[10px] tabular-nums text-ink-soft">№{no}</span> : null}
+            {/* Кличка владельца заменяет подпись вида; без неё — как раньше:
+                облигатный хищник / хищник / водное / животное. */}
+            <span className="truncate">
+              {animal.name ??
+                (hasTrait(animal, "obligateCarnivore")
+                  ? t("card.obligateCarnivore")
+                  : hasTrait(animal, "carnivore")
+                    ? t("card.carnivore")
+                    : hasTrait(animal, "swimming")
+                      ? t("card.water")
+                      : t("card.animal"))}
+            </span>
+            {/* Карандаш клички — только на своих животных в свой ход; место
+                под него выделяется внутри flex-1 строки, карточка не прыгает
+                и на тач-ширинах виден без hover. */}
+            {onRename ? (
+              <button
+                type="button"
+                aria-label={t("card.renameAria")}
+                title={t("card.renameAria")}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  startRename();
+                }}
+                className="grid size-7 shrink-0 place-items-center self-center rounded text-ink-soft transition-colors hover:bg-ink/10 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+              >
+                <Pencil className="size-3.5" />
+              </button>
+            ) : null}
+          </span>
+        )}
         <span className="flex shrink-0 flex-wrap items-center justify-end gap-1">
           {(animal.population ?? 1) > 1 ? (
             <span
-              title={`Численность вида: ${animal.population} животного(-ых)`}
+              title={t("card.popTitle", { n: animal.population ?? 1 })}
               className="flex items-center gap-0.5 rounded-full bg-accent/20 px-1.5 text-[10px] font-semibold tabular-nums text-accent"
             >
               <img src={TOKEN.population} alt="" loading="lazy" className="size-3 rounded-full object-cover" />
@@ -311,27 +400,27 @@ export const AnimalCard = memo(function AnimalCard({
           ) : null}
           {animal.sheltered ? (
             <span
-              title="В убежище растения: хищники и хищные растения не тронут до конца фазы питания"
+              title={t("card.shelterTitle")}
               className="flex items-center gap-1 rounded-full bg-leaf/25 px-1.5 text-[10px] font-medium uppercase tracking-wide text-leaf"
             >
               <span className="size-2 rounded-full border border-leaf/60 bg-leaf/40" />
-              убежище
+              {t("card.shelter")}
             </span>
           ) : null}
           {animal.sedated ? (
             <span
-              title="Откушало с лекарственного растения: накормлено, но свойства не действуют до конца фазы питания"
+              title={t("card.sedatedTitle")}
               className="rounded-full bg-ink/10 px-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-soft"
             >
-              усыплено
+              {t("card.sedated")}
             </span>
           ) : null}
           {animal.hibernating ? (
-            <span className="rounded-full bg-ink/10 px-1.5 text-[10px] font-medium uppercase tracking-wide">сон</span>
+            <span className="rounded-full bg-ink/10 px-1.5 text-[10px] font-medium uppercase tracking-wide">{t("card.hibernating")}</span>
           ) : fed ? (
-            <span className="rounded-full bg-good/20 px-1.5 text-[10px] font-medium uppercase tracking-wide text-good">сыто</span>
+            <span className="rounded-full bg-good/20 px-1.5 text-[10px] font-medium uppercase tracking-wide text-good">{t("card.fed")}</span>
           ) : (
-            <span className="rounded-full bg-clay/15 px-1.5 text-[10px] font-medium uppercase tracking-wide text-clay">голод</span>
+            <span className="rounded-full bg-clay/15 px-1.5 text-[10px] font-medium uppercase tracking-wide text-clay">{t("card.hungry")}</span>
           )}
         </span>
       </div>
@@ -350,16 +439,16 @@ export const AnimalCard = memo(function AnimalCard({
       <FoodDots animal={animal} />
       <div className="mt-2 flex flex-wrap gap-1">
         {animal.traits.length === 0 ? (
-          <span className="text-[11px] text-ink-soft">без свойств</span>
+          <span className="text-[11px] text-ink-soft">{t("card.noTraits")}</span>
         ) : (
-          animal.traits.map((t) => (
+          animal.traits.map((tr) => (
             <TraitChip
-              key={t.id}
-              type={t.type}
-              pair={Boolean(t.pairWith)}
-              mark={pairMarks?.[t.id]}
-              disabled={t.disabled}
-              fresh={freshSince !== undefined && t.playSeq > freshSince ? true : undefined}
+              key={tr.id}
+              type={tr.type}
+              pair={Boolean(tr.pairWith)}
+              mark={pairMarks?.[tr.id]}
+              disabled={tr.disabled}
+              fresh={freshSince !== undefined && tr.playSeq > freshSince ? true : undefined}
             />
           ))
         )}
@@ -398,6 +487,8 @@ export function PairPlate({
   highlight?: boolean;
   dimmed?: boolean;
 }) {
+  const t = useT();
+  const lang = useLang();
   const def = TRAITS[type];
   const dark = DARK_ART.has(type);
   const tip = useTraitTip({ isolateClick: true });
@@ -408,7 +499,7 @@ export function PairPlate({
       }}
       {...tip.triggerProps}
       data-trait-chip
-      title={`${def.name}${note ? ` · ${note}` : ""} — ${def.description}`}
+      title={`${traitShort(type, lang)}${note ? ` · ${note}` : ""} — ${traitDesc(type, lang)}`}
       style={color ? { borderColor: color, backgroundColor: `${color}14` } : undefined}
       className={cn(
         "relative flex w-full shrink-0 cursor-help items-center gap-2 self-center rounded-[var(--radius-sm)] border border-dashed border-ink/30 bg-parchment-2/80 px-2 py-1 text-ink shadow-[var(--shadow-card)] sm:w-[58px] sm:flex-col sm:justify-center sm:gap-1 sm:px-1 sm:py-2",
@@ -434,18 +525,18 @@ export function PairPlate({
       <span className="flex min-w-0 flex-1 flex-col sm:w-full sm:flex-none sm:items-center">
         <span className="flex items-center gap-1 truncate text-[10px] font-semibold leading-tight sm:text-[9px]">
           {color ? <span className="size-2 shrink-0 rounded-full" style={{ background: color }} /> : null}
-          {def.short}
+          {traitShort(type, lang)}
         </span>
         <span
           className="truncate text-[9px] leading-tight text-ink-soft sm:max-w-full sm:text-center sm:text-[8px]"
           style={color ? { color } : undefined}
         >
-          {note ?? "пара"}
+          {note ?? t("card.pair")}
         </span>
       </span>
       {tip.anchorRect ? (
         <TraitTooltip
-          def={def}
+          def={{ ...def, name: traitName(type, lang), description: traitDesc(type, lang) }}
           pair
           pairNote={note}
           pairColor={color}
@@ -480,6 +571,8 @@ const HandFace = memo(function HandFace({
   /** Клик по недоступной грани: звук отказа и подсказка, без выбора. */
   onBlocked?: () => void;
 }) {
+  const t = useT();
+  const lang = useLang();
   const def = TRAITS[face];
   const dark = DARK_ART.has(face);
   // На тач-устройствах подсказка не переключается тапом: тап выбирает грань.
@@ -531,15 +624,19 @@ const HandFace = memo(function HandFace({
         </span>
         <span className="flex items-center gap-1 px-2 pt-1.5 text-[11px] font-semibold leading-tight">
           <TraitGlyph id={face} className="size-3.5 shrink-0" />
-          <span className="truncate">{def.name}</span>
+          <span className="truncate">{traitName(face, lang)}</span>
         </span>
         {def.extraFood ? (
-          <span className="px-2 pb-1.5 text-[10px] leading-tight text-clay">+{def.extraFood} еды</span>
+          <span className="px-2 pb-1.5 text-[10px] leading-tight text-clay">
+            {t("traitTip.extraFood", { n: def.extraFood })}
+          </span>
         ) : (
           <span className="pb-1.5" />
         )}
       </button>
-      {tip.anchorRect ? <TraitTooltip def={def} anchorRect={tip.anchorRect} id={tip.tipId} /> : null}
+      {tip.anchorRect ? (
+        <TraitTooltip def={{ ...def, name: traitName(face, lang), description: traitDesc(face, lang) }} anchorRect={tip.anchorRect} id={tip.tipId} />
+      ) : null}
     </>
   );
 });
@@ -574,12 +671,13 @@ export function HandCard({
   /** У игрока нет животных: низ карты сереет, а «Животное» подсвечивается —
    *  первым делом нужно выложить животное, свойства без него бессмысленны. */
   noAnimals?: boolean;
-  /** ref и слушатели @dnd-kit: карта едет мышью или пальцем в зону/на животное. */
+  /** ref и слушатели датчиков @dnd-kit: карта едет мышью или пальцем в зону/на животное. */
   dragRef?: (el: HTMLDivElement | null) => void;
   dragListeners?: DraggableSyntheticListeners;
   /** Карту сейчас тащат: в руке она приглушена, «призрак» едет под курсором. */
   dragging?: boolean;
 }) {
+  const t = useT();
   // Кольцо карты показываем только когда выбран сам «низ» карты; выбранная
   // грань помечается своим кольцом — на карте не сходятся два выделения.
   const cardPicked = Boolean(selected) && (selectedFace === null || selectedFace === undefined);
@@ -608,7 +706,7 @@ export function HandCard({
           noAnimals && !selected && "bg-clay/20 text-ink ring-1 ring-inset ring-clay/50",
         )}
       >
-        Животное
+        {t("card.animal")}
       </button>
       {card.faces.map((face, i) => (
         <HandFace
@@ -632,16 +730,17 @@ export function HandCard({
  * в оверлее карта едет под курсором и не должна ловить клики и фокус.
  */
 export function CardPreview({ card }: { card: Card }) {
+  const t = useT();
+  const lang = useLang();
   return (
     <div
       aria-hidden
       className="flex h-[200px] w-[124px] shrink-0 flex-col overflow-hidden rounded-[var(--radius-md)] border border-ink/12 bg-parchment text-ink shadow-[var(--shadow-card)]"
     >
       <span className="flex h-8 items-center justify-center border-b border-ink/10 bg-parchment-2/70 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
-        Карта
+        {t("card.card")}
       </span>
       {card.faces.map((face, i) => {
-        const def = TRAITS[face];
         const dark = DARK_ART.has(face);
         return (
           <span
@@ -667,7 +766,7 @@ export function CardPreview({ card }: { card: Card }) {
             </span>
             <span className="flex items-center gap-1 px-2 pb-1.5 pt-1.5 text-[11px] font-semibold leading-tight">
               <TraitGlyph id={face} className="size-3.5 shrink-0" />
-              <span className="truncate">{def.name}</span>
+              <span className="truncate">{traitName(face, lang)}</span>
             </span>
           </span>
         );

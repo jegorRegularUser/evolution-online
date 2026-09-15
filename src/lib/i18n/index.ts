@@ -40,6 +40,7 @@ import { useCallback } from "react";
 import type { TKey } from "./ru";
 import { en } from "./en";
 import { ru } from "./ru";
+import { scientistName } from "./terms";
 import { useLangStore, type Lang } from "./store";
 
 const DICTS: Record<Lang, Record<TKey, string>> = { ru, en };
@@ -47,13 +48,24 @@ const DICTS: Record<Lang, Record<TKey, string>> = { ru, en };
 /** Параметры подстановки: `{name}` в значении словаря. */
 export type TParams = Record<string, string | number>;
 
-/** Чистый перевод: язык задан явно, без стора. */
+/**
+ * Чистый перевод: язык задан явно, без стора.
+ *
+ * Параметры-имена игроков (системные записи стола, журнал движка) приходят
+ * по-русски — сервер хранит имена ботов-учёных в БД по-русски. При lang=en
+ * такие значения переводятся через scientistName (Дарвин → Darwin, включая
+ * суффиксы «Дарвин 2»); люди и любые другие строки возвращаются как есть.
+ * Имена свойств/растений сюда не попадают: их переводят хелперы terms.ts
+ * до подстановки (termParamValue в game-app.tsx).
+ */
 export function translate(lang: Lang, key: TKey, params?: TParams): string {
   const raw = DICTS[lang][key] ?? ru[key] ?? key;
   if (!params) return raw;
-  return raw.replace(/\{(\w+)\}/g, (m, name: string) =>
-    params[name] !== undefined && params[name] !== null ? String(params[name]) : m,
-  );
+  return raw.replace(/\{(\w+)\}/g, (m, name: string) => {
+    const v = params[name];
+    if (v === undefined || v === null) return m;
+    return scientistName(String(v), lang);
+  });
 }
 
 /** Тип функции перевода — общий для t, useT и хелперов. */
@@ -90,11 +102,14 @@ export {
   floraName,
   markDesc,
   markName,
+  markShort,
   plantDesc,
   plantName,
+  scientistName,
   territoryName,
   traitDesc,
   traitName,
+  traitShort,
 } from "./terms";
 
 // ── число-слова ─────────────────────────────────────────────────────────────

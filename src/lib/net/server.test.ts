@@ -1604,13 +1604,19 @@ describe("цвета игроков", () => {
     const hostSeat = snap.seats.find((x) => x.seat === 0)!;
     const botSeat = snap.seats.find((x) => x.isAI)!;
     assert.ok((PLAYER_COLORS as readonly string[]).includes(hostSeat.color));
-    assert.equal(botSeat.color, PLAYER_COLORS[botSeat.seat % PLAYER_COLORS.length]);
+    // Цвет бота детерминирован, но СВОБОДЕН: первый незанятый из палитры,
+    // начиная с индекса места (эксклюзивность в пределах стола).
+    assert.ok((PLAYER_COLORS as readonly string[]).includes(botSeat.color));
+    assert.notEqual(botSeat.color, hostSeat.color);
     const g = await s.join({ code: host.code, name: "Боря" });
     const after = await s.rejoin(host.code, host.token);
-    assert.ok(
-      (PLAYER_COLORS as readonly string[]).includes(
-        after.seats.find((x) => x.seat === g.seat)!.color,
-      ),
+    const guestSeat = after.seats.find((x) => x.seat === g.seat)!;
+    assert.ok((PLAYER_COLORS as readonly string[]).includes(guestSeat.color));
+    // Вход выдаёт только свободный цвет: все места стола разного цвета.
+    assert.equal(
+      new Set(after.seats.map((x) => x.color.toLowerCase())).size,
+      after.seats.length,
+      "цвета мест должны быть уникальны",
     );
     // Цвет — публичная информация: он есть и в кадре зрителя, маскировать нечего.
     const { token } = await s.spectate(host.code, "Зоя");
@@ -1621,12 +1627,32 @@ describe("цвета игроков", () => {
     );
   });
 
+  it("эксклюзивность: полный стол на 8 мест — все цвета разные", async () => {
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 8, botSeats: 3, difficulty: "normal" });
+    for (const name of ["Боря", "Валя", "Гриша", "Даша"]) {
+      await s.join({ code: host.code, name });
+    }
+    const snap = await s.rejoin(host.code, host.token);
+    assert.equal(snap.seats.length, 8);
+    const colors = snap.seats.map((x) => x.color.toLowerCase());
+    assert.equal(new Set(colors).size, 8, `цвета повторяются: ${colors.join(", ")}`);
+    // Смена вместимости переносит цвета без нарушения уникальности.
+    await s.setCapacity(host.code, host.token, 5);
+    const shrunk = await s.rejoin(host.code, host.token);
+    const left = shrunk.seats.map((x) => x.color.toLowerCase());
+    assert.equal(new Set(left).size, left.length, "после уплотнения цвета совпали");
+  });
+
   it("setColor: своё место и только лобби; чужая палитра отклоняется", async () => {
     const s = svc();
     const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
     const g = await s.join({ code: host.code, name: "Боря" });
-    const before = (await s.rejoin(host.code, host.token)).seats.find((x) => x.seat === 0)!.color;
-    const want = PLAYER_COLORS.find((c) => c !== before)!;
+    const snap0 = await s.rejoin(host.code, host.token);
+    const before = snap0.seats.find((x) => x.seat === 0)!.color;
+    const guestColor = snap0.seats.find((x) => x.seat === g.seat)!.color;
+    // Свободный цвет: не занят ни мной, ни другим местом.
+    const want = PLAYER_COLORS.find((c) => c !== before && c !== guestColor)!;
     const r = await s.setColor(host.code, host.token, want);
     assert.equal(r.color, want);
     assert.equal(
@@ -1649,10 +1675,71 @@ describe("цвета игроков", () => {
     await assert.rejects(() => s.setColor(host.code, g.token, PLAYER_COLORS[1]), /до начала/);
   });
 
-  it("палитра: 8 различимых семейств с контрастом ≥ 4.5:1 на подложке места", () => {
-    // Страж подбора (M3): цвета различаются по тону и светлоте, а сам цвет
-    // читается как текст поверх подложки места — `color-mix(in oklab,
-    // <цвет> 12%, var(--color-surface))` (см. seatTint в game-app).
+  it("setColor: свой текущий цвет — успех без изменений, занятый — отказ color-taken", async () => {
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 3, botSeats: 0, difficulty: "normal" });
+    const g = await s.join({ code: host.code, name: "Боря" });
+    const snap0 = await s.rejoin(host.code, host.token);
+    const mine = snap0.seats.find((x) => x.seat === 0)!.color;
+    const theirs = snap0.seats.find((x) => x.seat === g.seat)!.color;
+    assert.notEqual(mine, theirs, "вход выдаёт разные цвета");
+
+    // Свой текущий цвет — no-op/успех, цвет на месте.
+    const same = await s.setColor(host.code, host.token, mine);
+    assert.equal(same.color, mine);
+    assert.equal(
+      (await s.rejoin(host.code, host.token)).seats.find((x) => x.seat === 0)!.color,
+      mine,
+    );
+
+    // Занятый другим место цвет — отказ с кодом color-taken и понятным текстом.
+    await assert.rejects(
+      () => s.setColor(host.code, host.token, theirs),
+      (e: unknown) => {
+        assert.ok(e instanceof NetError);
+        assert.equal(e.code, "color-taken");
+        assert.match(e.message, /занят/);
+        return true;
+      },
+      "ожидался отказ color-taken",
+    );
+    // Цвет не изменился и у владельца остался прежним.
+    const after = await s.rejoin(host.code, host.token);
+    assert.equal(after.seats.find((x) => x.seat === 0)!.color, mine);
+    assert.equal(after.seats.find((x) => x.seat === g.seat)!.color, theirs);
+
+    // Смена на свободный после отказа — успех.
+    const free = PLAYER_COLORS.find((c) => c !== mine && c !== theirs)!;
+    const r = await s.setColor(host.code, g.token, free);
+    assert.equal(r.color, free);
+    // Прежний цвет Боря освободил: Аня теперь может его занять.
+    const r2 = await s.setColor(host.code, host.token, theirs);
+    assert.equal(r2.color, theirs);
+  });
+
+  it("claimSeat из очереди выдаёт свободный цвет", async () => {
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 1, difficulty: "normal" });
+    // Стол полный: Боря ждёт в очереди.
+    const w = await s.join({ code: host.code, name: "Боря" });
+    assert.equal(w.waiting, true);
+    // Хост убирает бота — место освобождается, ожидающий его занимает.
+    await s.setBots({ code: host.code, token: host.token, count: 0 });
+    const info = await s.waiterInfo(host.code, w.token);
+    assert.equal(typeof info.freeSeat, "number");
+    const claimed = await s.claimSeat(host.code, w.token);
+    const snap = await s.rejoin(host.code, host.token);
+    const colors = snap.seats.map((x) => x.color.toLowerCase());
+    assert.equal(new Set(colors).size, snap.seats.length, "claimSeat выдал занятый цвет");
+    assert.ok((PLAYER_COLORS as readonly string[]).includes(snap.seats.find((x) => x.seat === claimed.seat)!.color));
+  });
+
+  it("палитра: 16 различимых семейств с контрастом ≥ 4.5:1 на подложке места", () => {
+    // Страж подбора (M3 + волна 10): цвета различаются по тону и светлоте —
+    // в норме И при нарушениях цветовосприятия (протанопия/дейтеранопия/
+    // тританопия, матрицы Machado 2009 severity 1.0), а сам цвет читается
+    // как текст поверх подложки места — `color-mix(in oklab, <цвет> 12%,
+    // var(--color-surface))` (см. seatTint в game-app).
     const surface = "#1c2119"; // --color-surface из src/styles.css
     const toRgb = (hex: string): [number, number, number] => {
       const n = parseInt(hex.slice(1), 16);
@@ -1708,22 +1795,76 @@ describe("цвета игроков", () => {
       ]);
     };
 
-    assert.equal(PLAYER_COLORS.length, 8);
-    assert.equal(new Set(PLAYER_COLORS).size, 8, "цвета не должны повторяться");
+    /**
+     * Дальтонизм (Machado et al. 2009, severity 1.0): линейный RGB → матрица
+     * → OKLab. Различимость проверяем при протанопии, дейтеранопии и
+     * тританопии: минимум попарного расстояния не должен проседать ниже
+     * порога прежней восьмёрки (0.0486 у янтарь/олива при дейтеранопии).
+     */
+    const CVD: Record<string, number[][]> = {
+      protan: [
+        [0.152286, 1.052583, -0.204868],
+        [0.114503, 0.786281, 0.099216],
+        [-0.003882, -0.048116, 1.051998],
+      ],
+      deutan: [
+        [0.367322, 0.860646, -0.227968],
+        [0.280085, 0.672501, 0.047413],
+        [-0.01182, 0.04294, 0.968881],
+      ],
+      tritan: [
+        [1.255528, -0.076749, -0.178779],
+        [-0.078411, 0.930809, 0.147602],
+        [0.004733, 0.691367, 0.3039],
+      ],
+    };
+    const cvdOklab = (hex: string, m: number[][]): [number, number, number] => {
+      const lin = toRgb(hex).map(toLinear) as [number, number, number];
+      const out = [0, 1, 2].map(
+        (i) => m[i]![0]! * lin[0] + m[i]![1]! * lin[1] + m[i]![2]! * lin[2],
+      );
+      const l = Math.cbrt(0.4122214708 * out[0]! + 0.5363325363 * out[1]! + 0.0514459929 * out[2]!);
+      const mm = Math.cbrt(0.2119034982 * out[0]! + 0.6806995451 * out[1]! + 0.1073969566 * out[2]!);
+      const s = Math.cbrt(0.0883024619 * out[0]! + 0.2817188376 * out[1]! + 0.6299787005 * out[2]!);
+      return [
+        0.2104542553 * l + 0.793617785 * mm - 0.0040720468 * s,
+        1.9779984951 * l - 2.428592205 * mm + 0.4505937099 * s,
+        0.0259040371 * l + 0.7827717662 * mm - 0.808675766 * s,
+      ];
+    };
+
+    assert.equal(PLAYER_COLORS.length, 16);
+    assert.equal(new Set(PLAYER_COLORS).size, 16, "цвета не должны повторяться");
     for (const color of PLAYER_COLORS) {
       assert.ok(contrast(color, surface) >= 5, `${color}: контраст на --color-surface`);
       assert.ok(contrast(color, seatTint(color)) >= 4.5, `${color}: контраст на подложке места`);
     }
     // Различимость: ближайшая пара в OKLab не должна сливаться (≈2 JND и выше).
     let min = Number.POSITIVE_INFINITY;
+    let minCvd = Number.POSITIVE_INFINITY;
+    let worst: { pair: string; mode: string; d: number } | null = null;
     for (let i = 0; i < PLAYER_COLORS.length; i++) {
       for (let j = i + 1; j < PLAYER_COLORS.length; j++) {
         const a = toOklab(PLAYER_COLORS[i]!);
         const b = toOklab(PLAYER_COLORS[j]!);
-        min = Math.min(min, Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+        const d = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+        min = Math.min(min, d);
+        for (const [mode, m] of Object.entries(CVD)) {
+          const ca = cvdOklab(PLAYER_COLORS[i]!, m);
+          const cb = cvdOklab(PLAYER_COLORS[j]!, m);
+          const cd = Math.hypot(ca[0] - cb[0], ca[1] - cb[1], ca[2] - cb[2]);
+          if (cd < minCvd) {
+            minCvd = cd;
+            worst = { pair: `${PLAYER_COLORS[i]}/${PLAYER_COLORS[j]}`, mode, d: cd };
+          }
+        }
       }
     }
     assert.ok(min >= 0.05, `ближайшая пара палитры слишком похожа: ${min.toFixed(3)}`);
+    assert.ok(
+      minCvd >= 0.045,
+      `ближайшая пара при дальтонизме слишком похожа: ${worst?.pair} (${worst?.mode}) = ${minCvd.toFixed(3)}`,
+    );
   });
 });
 
@@ -2017,6 +2158,54 @@ describe("S4: канонизация легального действия", () 
       (await _internals.readRoom(sql, host.code))!.state!.currentPlayerId,
       0,
       "ход не сломался",
+    );
+  });
+
+  it("renameAnimal: свой ход проходит и виден другому игроку; чужой ход/чужое животное/длина/фаза — отказ", async () => {
+    const { s, host, g } = await feedingTable();
+    const room = await _internals.readRoom(sql, host.code);
+    const st = structuredClone(room!.state!);
+    st.phase = "development";
+    st.currentPlayerId = 0;
+    st.players[0]!.animals = [testAnimal("a-1", 0, { no: 1 })];
+    st.players[1]!.animals = [testAnimal("b-1", 1, { no: 1 })];
+    await _internals.casUpdate(sql, host.code, room!.version, { state: st });
+    // Чужой ход — понятная причина (гость пытается переименовать своё).
+    await assert.rejects(
+      () => s.action(host.code, g.token, { type: "renameAnimal", animalId: "b-1", name: "Взлом" }),
+      /только в свой ход/,
+    );
+    // Чужое животное в свой ход — отдельная причина.
+    await assert.rejects(
+      () => s.action(host.code, host.token, { type: "renameAnimal", animalId: "b-1", name: "Взлом" }),
+      /только своих животных/,
+    );
+    // Длиннее 24 символов — отказ по длине, кличка не меняется.
+    await assert.rejects(
+      () => s.action(host.code, host.token, { type: "renameAnimal", animalId: "a-1", name: "д".repeat(25) }),
+      /до 24 символов/,
+    );
+    // Своё в свой ход — сохраняется, ход не ломается, номер остаётся.
+    await s.action(host.code, host.token, { type: "renameAnimal", animalId: "a-1", name: "  Хобот  " });
+    let after = (await _internals.readRoom(sql, host.code))!.state!;
+    assert.equal(after.players[0]!.animals[0]!.name, "Хобот", "сервер триммит кличку");
+    assert.equal(after.players[0]!.animals[0]!.no, 1, "номер животного не тронут");
+    assert.equal(after.currentPlayerId, 0, "ход не сломался");
+    // Кличка не секретная: персональный вид второго игрока её видит.
+    const snap = full(await s.poll(host.code, g.token));
+    assert.equal(snap.state!.players[0]!.animals[0]!.name, "Хобот");
+    // Пустая строка — допустимый сброс на дефолтную подпись.
+    await s.action(host.code, host.token, { type: "renameAnimal", animalId: "a-1", name: "   " });
+    after = (await _internals.readRoom(sql, host.code))!.state!;
+    assert.equal(after.players[0]!.animals[0]!.name, undefined);
+    // Вне фаз развития/питания — отказ с причиной.
+    const room2 = await _internals.readRoom(sql, host.code);
+    const st2 = structuredClone(room2!.state!);
+    st2.phase = "foodBank";
+    await _internals.casUpdate(sql, host.code, room2!.version, { state: st2 });
+    await assert.rejects(
+      () => s.action(host.code, host.token, { type: "renameAnimal", animalId: "a-1", name: "Не фаза" }),
+      /нельзя переименовывать/,
     );
   });
 });

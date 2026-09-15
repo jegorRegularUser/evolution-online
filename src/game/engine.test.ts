@@ -713,6 +713,125 @@ describe("перестановка животных", () => {
   });
 });
 
+describe("переименование животных", () => {
+  it("кличка триммится, длинная режется до 24, пустая сбрасывает на дефолт", () => {
+    let g = scenario([[mkAnimal("r1", 0, [])], []]);
+    g.phase = "development";
+    g.currentPlayerId = 0;
+    g = applyAction(g, { type: "renameAnimal", animalId: "r1", name: "  Хищный Бобр  " });
+    assert.equal(g.players[0]!.animals[0]!.name, "Хищный Бобр");
+    g = applyAction(g, { type: "renameAnimal", animalId: "r1", name: "а".repeat(30) });
+    assert.equal(g.players[0]!.animals[0]!.name, "а".repeat(24));
+    g = applyAction(g, { type: "renameAnimal", animalId: "r1", name: "   " });
+    assert.equal(g.players[0]!.animals[0]!.name, undefined);
+  });
+
+  it("фазы развития и питания — можно, прочие и чужое животное — игнор", () => {
+    let g = scenario([[mkAnimal("mine", 0, [])], [mkAnimal("theirs", 1, [])]]);
+    g.phase = "development";
+    g.currentPlayerId = 0;
+    g = applyAction(g, { type: "renameAnimal", animalId: "theirs", name: "Взлом" });
+    assert.equal(g.players[1]!.animals[0]!.name, undefined);
+    for (const phase of ["foodBank", "extinction", "growth", "gameOver"] as const) {
+      g.phase = phase;
+      g = applyAction(g, { type: "renameAnimal", animalId: "mine", name: "Не сейчас" });
+      assert.equal(g.players[0]!.animals[0]!.name, undefined, `фаза ${phase}`);
+    }
+    g.phase = "feeding";
+    g.currentPlayerId = 0;
+    g = applyAction(g, { type: "renameAnimal", animalId: "mine", name: "Кормилец" });
+    assert.equal(g.players[0]!.animals[0]!.name, "Кормилец");
+  });
+
+  it("косметика: ни записей в журнал, ни событий, ни смены хода", () => {
+    let g = scenario([[mkAnimal("r1", 0, [])], []]);
+    g.phase = "development";
+    g.currentPlayerId = 0;
+    const logLen = g.log.length;
+    g = applyAction(g, { type: "renameAnimal", animalId: "r1", name: "Тихоня" });
+    assert.equal(g.players[0]!.animals[0]!.name, "Тихоня");
+    assert.equal(g.log.length, logLen);
+    assert.deepEqual(g.lastEvents, []);
+    assert.equal(g.currentPlayerId, 0);
+  });
+});
+
+describe("счётчик передач хода (turnSeq)", () => {
+  it("растёт на каждой передаче: развитие → старт питания → круги питания", () => {
+    let g = scenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]]);
+    // Карты в руках: пас одного игрока не должен закрывать развитие за всех.
+    g.players[0]!.hand = [{ id: "h0", faces: ["carnivore"] }];
+    g.players[1]!.hand = [{ id: "h1", faces: ["camouflage"] }];
+    g.phase = "development";
+    g.currentPlayerId = 0;
+    g.firstPlayerId = 0;
+    const seq0 = g.turnSeq;
+    g = applyAction(g, { type: "devPass" });
+    assert.equal(g.currentPlayerId, 1);
+    assert.equal(g.turnSeq, seq0 + 1);
+    g = applyAction(g, { type: "devPass" });
+    assert.equal(g.phase, "foodBank");
+    g = applyAction(g, { type: "rollFoodBank" });
+    g = applyAction(g, { type: "beginFeeding" });
+    assert.equal(g.phase, "feeding");
+    assert.equal(g.currentPlayerId, 0);
+    // Старт питания считает якорную установку хода и первый круг feedTurn —
+    // оба присвоения currentPlayerId; для ключа важна монотонность, не кратность.
+    const afterBegin = g.turnSeq;
+    assert.ok(afterBegin >= seq0 + 2, `turnSeq должен вырасти со старта питания, было ${afterBegin - seq0}`);
+    g.foodBank = 6;
+    g = applyAction(g, { type: "feedEndTurn" });
+    assert.equal(g.currentPlayerId, 1);
+    assert.equal(g.turnSeq, afterBegin + 1);
+    g = applyAction(g, { type: "feedEndTurn" });
+    assert.equal(g.currentPlayerId, 0);
+    assert.equal(g.turnSeq, afterBegin + 2);
+  });
+
+  it("второй круг той же фазы даёт другой ключ хода (год:фаза:игрок:madTurn:turnSeq)", () => {
+    let g = scenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]]);
+    g.phase = "feeding";
+    g.currentPlayerId = 0;
+    g.firstPlayerId = 0;
+    g.foodBank = 6;
+    const key = (s: GameState) => `${s.year}:${s.phase}:${s.currentPlayerId}:${s.madTurn ?? -1}:${s.turnSeq}`;
+    const first = key(g);
+    g = applyAction(g, { type: "feedEndTurn" });
+    g = applyAction(g, { type: "feedEndTurn" });
+    assert.equal(g.currentPlayerId, 0, "ход вернулся к игроку 0 вторым кругом");
+    assert.notEqual(key(g), first);
+  });
+
+  it("своя атака: возврат хода после защиты не меняет turnSeq (нет ложной карточки «Ваш ход»)", () => {
+    // Два хищника и две жертвы: после первой атаки у атакующего остаётся
+    // свежее действие, поэтому ход ВОЗВРАЩАЕТСЯ к нему — актор «моргнул» на
+    // защищающегося и вернулся. turnSeq при этом не меняется: ключ хода тот
+    // же, клиент (lastHumanKeyRef) не должен показывать карточку повторно.
+    const car1 = mkAnimal("car1", 0, [t("carnivore")]);
+    const car2 = mkAnimal("car2", 0, [t("carnivore")]);
+    // У жертвы есть «Бегство» — атака ждёт явного решения защищающегося;
+    // без защит движок разрешил бы её мгновенно, без pendingAttack.
+    const prey1 = mkAnimal("prey1", 1, [t("running")]);
+    const prey2 = mkAnimal("prey2", 1, [t("running")]);
+    let g = scenario([[car1, car2], [prey1, prey2]]);
+    g.phase = "feeding";
+    g.currentPlayerId = 0;
+    g.firstPlayerId = 0;
+    g.foodBank = 0;
+    const seq0 = g.turnSeq;
+    g = applyAction(g, { type: "feedHunt", carnivoreId: "car1", preyId: "prey1" });
+    assert.ok(g.pendingAttack, "атака ждёт решения защищающегося");
+    g = applyAction(g, { type: "chooseDefense", kind: "none" });
+    assert.equal(g.currentPlayerId, 0, "ход вернулся к атакующему (второй хищник может атаковать)");
+    assert.equal(g.turnSeq, seq0, "turnSeq не менялся: тот же ключ хода — карточки быть не должно");
+    // И повторная атака тем же ходом не считается передачей.
+    g = applyAction(g, { type: "feedHunt", carnivoreId: "car2", preyId: "prey2" });
+    assert.ok(g.pendingAttack);
+    g = applyAction(g, { type: "chooseDefense", kind: "none" });
+    assert.equal(g.turnSeq, seq0, "после второй атаки ход всё ещё тот же (боевые действия ход не передают)");
+  });
+});
+
 // ── Дополнение «Континенты» ─────────────────────────────────────────────────
 
 /** Раскладка как scenario, но с включённым модулем и зонами животных. */

@@ -15,9 +15,10 @@
  *
  * КАК ПОЛЬЗОВАТЬСЯ (следующий агент): не тащите переводы в данные игры —
  * берите готовые хелперы из `src/lib/i18n/index.ts`:
- *   traitName(id) / traitDesc(id) / floraName(k) / floraDesc(k) /
- *   plantName(k) / plantDesc(k) / markName(k) / markDesc(k) /
- *   territoryName(id) / achievementName(id) / achievementDesc(id).
+ *   traitName(id) / traitDesc(id) / traitShort(id) / floraName(k) / floraDesc(k) /
+ *   plantName(k) / plantDesc(k) / markName(k) / markDesc(k) / markShort(k) /
+ *   territoryName(id) / achievementName(id) / achievementDesc(id) /
+ *   scientistName(name) — имена ботов-учёных (Дарвин → Darwin).
  * Они читают текущий язык из стора и сами возвращают русский текст из
  * данных игры, если английского нет. Для строк стора/сервера
  * (системные записи, ошибки) кладите ключи в ru.ts/en.ts, а имена
@@ -401,6 +402,100 @@ export const ACHIEVEMENT_EN: Record<string, TermEn> = {
   "five-traits": { name: "Complex Organism", desc: "An animal with five traits" },
 };
 
+// ── Короткие подписи (чипы на карточках) ────────────────────────────────────
+// Чипы на столе и кнопки граней карты руки узкие: полное имя (Carnivorous,
+// Symbiosis) не влезает, поэтому для en — отдельные короткие подписи.
+// Русские shorts всегда берутся из данных игры.
+
+export const TRAIT_SHORT_EN: Record<string, string> = {
+  carnivore: "Carnivore",
+  swimming: "Water",
+  camouflage: "Camouflage",
+  sharpVision: "Vision",
+  burrowing: "Burrow",
+  scavenger: "Scavenger",
+  symbiosis: "Symbiosis",
+  piracy: "Pirate",
+  tailLoss: "Tail",
+  grazing: "Grazer",
+  cooperation: "Co-op",
+  running: "Running",
+  highBodyWeight: "Big",
+  parasite: "Parasite",
+  fatTissue: "Fat",
+  communication: "Comm.",
+  poisonous: "Poison",
+  hibernation: "Sleep",
+  mimicry: "Mimicry",
+  migration: "Migr.",
+  remora: "Remora",
+  herding: "Herding",
+  nematocysts: "Stings",
+  regeneration: "Regen.",
+  recombination: "Recomb.",
+  edificator: "Edifice",
+  neoplasia: "Neoplasia",
+  plantWater: "Water",
+  thorny: "Thorny",
+  rootVegetable: "Root",
+  medicinal: "Medic.",
+  plantParasite: "P-parasite",
+  micorrhiza: "Micorrhiza",
+  tree: "Tree",
+  nutritious: "Rich",
+  honeyPlant: "Honey",
+  transparent: "Transp.",
+  insectivore: "Insect.",
+  obligateCarnivore: "Obligate",
+  budding: "Budding",
+  metabolicSyndrome: "Metab.",
+  barkBeetle: "Beetle",
+  extremophile: "Extreme",
+  developmentDefects: "Defects",
+  simplification: "Simple",
+};
+
+export const MARK_SHORT_EN: Record<string, string> = {
+  poison: "Poison",
+  antidote: "Antidote",
+  madness: "Madness",
+  rage: "Rage",
+  sleep: "Sleep",
+  thryn: "Tryn",
+  haze: "Haze",
+  pacifism: "Pacifism",
+};
+
+// ── Имена учёных (ботов) ─────────────────────────────────────────────────────
+// AI_NAMES живут в src/game/engine.ts и хранятся в БД по-русски — переводим
+// только при отображении. Неизвестные имена возвращаются как есть (люди
+// называли себя сами); основа с суффиксом («Дарвин 2») переводится, суффикс
+// сохраняется.
+
+const SCIENTIST_EN: Record<string, string> = {
+  "Дарвин": "Darwin",
+  "Уоллес": "Wallace",
+  "Мендель": "Mendel",
+  "Линней": "Linnaeus",
+  "Кювье": "Cuvier",
+  "Ламарк": "Lamarck",
+  "Геккель": "Haeckel",
+};
+
+/** Отображаемое имя игрока: боты-учёные переводятся, люди — как есть. */
+export function scientistName(name: string, lang: Lang = currentLang()): string {
+  if (lang !== "en") return name;
+  const direct = SCIENTIST_EN[name];
+  if (direct) return direct;
+  // Основа + суффикс: «Дарвин 2» → «Darwin 2».
+  const m = /^(.+?)\s+(\d+)$/.exec(name);
+  if (m) {
+    const base = SCIENTIST_EN[m[1]!];
+    if (base) return `${base} ${m[2]}`;
+  }
+  return name;
+}
+
 // ── Хелперы: имя/описание термина на заданном языке ────────────────────────
 // Русский текст всегда берётся из данных игры; английский — из словарей выше.
 // Если английской записи нет (новое свойство без перевода), честно показываем
@@ -417,6 +512,11 @@ export function traitName(id: string, lang: Lang = currentLang()): string {
 
 export function traitDesc(id: string, lang: Lang = currentLang()): string {
   return (lang === "en" ? TRAIT_EN[id]?.desc : undefined) ?? TRAITS[id as keyof typeof TRAITS]?.description ?? "";
+}
+
+/** Короткая подпись свойства для чипов/кнопок граней карты руки. */
+export function traitShort(id: string, lang: Lang = currentLang()): string {
+  return (lang === "en" ? TRAIT_SHORT_EN[id] : undefined) ?? TRAITS[id as keyof typeof TRAITS]?.short ?? id;
 }
 
 export function floraName(kind: string, lang: Lang = currentLang()): string {
@@ -441,6 +541,11 @@ export function markName(kind: string, lang: Lang = currentLang()): string {
 
 export function markDesc(kind: string, lang: Lang = currentLang()): string {
   return (lang === "en" ? MARK_EN[kind]?.desc : undefined) ?? MARKS[kind as keyof typeof MARKS]?.description ?? "";
+}
+
+/** Короткая подпись метки последствий для чипов на животном. */
+export function markShort(kind: string, lang: Lang = currentLang()): string {
+  return (lang === "en" ? MARK_SHORT_EN[kind] : undefined) ?? MARKS[kind as keyof typeof MARKS]?.short ?? kind;
 }
 
 export function territoryName(id: string, lang: Lang = currentLang()): string {

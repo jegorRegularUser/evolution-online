@@ -29,6 +29,7 @@ import {
   plantDesc,
   plantName,
   placeLabel,
+  scientistName,
   pointsWord,
   playersWord,
   territoryName,
@@ -852,7 +853,7 @@ function explainDefeat(scores: ScoreBreakdown[], winnerIds: number[], humanId: n
     return translate(lang, "final.defeat.flora", {
       gap,
       points: pw,
-      name: leader.name,
+      name: scientistName(leader.name, lang),
       leader: leader.total,
       human: human.total,
     });
@@ -932,7 +933,7 @@ function ScoreRow({
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate font-medium">
-            {place}. {row.name}
+            {place}. {scientistName(row.name, lang)}
           </p>
           {winner ? <p className="mt-0.5 text-[10px] uppercase tracking-wide text-accent">{tt("final.best")}</p> : null}
         </div>

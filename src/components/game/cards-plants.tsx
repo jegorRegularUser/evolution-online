@@ -4,6 +4,7 @@ import { TRAITS } from "@/game/traits";
 import type { GameState, Plant, TerritoryId } from "@/game/types";
 import { PLANT_ART } from "@/lib/art";
 import { cn } from "@/lib/utils";
+import { plantDesc, plantName, territoryName, traitDesc, traitName, traitShort, useLang, useT } from "@/lib/i18n";
 import { PlantGlyph, FoodCube, TraitGlyph } from "./icons";
 import { TraitTooltip, type TipDef } from "./trait-tip";
 import { useTraitTip } from "./use-trait-tip";
@@ -16,6 +17,7 @@ export const PlantTraitChip = memo(function PlantTraitChip({
   type: Parameters<typeof TraitGlyph>[0]["id"];
   fresh?: boolean;
 }) {
+  const lang = useLang();
   const def = TRAITS[type];
   const tip = useTraitTip({ isolateClick: true });
   return (
@@ -31,8 +33,14 @@ export const PlantTraitChip = memo(function PlantTraitChip({
       )}
     >
       <TraitGlyph id={type} className="size-3.5" />
-      {def.short}
-      {tip.anchorRect ? <TraitTooltip def={def} anchorRect={tip.anchorRect} id={tip.tipId} /> : null}
+      {traitShort(type, lang)}
+      {tip.anchorRect ? (
+        <TraitTooltip
+          def={{ ...def, name: traitName(type, lang), description: traitDesc(type, lang) }}
+          anchorRect={tip.anchorRect}
+          id={tip.tipId}
+        />
+      ) : null}
     </span>
   );
 });
@@ -60,6 +68,8 @@ export const PlantCard = memo(function PlantCard({
   /** Появилось в текущем году. */
   fresh?: boolean;
 }) {
+  const lang = useLang();
+  const t = useT();
   const def = PLANTS[plant.kind];
   const art = PLANT_ART[plant.kind];
   // Подсказка растения — то же мини-окно, что у свойств: наведение/фокус.
@@ -67,8 +77,8 @@ export const PlantCard = memo(function PlantCard({
   const tip = useTraitTip({ toggleOnTap: false });
   const tipDef: TipDef = {
     id: plant.kind,
-    name: `${def.name} · растение`,
-    description: def.description,
+    name: `${plantName(plant.kind, lang)} · ${t("card.plant")}`,
+    description: plantDesc(plant.kind, lang),
     image: art,
   };
   const interactive = Boolean(onClick);
@@ -79,7 +89,7 @@ export const PlantCard = memo(function PlantCard({
         tip.anchorRef.current = el;
       }}
       {...tip.triggerProps}
-      aria-label={`${def.name} — растение`}
+      aria-label={`${plantName(plant.kind, lang)} — ${t("card.plant")}`}
       role={interactive ? "button" : undefined}
       onClick={interactive ? onClick : undefined}
       onKeyDown={
@@ -110,12 +120,12 @@ export const PlantCard = memo(function PlantCard({
           </span>
         )}
         <span className="absolute left-1 top-1 rounded-full bg-ink/70 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-parchment">
-          {def.name}
+          {plantName(plant.kind, lang)}
         </span>
         {def.carnivoreEdible ? (
           <span
             className="absolute right-1 top-1 size-4 rounded-full border border-ink/30 bg-food-yellow/80 text-center text-[10px] leading-4"
-            title="Хищники могут брать с этого растения еду"
+            title={t("card.carnivoreEdible")}
           >
             🍎
           </span>
@@ -123,22 +133,22 @@ export const PlantCard = memo(function PlantCard({
         {plant.kind === "carnivorous" && plant.attackedThisYear ? (
           <span
             className="absolute bottom-1 right-1 rounded-full bg-clay/85 px-1.5 text-[9px] font-medium text-parchment"
-            title="Хищное растение уже атаковало в этом году"
+            title={t("card.plantAttackedTitle")}
           >
-            атака была
+            {t("card.plantAttacked")}
           </span>
         ) : null}
       </div>
       <div className="flex items-center gap-1.5 px-2 py-1.5">
-        <span className="flex items-center gap-0.5" title={`Фишек еды: ${plant.food} (максимум ${def.maxFood})`}>
+        <span className="flex items-center gap-0.5" title={t("card.foodTokens", { n: plant.food, m: def.maxFood })}>
           {Array.from({ length: Math.min(plant.food, 5) }).map((_, i) => (
             <FoodCube key={i} tone="green" className="token-pop size-3" />
           ))}
           {plant.food > 5 ? <span className="text-[10px] tabular-nums">+{plant.food - 5}</span> : null}
-          {plant.food === 0 ? <span className="text-[10px] text-ink-soft">без еды</span> : null}
+          {plant.food === 0 ? <span className="text-[10px] text-ink-soft">{t("card.noFood")}</span> : null}
         </span>
         {plant.shelters > 0 ? (
-          <span className="ml-auto flex items-center gap-0.5 rounded-full bg-leaf/25 px-1.5 text-[10px] font-semibold text-leaf" title={`Свободных убежищ: ${plant.shelters}`}>
+          <span className="ml-auto flex items-center gap-0.5 rounded-full bg-leaf/25 px-1.5 text-[10px] font-semibold text-leaf" title={t("card.sheltersFree", { n: plant.shelters })}>
             <span className="size-2.5 rounded-full border border-leaf/60 bg-leaf/40" />
             {plant.shelters}
           </span>
@@ -146,12 +156,14 @@ export const PlantCard = memo(function PlantCard({
       </div>
       {plant.traits.length ? (
         <div className="flex flex-wrap gap-1 px-2 pb-2">
-          {plant.traits.map((t) => (
-            <PlantTraitChip key={t.id} type={t.type} />
+          {plant.traits.map((tr) => (
+            <PlantTraitChip key={tr.id} type={tr.type} />
           ))}
         </div>
       ) : (
-        <div className="pb-2 pl-2 text-[10px] text-ink-soft">{fresh ? "новое растение" : "без свойств"}</div>
+        <div className="pb-2 pl-2 text-[10px] text-ink-soft">
+          {fresh ? t("card.newPlant") : t("card.noTraits")}
+        </div>
       )}
       {tip.anchorRect ? (
         <TraitTooltip def={tipDef} anchorRect={tip.anchorRect} id={tip.tipId} />
@@ -179,6 +191,8 @@ export function PlantStrip({
   /** «Континенты»: показать растения только этого континента. */
   zone?: TerritoryId;
 }) {
+  const t = useT();
+  const lang = useLang();
   const plants = (state.plants ?? []).filter((p) =>
     zone ? (p.zoneId ?? "gondwana") === zone : true,
   );
@@ -186,16 +200,25 @@ export function PlantStrip({
   const interactive = Boolean(onPlantClick);
   return (
     <section
-      aria-label={zone ? `Растения (${zone === "laurasia" ? "Лавразия" : "Гондвана"})` : "Растения"}
+      aria-label={
+        zone
+          ? t("card.plantsStripZone", { zone: territoryName(zone, lang) })
+          : t("card.plantsStrip")
+      }
       className="paper-sheet flex min-h-[110px] flex-wrap items-stretch gap-2 rounded-[var(--radius-lg)] border border-border bg-surface p-3"
     >
       <div className="flex w-full items-center justify-between text-xs text-muted">
         <span className="font-medium">
-          {zone ? (zone === "laurasia" ? "Растения Лавразии" : "Растения Гондваны") : "Растения · общие"}
+          {zone
+            ? t("card.plantsZone", { zone: territoryName(zone, lang) })
+            : t("card.plantsCommon")}
         </span>
         {zone ? null : (
           <span className="tabular-nums">
-            колода {state.plantDeckCount ?? state.plantDeck?.length ?? 0} · погибло {state.plantDiscard ?? 0}
+            {t("card.plantDeck", {
+              n: state.plantDeckCount ?? state.plantDeck?.length ?? 0,
+              m: state.plantDiscard ?? 0,
+            })}
           </span>
         )}
       </div>

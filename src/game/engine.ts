@@ -91,6 +91,17 @@ function ev(state: GameState, event: GameEvent) {
   state.lastEvents.push(event);
 }
 
+/**
+ * Передача хода: фиксируем нового текущего игрока и считаем передачу
+ * (turnSeq). Счётчик различает круги одной фазы одного года — без него UI
+ * не отличал возврат хода к игроку после круга соперников от «того же» хода.
+ * Старый сейв без поля самовосстанавливается (NaN-защита, как у logSeq).
+ */
+function passTurnTo(state: GameState, id: number) {
+  state.currentPlayerId = id;
+  state.turnSeq = (Number.isFinite(state.turnSeq) ? state.turnSeq : 0) + 1;
+}
+
 /** Id всех сущностей выдаёт состояние — снапшоты не конфликтуют между партиями. */
 function nid(state: GameState, prefix: string): string {
   state.idSeq += 1;
@@ -158,6 +169,7 @@ export function createGame(
     deckEmptyAfterDraw: false,
     log: [],
     logSeq: 0,
+    turnSeq: 0,
     pendingAttack: null,
     playSeq: 0,
     humanId: 0,
@@ -212,7 +224,7 @@ export function createGame(
     }
   }
   const first = Math.floor(nextRandom(state) * playerCount);
-  state.currentPlayerId = first;
+  passTurnTo(state, first);
   state.firstPlayerId = first;
   log(state, `Год 1. Первым ходит ${state.players[first]!.name}.`, "log.firstTurn", { name: state.players[first]!.name }, "good");
   startMutationsDevTurn(state, first);
@@ -1645,6 +1657,9 @@ export function applyAction(state: GameState, action: GameAction): GameState {
       if (action.toZoneId) moveAnimalToZoneHuman(next, action.animalId, action.toZoneId);
       else reorderAnimal(next, action.animalId, action.beforeId);
       break;
+    case "renameAnimal":
+      renameOwnAnimal(next, action.animalId, action.name);
+      break;
     case "chooseDefense":
       applyDefense(next, action);
       break;
@@ -2098,7 +2113,7 @@ function advanceDev(state: GameState) {
   let id = nextPlayerId(state);
   for (let i = 0; i < state.players.length; i++) {
     if (!player(state, id).passedDev) {
-      state.currentPlayerId = id;
+      passTurnTo(state, id);
       startMutationsDevTurn(state, id);
       return;
     }
@@ -2172,7 +2187,7 @@ function revealAndStartFood(state: GameState) {
 /** Общий старт фазы питания: круг по игрокам от первого игрока. */
 function enterFeeding(state: GameState) {
   state.phase = "feeding";
-  state.currentPlayerId = state.firstPlayerId;
+  passTurnTo(state, state.firstPlayerId);
   for (const p of state.players) p.passedFeed = false;
   state.turnTerritory = undefined;
   state.madTurn = undefined;
@@ -2256,7 +2271,7 @@ function startFoodRoll(state: GameState) {
 function beginFeeding(state: GameState) {
   if (state.phase !== "foodBank" || !state.foodRoll) return;
   state.phase = "feeding";
-  state.currentPlayerId = state.firstPlayerId;
+  passTurnTo(state, state.firstPlayerId);
   for (const p of state.players) p.passedFeed = false;
   if ((state.modules.plants || state.modules.fungi) && state.modules.continents) {
     log(
@@ -2382,7 +2397,7 @@ function feedTurn(state: GameState, startId: number) {
   for (let i = 0; i < state.players.length; i++) {
     const p = player(state, id);
     if (!p.passedFeed && hasFreshAction(state, id)) {
-      state.currentPlayerId = id;
+      passTurnTo(state, id);
       state.turnUse = freshTurnUse();
       state.turnTerritory = undefined;
       startMarkTurn(state, id);
@@ -3086,6 +3101,25 @@ function moveAnimalToZoneHuman(state: GameState, animalId: string, zone: Territo
   return true;
 }
 
+/**
+ * Переименование своего животного (косметика, как перестановка): имя видят
+ * все игроки, стабильный номер «№N» не меняется. Пустая строка или одни
+ * пробелы — сброс на дефолтную подпись. Состояние игры не меняет: ни записей
+ * в журнал, ни событий — только подпись на карточке.
+ */
+function renameOwnAnimal(state: GameState, animalId: string, name: string) {
+  if (state.phase !== "development" && state.phase !== "feeding") return;
+  const owner = ownerOf(state, animalId);
+  if (owner.id !== state.humanId) return;
+  const animal = owner.animals.find((a) => a.id === animalId);
+  if (!animal) return;
+  // Триммим и режем до 24: сервер валидирует длину и отклоняет длинные имена,
+  // клиент режет ввод в поле — движок страховается от прямых вызовов.
+  const clean = name.trim().slice(0, 24);
+  if (clean) animal.name = clean;
+  else delete animal.name;
+}
+
 /** Пас: игрок пропускается, пока не сделает реальное действие (или до конца фазы). */
 function skipFeed(state: GameState) {
   const p = player(state, state.currentPlayerId);
@@ -3754,7 +3788,7 @@ function drawCards(state: GameState) {
   }
   for (const p of state.players) p.passedDev = false;
   state.firstPlayerId = nextPlayerId(state, state.firstPlayerId);
-  state.currentPlayerId = state.firstPlayerId;
+  passTurnTo(state, state.firstPlayerId);
   state.year += 1;
   state.phase = "development";
   state.devStartPlaySeq = state.playSeq;

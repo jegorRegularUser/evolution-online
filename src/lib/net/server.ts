@@ -89,6 +89,7 @@ export type NetErrorCode =
   | "seat-free"
   | "kick-bot"
   | "bad-color"
+  | "color-taken"
   | "color-seat"
   | "bot-color"
   | "host-human"
@@ -102,6 +103,10 @@ export type NetErrorCode =
   | "empty-name"
   | "seat-missing"
   | "retry"
+  | "rename-phase"
+  | "rename-turn"
+  | "rename-owner"
+  | "rename-length"
   | "generic";
 
 export class NetError extends Error {
@@ -254,9 +259,38 @@ function makeToken(): string {
   return crypto.randomUUID().replace(/-/g, "");
 }
 
-/** Случайный цвет места из палитры (см. PLAYER_COLORS в shared.ts). */
-function pickColor(): string {
-  return PLAYER_COLORS[randomInt(PLAYER_COLORS.length)]!;
+/**
+ * Цвета, занятые местами этого стола (в нижнем регистре): null у старых строк
+ * даёт детерминированный фолбэк colorForSeat — он тоже считается занятым,
+ * иначе визуально совпал бы с цветом нового игрока.
+ */
+function takenColors(seats: SeatRow[]): Set<string> {
+  return new Set(seats.map((s) => (s.color ?? colorForSeat(s.seat)).toLowerCase()));
+}
+
+/**
+ * Случайный СВОБОДНЫЙ цвет места из палитры (см. PLAYER_COLORS в shared.ts):
+ * цвет эксклюзивен в пределах стола. Если заняты все 16 (за столом максимум
+ * 8 мест — не случится, но код не должен падать) — фолбэк на любой.
+ */
+function pickColor(taken: Iterable<string>): string {
+  const used = new Set([...taken].map((c) => c.toLowerCase()));
+  const free = PLAYER_COLORS.filter((c) => !used.has(c.toLowerCase()));
+  const pool = free.length ? free : ([...PLAYER_COLORS] as string[]);
+  return pool[randomInt(pool.length)]!;
+}
+
+/**
+ * Детерминированный СВОБОДНЫЙ цвет для бота: первый незанятый из палитры,
+ * начиная с индекса места. После перезапуска сервера и пересборки стола боты
+ * выглядят одинаково, но не совпадают с цветами, выбранными людьми.
+ */
+function botColor(seatNo: number, taken: Set<string>): string {
+  for (let i = 0; i < PLAYER_COLORS.length; i++) {
+    const c = PLAYER_COLORS[(seatNo + i) % PLAYER_COLORS.length]!;
+    if (!taken.has(c.toLowerCase())) return c;
+  }
+  return colorForSeat(seatNo); // все 16 заняты (не случится за 8-местным столом)
 }
 
 /** Копия массива в случайном порядке (Фишер—Йетс): выбор жертв при M14. */
@@ -1204,16 +1238,19 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
     // занятое место с on conflict do nothing молча теряла бы бота.
     const seats = await readSeats(sql, code);
     const target = freeSeatList(capacity, seats).slice(-count);
+    // Цвет бота детерминирован по месту, но не должен совпадать с цветами
+    // людей и уже вставленных ботов: набор накапливаем по ходу вставки.
+    const taken = takenColors(seats);
     for (let i = 0; i < target.length; i++) {
       // Имена ботов — как у учёных (AI_NAMES), а не «Бот N»: номер добавит
       // uniqueName, только если имя уже занято человеком.
       const name = await uniqueName(code, AI_NAMES[i % AI_NAMES.length]!);
+      const color = botColor(target[i]!, taken);
+      taken.add(color.toLowerCase());
       await sql.query(
-        // Цвет бота детерминирован по месту: после перезапуска сервера и
-        // пересборки стола боты выглядят одинаково.
         `insert into evo_seats (room_code, seat, name, token, is_ai, color)
          values ($1, $2, $3, '', true, $4) on conflict do nothing`,
-        [code, target[i], name, colorForSeat(target[i]!)],
+        [code, target[i], name, color],
       );
     }
   }
@@ -1405,10 +1442,11 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
           );
           try {
             await sql.query(
-              // Цвет хоста случаен: палитра общая, повтор с другим местом не страшен.
+              // Цвет хоста: первый случайный из палитры — больше мест нет,
+              // коллизий не с кем (эксклюзивность проверяет pickColor).
               `insert into evo_seats (room_code, seat, name, token, color)
                values ($1, 0, $2, $3, $4)`,
-              [code, await uniqueName(code, input.name), token, pickColor()],
+              [code, await uniqueName(code, input.name), token, pickColor([])],
             );
             if (input.botSeats > 0) await insertBots(code, input.capacity, input.botSeats);
           } catch (e) {
@@ -1443,7 +1481,7 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
              values ($1, $2, $3, $4, $5)
              on conflict (room_code, seat) do nothing
              returning seat`,
-            [code, free, await uniqueName(code, name), token, pickColor()],
+            [code, free, await uniqueName(code, name), token, pickColor(takenColors(seats))],
           );
           if (inserted.length === 1) return { seat: free, token, waiting: false };
           // Место заняли между чтением и вставкой — перечитываем.
@@ -1533,11 +1571,14 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         }
         await casUpdateStrict(sql, code, room.version, { state });
         await sql.query(
-          // Замена ботом: имя из списка учёных, цвет — детерминированный по месту.
+          // Замена ботом: имя из списка учёных, цвет — прежний цвет места
+          // остаётся его же (эксклюзивность не нарушается), меняется только
+          // владелец. До волны 10 цвет места не был уникальным, поэтому на
+          // всякий случай берём свободный, если прежний кому-то совпал.
           `update evo_seats set is_ai = true, name = $3, token = '', resigned = false,
                   color = $4, last_seen_at = now()
             where room_code = $1 and seat = $2`,
-          [code, seatNo, botName, colorForSeat(seatNo)],
+          [code, seatNo, botName, botColor(seatNo, takenColors(seats))],
         );
       } else {
         throw new NetError("Партия уже закончена", "game-finished");
@@ -1690,6 +1731,21 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       }
       if (me.is_ai) throw new NetError("Ботам цвет назначает стол", "bot-color");
       if (room.status !== "lobby") throw new NetError("Цвет меняют до начала партии", "lobby-only");
+      // Свой текущий цвет — no-op/успех, без запроса к БД.
+      const seat = await sql.query<{ color: string | null }>(
+        `select color from evo_seats where room_code = $1 and seat = $2`,
+        [code, me.seat],
+      );
+      const mine = seat[0]?.color ?? colorForSeat(me.seat);
+      if (mine.toLowerCase() === color.toLowerCase()) return { color: mine };
+      // Эксклюзивность: цвет не должен принадлежать другому месту этого стола.
+      const others = await readSeats(sql, code);
+      const busy = others.find(
+        (s) => s.seat !== me.seat && (s.color ?? colorForSeat(s.seat)).toLowerCase() === color.toLowerCase(),
+      );
+      if (busy) {
+        throw new NetError("Этот цвет уже занят — выберите другой", "color-taken");
+      }
       await sql.query(`update evo_seats set color = $3 where room_code = $1 and seat = $2`, [
         code,
         me.seat,
@@ -1796,7 +1852,7 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
            values ($1, $2, $3, $4, $5)
            on conflict (room_code, seat) do nothing
            returning seat`,
-          [code, free, name, seatToken, pickColor()],
+          [code, free, name, seatToken, pickColor(takenColors(seats))],
         );
         if (inserted.length === 1) {
           await sql.query(`delete from evo_waiters where room_code = $1 and token = $2`, [
@@ -2102,11 +2158,22 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         (st.phase === "development" || st.phase === "feeding") &&
         st.currentPlayerId === me.seat &&
         (st.players[me.seat]?.animals ?? []).some((a) => a.id === sent.animalId);
+      // Кличка своего животного — та же косметика мимо легальных списков:
+      // фаза development/feeding, ход свой, животное своё, имя 1–24 символа
+      // после трима (пустое — допустимый сброс на дефолт). Движок триммит и
+      // режет длину повторно (renameOwnAnimal по humanId).
+      const isRename =
+        sent.type === "renameAnimal" &&
+        typeof sent.name === "string" &&
+        sent.name.trim().length <= 24 &&
+        (st.phase === "development" || st.phase === "feeding") &&
+        st.currentPlayerId === me.seat &&
+        (st.players[me.seat]?.animals ?? []).some((a) => a.id === sent.animalId);
       // Каноническое действие: применяем ровно тот объект из легального
       // списка, который совпал с присланным (S4). Присланные поля не участвуют —
       // подменённые amount/moves/plantId/floraId/zoneId/intent не проходят.
       let action: GameAction = sent;
-      if (!isReorder) {
+      if (!isReorder && !isRename) {
         const allowed =
           st.pendingAttack && st.pendingAttack.waitingFor === me.seat
             ? legalDefenseActions(st, me.seat)
@@ -2117,8 +2184,8 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
                 : [];
         const canonical = allowed.find((a) => sameAction(a, sent));
         if (!canonical) {
-          // Перестановка — единственное структурное действие: у неё нет
-          // легального списка, поэтому причина отказа объясняется по шагам.
+          // Перестановка и переименование — структурные косметические
+          // действия без легального списка: причина отказа объясняется по шагам.
           if (sent.type === "reorderAnimal") {
             if (st.phase !== "development" && st.phase !== "feeding") {
               throw new NetError("Сейчас нельзя переставлять животных", "reorder-phase");
@@ -2133,15 +2200,33 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
               throw new NetError("Переставлять можно только своих животных", "reorder-owner");
             }
           }
+          if (sent.type === "renameAnimal") {
+            if (st.phase !== "development" && st.phase !== "feeding") {
+              throw new NetError("Сейчас нельзя переименовывать животных", "rename-phase");
+            }
+            if (st.currentPlayerId !== me.seat) {
+              throw new NetError(
+                "Переименовывать животных можно только в свой ход (сейчас ход другого игрока)",
+                "rename-turn",
+              );
+            }
+            if (!(st.players[me.seat]?.animals ?? []).some((a) => a.id === sent.animalId)) {
+              throw new NetError("Переименовывать можно только своих животных", "rename-owner");
+            }
+            if (typeof sent.name !== "string" || sent.name.trim().length > 24) {
+              throw new NetError("Имя животного — до 24 символов", "rename-length");
+            }
+          }
           throw new NetError("Такой ход сейчас недопустим", "move-illegal");
         }
         action = canonical;
       }
       // Каноническое состояние живёт с humanId=0, а движок сверяет с humanId
-      // владельца животного: перестановке на время применения подставляем место
-      // ходящего и возвращаем канонический humanId обратно в запись.
-      const next = applyAction(isReorder ? { ...st, humanId: me.seat } : st, action);
-      if (isReorder && next.humanId !== st.humanId) next.humanId = st.humanId;
+      // владельца животного: косметике (перестановка/кличка) на время применения
+      // подставляем место ходящего и возвращаем канонический humanId обратно.
+      const cosmetic = isReorder || isRename;
+      const next = applyAction(cosmetic ? { ...st, humanId: me.seat } : st, action);
+      if (cosmetic && next.humanId !== st.humanId) next.humanId = st.humanId;
       const finished = next.phase === "gameOver";
       const needsAuto = !finished && nextAutoStep(next) !== null;
       // Ход человека завершил фазу (например, «Закончить питание»): карточки
