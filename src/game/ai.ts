@@ -48,6 +48,31 @@ export function chooseAIAction(state: GameState): GameAction | null {
   return null;
 }
 
+/**
+ * Сколько еды достанется одному игроку в этом году (ожидание).
+ * Точный бросок будет позже — в фазе кормовой базы, — поэтому считаем по числу
+ * игроков и модулям. Без этой оценки бот разводил животных больше, чем стол
+ * прокормит, и вымирал в ноль: в партиях на 2–3 игроков все смерти приходились
+ * на полностью опустошённую базу.
+ */
+function expectedBank(state: GameState): number {
+  const n = state.players.length;
+  // «Континенты»: сумма трёх территорий (2 игрока — 8/7/5, 3 — 11/10/7, 4 — 14/13/9).
+  if (state.modules.continents) return n === 2 ? 20 : n === 3 ? 28 : 36;
+  // «Растения»/«Трава и грибы»: часть еды лежит на картах флоры, база меньше.
+  if (state.modules.plants || state.modules.fungi) return 6 + n;
+  if (n === 2) return 3.5 + 2; // 1 кубик + 2
+  if (n === 3) return 7; // 2 кубика
+  return 7 + 2; // 4+ игроков — 2 кубика + 2
+}
+
+/** Свободная доля стола: сколько еды остаётся «на меня» сверх текущей популяции. */
+function foodSurplus(state: GameState, p: GameState["players"][number]): number {
+  const share = expectedBank(state) / Math.max(1, state.players.length);
+  const need = p.animals.reduce((sum, a) => sum + speciesNeed(a), 0);
+  return share - need;
+}
+
 function pickDefense(state: GameState, acts: GameAction[]): GameAction {
   const running = acts.find((a) => a.type === "chooseDefense" && a.kind === "running");
   if (running) return running;
@@ -81,6 +106,9 @@ function pickDev(state: GameState, acts: GameAction[]): GameAction {
   const p = player(state, state.currentPlayerId);
   // «Случайные мутации»: карты в слепой колоде, а не в руке.
   const stock = state.modules.randomMutations ? (p.blindDeck?.length ?? 0) : p.hand.length;
+  // Доля стола: если популяция уже съедает свою долю еды, лишние животные
+  // обречены на голод — и бот терял всё поголовье подряд.
+  const surplus = foodSurplus(state, p);
   let best = acts[0]!;
   let bestScore = -Infinity;
   for (const a of acts) {
@@ -94,6 +122,9 @@ function pickDev(state: GameState, acts: GameAction[]): GameAction {
       s = 6 - p.animals.length * 1.4;
       if (p.animals.length === 0) s = 14;
       if (state.lastYear) s = 8;
+      // Третье и далее животное при дефиците еды — штраф (в последний год
+      // очки важнее риска, там штраф не применяем).
+      if (surplus <= 0 && !state.lastYear) s -= 5;
       // «Континенты»: бот расселяет по континентам — предпочитает менее населённый,
       // а если в руке есть водоплавающая грань, животное всё равно попадёт в океан.
       if (a.zoneId) {
@@ -154,6 +185,12 @@ function pickDev(state: GameState, acts: GameAction[]): GameAction {
         }
         if (trait === "carnivore" && animal.ownerId === p.id) s += 3;
         if (trait === "fatTissue" && animal.ownerId === p.id) s += 2;
+        // Голодный стол: свойства-кормильцы дают еду сверх базы — они важнее
+        // прочих, когда своей доли еды уже не хватает.
+        if (animal.ownerId === p.id && surplus <= 0) {
+          if (trait === "fatTissue" || trait === "symbiosis" || trait === "cooperation") s += 2;
+          if (trait === "hibernation") s += 1;
+        }
         // Хищника выгоднее класть туда, где больше чужих голодных жертв.
         if (trait === "carnivore" && animal.ownerId === p.id && a.face !== undefined) {
           const zone = animal.zoneId ?? "laurasia";

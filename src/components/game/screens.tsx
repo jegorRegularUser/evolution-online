@@ -1,20 +1,49 @@
-import { BarChart3, BookOpen, GraduationCap, Lock, Play, RotateCcw, Users } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  BarChart3,
+  BookOpen,
+  ChevronDown,
+  GraduationCap,
+  Lightbulb,
+  Lock,
+  RotateCcw,
+} from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
-import { NetMenuPanel } from "@/components/game/net-screens";
+import { NetMenuScreen } from "@/components/game/net-screens";
 import { FLORA, MARKS } from "@/game/flora";
 import { PLANTS } from "@/game/plants";
-import { CONTINENTS_TRAIT_IDS, FUNGI_TRAIT_IDS, MUTATIONS_TRAIT_IDS, PLANTS_TRAIT_IDS, TRAITS, TRAIT_ORDER } from "@/game/traits";
+import { CONTINENTS_TRAIT_IDS, FUNGI_TRAIT_IDS, MUTATIONS_TRAIT_IDS, PLANTS_TRAIT_IDS, TRAIT_ORDER } from "@/game/traits";
 import { TERRITORIES } from "@/game/types";
-import type { Difficulty, FloraKind, MarkKind, PlantKind, ScoreBreakdown, TerritoryId, TraitId } from "@/game/types";
+import type { FloraKind, MarkKind, PlantKind, ScoreBreakdown, TerritoryId, TraitId } from "@/game/types";
 import { sfx } from "@/lib/sfx";
 import { ACHIEVEMENTS, readStats } from "@/lib/stats";
+import {
+  achievementDesc,
+  achievementName,
+  floraDesc,
+  floraName,
+  markDesc,
+  markName,
+  plantDesc,
+  plantName,
+  placeLabel,
+  pointsWord,
+  playersWord,
+  territoryName,
+  traitDesc,
+  traitName,
+  translate,
+  useLang,
+  useT,
+  type Lang,
+  type TKey,
+} from "@/lib/i18n";
 import {
   BG,
   DARK_ART,
   FLORA_ART,
-  LOGO,
   MARK_ART,
   PLANT_ART,
   SPECIES_EXTINCT,
@@ -26,37 +55,45 @@ import { cn } from "@/lib/utils";
 import { Dice3D } from "./dice-3d";
 import { FloraGlyph, FoodCube, TraitGlyph } from "./icons";
 import { SoundToggle } from "./sound-toggle";
+import { TopBar } from "./top-bar";
 import { TutorialScreen } from "./tutorial";
 import { useGameStore } from "@/store/game-store";
 
-const SPEEDS: Array<["slow" | "normal" | "fast", string, string]> = [
-  ["slow", "Медленно", "Боты думают дольше, фазы показываются с паузами"],
-  ["normal", "Обычно", "Комфортный настольный темп"],
-  ["fast", "Быстро", "Для тех, кто ждёт только своего хода"],
-];
+/** Видимый фокус для кастомных кнопок-переключателей вне Button из UI-кита. */
+const FOCUS_VISIBLE =
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 
-/** Дополнения в разработке — официальный пересказ правил следующим обновлением. */
-const MODULES: Array<[string, string]> = [];
-
-export function MenuScreen({
-  onStart,
-  onRules,
-}: {
-  onStart: (players: number, difficulty: Difficulty) => void;
-  onRules: () => void;
-}) {
-  const [players, setPlayers] = useState(2);
-  const [difficulty, setDifficulty] = useState<Difficulty>("normal");
+/**
+ * Главное меню: три колонки, как в столе ожидания. Слева — имя и вход или
+ * создание стола, в центре — открытые столы, справа — закрытые (пароль
+ * спрашивается по клику на строку). Все три колонки одной высоты, списки
+ * скроллятся внутри себя и не растят страницу; на телефоне работают две
+ * вкладки — «Столы» и «Создать».
+ */
+export function MenuScreen({ onRules }: { onRules: () => void }) {
+  const tt = useT();
   const [statsOpen, setStatsOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
-  const speed = useGameStore((s) => s.speed);
-  const setSpeed = useGameStore((s) => s.setSpeed);
-  const continents = useGameStore((s) => Boolean(s.modules.continents));
-  const plants = useGameStore((s) => Boolean(s.modules.plants));
-  const fungi = useGameStore((s) => Boolean(s.modules.fungi));
-  const mutations = useGameStore((s) => Boolean(s.modules.randomMutations));
-  const modules = useGameStore((s) => s.modules);
-  const setModules = useGameStore((s) => s.setModules);
+  const netFatal = useGameStore((s) => s.netFatal);
+  const clearNetFatal = useGameStore((s) => s.clearNetFatal);
+
+  // Обучение и статистика — модалки меню: открытие и закрытие звучат тихим свушем.
+  const openTutorial = () => {
+    sfx.play("modal");
+    setTutorialOpen(true);
+  };
+  const closeTutorial = () => {
+    sfx.play("modal");
+    setTutorialOpen(false);
+  };
+  const openStats = () => {
+    sfx.play("modal");
+    setStatsOpen(true);
+  };
+  const closeStats = () => {
+    sfx.play("modal");
+    setStatsOpen(false);
+  };
 
   return (
     <>
@@ -69,264 +106,75 @@ export function MenuScreen({
       </div>
       <div className="relative flex min-h-dvh flex-col">
         {/* Полоса навигации — как шапка игрового стола: лого и название
-            слева, справа правила, статистика и звук. Партийные настройки
-            остаются в центральном блоке ниже. */}
-        <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-border bg-bg/90 px-3 py-2.5 backdrop-blur-sm sm:px-5">
-          <img src={LOGO} alt="" className="size-8 shrink-0 rounded-full border border-border object-cover" />
-          <div className="min-w-0 flex-1">
-            <div className="font-display text-lg leading-none">Эволюция</div>
-            <div className="mt-1 truncate text-xs text-muted">Правильные игры · Кнорре</div>
-          </div>
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" onClick={() => setTutorialOpen(true)}>
-              <GraduationCap className="size-4" />
-              <span className="hidden sm:inline">Обучение</span>
-            </Button>
-            <Button variant="ghost" size="sm" onClick={onRules}>
-              <BookOpen className="size-4" />
-              <span className="hidden sm:inline">Правила</span>
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setStatsOpen(true)}>
-              <BarChart3 className="size-4" />
-              <span className="hidden sm:inline">Статистика</span>
-            </Button>
-            <SoundToggle />
-          </div>
-        </header>
+            слева, справа правила, обучение, статистика и звук. */}
+        <TopBar subtitle={tt("app.brand")}>
+          {/* На узком экране подписи скрыты — кнопки остаются иконочными,
+              поэтому у каждой есть постоянное доступное имя. max-xl:h-11 —
+              тап-таргет 44px на телефоне и планшете. */}
+          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.tutorial")} title={tt("topbar.tutorial")} onClick={openTutorial}>
+            <GraduationCap className="size-4" />
+            <span className="hidden sm:inline">{tt("topbar.tutorial")}</span>
+          </Button>
+          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.rules")} title={tt("topbar.rules")} onClick={onRules}>
+            <BookOpen className="size-4" />
+            <span className="hidden sm:inline">{tt("topbar.rules")}</span>
+          </Button>
+          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.stats")} title={tt("topbar.stats")} onClick={openStats}>
+            <BarChart3 className="size-4" />
+            <span className="hidden sm:inline">{tt("topbar.stats")}</span>
+          </Button>
+          <SoundToggle />
+        </TopBar>
 
-        <div className="relative mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-5 py-10">
-          <h1 className="relative text-center text-5xl text-fg sm:text-6xl">Эволюция</h1>
-          <p className="relative mx-auto mt-3 max-w-md text-center text-muted">
-            Настольная игра о происхождении видов. Комбинируйте свойства, кормите популяцию и переживайте голодные годы.
-          </p>
+        {/* Столы — единственный путь в партию: соло-режим убран, игра с ботами
+            идёт через «Создать стол» → боты в лобби → «Начать год». */}
+        <div className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col px-4 py-4 lg:h-[calc(100dvh-3.5rem)] lg:flex-[1_1_0px] lg:overflow-hidden">
+          <header className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h1 className="font-display text-2xl tracking-[0.08em] text-fg sm:text-3xl">{tt("app.name")}</h1>
+            <p className="text-xs text-muted sm:text-sm">{tt("menu.subtitle")}</p>
+          </header>
 
-          <div className="relative mt-10 space-y-6 rounded-[var(--radius-xl)] border border-border bg-surface p-5 sm:p-7">
-        <NetMenuPanel />
-
-        <fieldset>
-          <legend className="mb-3 flex items-center gap-2 text-sm font-medium text-muted">
-            <Users className="size-4" />
-            Игроков за столом
-          </legend>
-          <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
-            {[2, 3, 4, 5, 6, 7, 8].map((n) => (
-              <button
-                key={n}
-                type="button"
-                onClick={() => setPlayers(n)}
-                className={cn(
-                  "h-12 rounded-[var(--radius-md)] border text-sm font-medium",
-                  players === n
-                    ? "border-accent bg-accent text-accent-fg"
-                    : "border-border bg-bg text-fg hover:bg-surface-2",
-                )}
-              >
-                {n}
-              </button>
-            ))}
-          </div>
-          <p className="mt-2 text-xs text-subtle">
-            Вы против {players - 1 === 1 ? "одного бота" : `${players - 1} ботов`}
-          </p>
-        </fieldset>
-
-        <fieldset>
-          <legend className="mb-3 text-sm font-medium text-muted">Сложность</legend>
-          <div className="grid grid-cols-3 gap-2">
-            {(
-              [
-                ["easy", "Проще"],
-                ["normal", "Обычная"],
-                ["hard", "Жёстче"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setDifficulty(id)}
-                className={cn(
-                  "h-12 rounded-[var(--radius-md)] border text-sm font-medium",
-                  difficulty === id
-                    ? "border-accent bg-accent text-accent-fg"
-                    : "border-border bg-bg text-fg hover:bg-surface-2",
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </fieldset>
-
-        <fieldset>
-          <legend className="mb-3 text-sm font-medium text-muted">Темп игры</legend>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {SPEEDS.map(([id, label, hint]) => (
-              <button
-                key={id}
-                type="button"
-                title={hint}
-                onClick={() => setSpeed(id)}
-                className={cn(
-                  "h-11 rounded-[var(--radius-md)] border text-sm font-medium",
-                  speed === id
-                    ? "border-accent bg-accent text-accent-fg"
-                    : "border-border bg-bg text-fg hover:bg-surface-2",
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </fieldset>
-
-        <fieldset>
-          <legend className="mb-3 text-sm font-medium text-muted">Дополнения</legend>
-          <div className="grid gap-2">
-            <button
-              type="button"
-              onClick={() => setModules({ ...modules, continents: !continents })}
-              aria-pressed={continents}
-              title="Континенты: Лавразия и Гондвана с отдельными кормовыми базами, Океан для водоплавающих, миграция, прилипала, стадность, стрекательные клетки, эдификатор, регенерация, рекомбинация, неоплазия"
-              className={cn(
-                "flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left",
-                continents ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2",
-              )}
+          {netFatal ? (
+            <div
+              role="alert"
+              className="mb-3 flex items-start justify-between gap-3 rounded-[var(--radius-lg)] border border-danger/50 bg-danger/10 px-4 py-3"
             >
-              <span>
-                <span className="block text-sm font-medium text-fg">Континенты</span>
-                <span className="mt-0.5 block text-xs text-muted">
-                  две кормовые базы и океан · миграция · новые свойства
-                </span>
-              </span>
-              <span
-                className={cn(
-                  "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
-                  continents ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
-                )}
-              >
-                {continents ? "вкл" : "выкл"}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setModules({ ...modules, plants: !plants })}
-              aria-pressed={plants}
-              title="Растения: еда этого года — на общих растениях, кубик не нужен; фаза роста, убежища, хищные растения, микориза и паразиты. Совместимо с Континентами."
-              className={cn(
-                "flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left",
-                plants ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2",
-              )}
-            >
-              <span>
-                <span className="block text-sm font-medium text-fg">Растения</span>
-                <span className="mt-0.5 block text-xs text-muted">
-                  еда на общих растениях · убежища · фаза роста · хищные растения
-                </span>
-              </span>
-              <span
-                className={cn(
-                  "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
-                  plants ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
-                )}
-              >
-                {plants ? "вкл" : "выкл"}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setModules({ ...modules, fungi: !fungi })}
-              aria-pressed={fungi}
-              title="Трава и грибы: еда этого года — на общих картах трав и грибов; метки последствий (Яд, Сон, Бешенство…), новые свойства «Прозрачное» и «Насекомоядное». Совместимо с Континентами и Растениями."
-              className={cn(
-                "flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left",
-                fungi ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2",
-              )}
-            >
-              <span>
-                <span className="block text-sm font-medium text-fg">Трава и грибы</span>
-                <span className="mt-0.5 block text-xs text-muted">
-                  еда на травах и грибах · метки последствий · флора играет на победу
-                </span>
-              </span>
-              <span
-                className={cn(
-                  "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
-                  fungi ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
-                )}
-              >
-                {fungi ? "вкл" : "выкл"}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setModules({ ...modules, randomMutations: !mutations })}
-              aria-pressed={mutations}
-              title="Случайные мутации: вместо руки — личная слепая колода; объявите розыгрыш и вскройте карту. Новые свойства, в том числе вредные мутации. Совместимо со всеми дополнениями."
-              className={cn(
-                "flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left",
-                mutations ? "border-accent bg-accent/15" : "border-border bg-bg hover:bg-surface-2",
-              )}
-            >
-              <span>
-                <span className="block text-sm font-medium text-fg">Случайные мутации</span>
-                <span className="mt-0.5 block text-xs text-muted">
-                  личная слепая колода · численность видов · вредные мутации
-                </span>
-              </span>
-              <span
-                className={cn(
-                  "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
-                  mutations ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
-                )}
-              >
-                {mutations ? "вкл" : "выкл"}
-              </span>
-            </button>
-            <ul className="grid gap-2 sm:grid-cols-2">
-              {MODULES.map(([name, hint]) => (
-                <li
-                  key={name}
-                  title={`${name}: ${hint}. Готовится — официальный пересказ правил следующим обновлением.`}
-                  className="flex cursor-not-allowed items-center justify-between rounded-[var(--radius-md)] border border-dashed border-border bg-bg px-3 py-2.5 opacity-60"
-                >
-                  <span className="text-sm text-fg">{name}</span>
-                  <span className="rounded-full bg-ink/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">скоро</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </fieldset>
+              <p className="flex items-start gap-2 text-sm text-clay">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                {/* Строка приходит из стора/сети — её локализует следующая волна. */}
+                <span>{netFatal}</span>
+              </p>
+              <Button variant="ghost" size="sm" className="shrink-0" onClick={clearNetFatal}>
+                {tt("common.gotIt")}
+              </Button>
+            </div>
+          ) : null}
 
-        <Button className="flex-1" size="lg" onClick={() => onStart(players, difficulty)}>
-          <Play className="size-4" />
-          Начать год
-        </Button>
-      </div>
+          {/* Одна высота на все три колонки: секции списков скроллятся внутри
+              себя (lg:overflow-y-auto), страница не растёт. На телефоне трек
+              задан как minmax(0,1fr): auto-трек растягивался по max-content
+              содержимого и давал горизонтальный скролл на 390px. */}
+          <div className="grid min-h-0 w-full flex-1 grid-cols-[minmax(0,1fr)] items-start gap-4 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)_minmax(0,360px)]">
+            <NetMenuScreen />
+          </div>
         </div>
       </div>
-      {tutorialOpen ? (
-        <TutorialScreen
-          onClose={() => setTutorialOpen(false)}
-          onStart={() => {
-            setTutorialOpen(false);
-            onStart(players, difficulty);
-          }}
-        />
-      ) : null}
-      {statsOpen ? <StatsScreen onClose={() => setStatsOpen(false)} /> : null}
+      {tutorialOpen ? <TutorialScreen onClose={closeTutorial} /> : null}
+      {statsOpen ? <StatsScreen onClose={closeStats} /> : null}
     </>
   );
 }
 
 type RulesTab = "base" | "continents" | "plants" | "fungi" | "mutations";
 
-const RULES_TABS: Array<{ id: RulesTab; label: string }> = [
-  { id: "base", label: "Базовая игра" },
-  { id: "continents", label: "Континенты" },
-  { id: "plants", label: "Растения" },
-  { id: "fungi", label: "Трава и грибы" },
-  { id: "mutations", label: "Мутации" },
-];
+/** Подпись вкладки правил — ключ словаря. */
+const RULES_TAB_KEYS: Record<RulesTab, TKey> = {
+  base: "rules.tab.base",
+  continents: "rules.tab.continents",
+  plants: "rules.tab.plants",
+  fungi: "rules.tab.fungi",
+  mutations: "rules.tab.mutations",
+};
 
 const TRAITS_BY_TAB: Record<RulesTab, TraitId[]> = {
   base: TRAIT_ORDER.filter(
@@ -342,31 +190,32 @@ const TRAITS_BY_TAB: Record<RulesTab, TraitId[]> = {
   mutations: TRAIT_ORDER.filter((id) => MUTATIONS_TRAIT_IDS.has(id)),
 };
 
+/** Список свойств в правилах: имена и описания — через словарь терминов. */
 function TraitList({ ids }: { ids: TraitId[] }) {
+  const lang = useLang();
   return (
     <ul className="grid gap-2 sm:grid-cols-2">
       {ids.map((id) => {
-        const t = TRAITS[id];
         return (
-          <li key={t.id} className="flex gap-3 rounded-[var(--radius-sm)] border border-border bg-bg p-3">
-            {TRAIT_ART[t.id] ? (
+          <li key={id} className="flex gap-3 rounded-[var(--radius-sm)] border border-border bg-bg p-3">
+            {TRAIT_ART[id] ? (
               <img
-                src={TRAIT_ART[t.id]}
+                src={TRAIT_ART[id]}
                 alt=""
                 loading="lazy"
                 className={cn(
                   "h-[68px] w-12 shrink-0 rounded-[var(--radius-xs)] object-cover object-top",
-                  DARK_ART.has(t.id) && "bg-ink object-contain p-0.5",
+                  DARK_ART.has(id) && "bg-ink object-contain p-0.5",
                 )}
               />
             ) : (
               <span className="flex h-[68px] w-12 shrink-0 items-center justify-center rounded-[var(--radius-xs)] border border-border bg-surface">
-                <TraitGlyph id={t.id} className="size-7 text-muted" />
+                <TraitGlyph id={id} className="size-7 text-muted" />
               </span>
             )}
             <div>
-              <div className="font-medium text-fg">{t.name}</div>
-              <div className="mt-1 text-xs leading-snug">{t.description}</div>
+              <div className="font-medium text-fg">{traitName(id, lang)}</div>
+              <div className="mt-1 text-xs leading-snug">{traitDesc(id, lang)}</div>
             </div>
           </li>
         );
@@ -377,6 +226,8 @@ function TraitList({ ids }: { ids: TraitId[] }) {
 
 /** Список карт флоры «Травы и грибов» в правилах. */
 function FloraList() {
+  const lang = useLang();
+  const tt = useT();
   const kinds = Object.keys(FLORA) as FloraKind[];
   return (
     <ul className="grid gap-2 sm:grid-cols-2">
@@ -403,10 +254,12 @@ function FloraList() {
             )}
             <div>
               <div className="font-medium text-fg">
-                {f.name}
-                <span className="ml-1 text-xs font-normal text-muted">({f.isFungus ? "гриб · входит с 1 фишкой" : "трава · входит с 3"})</span>
+                {floraName(k, lang)}
+                <span className="ml-1 text-xs font-normal text-muted">
+                  {f.isFungus ? tt("rules.flora.fungus") : tt("rules.flora.grass")}
+                </span>
               </div>
-              <div className="mt-1 text-xs leading-snug">{f.description}</div>
+              <div className="mt-1 text-xs leading-snug">{floraDesc(k, lang)}</div>
             </div>
           </li>
         );
@@ -417,11 +270,12 @@ function FloraList() {
 
 /** Список меток последствий в правилах. */
 function MarksList() {
+  const lang = useLang();
+  const tt = useT();
   const kinds = Object.keys(MARKS) as MarkKind[];
   return (
     <ul className="grid gap-2 sm:grid-cols-2">
       {kinds.map((k) => {
-        const m = MARKS[k];
         return (
           <li key={k} className="flex gap-3 rounded-[var(--radius-sm)] border border-border bg-bg p-3">
             <img
@@ -431,8 +285,8 @@ function MarksList() {
               className="size-10 shrink-0 self-start rounded-full object-cover ring-1 ring-border"
             />
             <div>
-              <div className="font-medium text-fg">Метка «{m.name}» · по 4 в комплекте</div>
-              <div className="mt-1 text-xs leading-snug">{m.description}</div>
+              <div className="font-medium text-fg">{tt("rules.mark.line", { name: markName(k, lang) })}</div>
+              <div className="mt-1 text-xs leading-snug">{markDesc(k, lang)}</div>
             </div>
           </li>
         );
@@ -443,11 +297,11 @@ function MarksList() {
 
 /** Список видов растений «Растений» в правилах. */
 function PlantsList() {
+  const lang = useLang();
   const kinds = Object.keys(PLANTS) as PlantKind[];
   return (
     <ul className="grid gap-2 sm:grid-cols-2">
       {kinds.map((k) => {
-        const p = PLANTS[k];
         return (
           <li key={k} className="flex gap-3 rounded-[var(--radius-sm)] border border-border bg-bg p-3">
             {PLANT_ART[k] ? (
@@ -461,8 +315,8 @@ function PlantsList() {
               <span className="h-[68px] w-[102px] shrink-0 rounded-[var(--radius-xs)] border border-border bg-surface" />
             )}
             <div>
-              <div className="font-medium text-fg">{p.name}</div>
-              <div className="mt-1 text-xs leading-snug">{p.description}</div>
+              <div className="font-medium text-fg">{plantName(k, lang)}</div>
+              <div className="mt-1 text-xs leading-snug">{plantDesc(k, lang)}</div>
             </div>
           </li>
         );
@@ -471,25 +325,30 @@ function PlantsList() {
   );
 }
 
-/** Описания территорий «Континентов» для карточек в правилах. */
-const TERRITORY_DESC: Record<TerritoryId, string> = {
-  laurasia:
-    "Северный из двух континентов с самой щедрой базой: 8 фишек при двух игроках, 11 при трёх, 14 при четырёх.",
-  gondwana:
-    "Южный континент: 7/10/13 фишек по числу игроков. С «Растениями» и «Травой и грибами» флора стоит на обоих континентах.",
-  ocean: "Мир воды — только водоплавающие, база 5/7/9. Водность несъёмна: уйти из океана можно лишь миграцией.",
+/** Описания территорий «Континентов» для карточек в правилах — ключи словаря. */
+const TERRITORY_DESC_KEYS: Record<TerritoryId, TKey> = {
+  laurasia: "rules.terr.laurasia",
+  gondwana: "rules.terr.gondwana",
+  ocean: "rules.terr.ocean",
 };
 
 /** Карточки территорий «Континентов» в правилах. */
 function TerritoryList() {
+  const lang = useLang();
+  const tt = useT();
   return (
     <div className="grid gap-2 sm:grid-cols-3">
-      {TERRITORIES.map((t) => (
-        <figure key={t.id} className="overflow-hidden rounded-[var(--radius-md)] border border-border bg-bg">
-          <img src={TERRITORY_ART[t.id]} alt={t.name} loading="lazy" className="aspect-square w-full object-cover" />
+      {TERRITORIES.map((terr) => (
+        <figure key={terr.id} className="overflow-hidden rounded-[var(--radius-md)] border border-border bg-bg">
+          <img
+            src={TERRITORY_ART[terr.id]}
+            alt={territoryName(terr.id, lang)}
+            loading="lazy"
+            className="aspect-square w-full object-cover"
+          />
           <figcaption className="p-2.5">
-            <div className="text-sm font-medium text-fg">{t.name}</div>
-            <div className="mt-1 text-xs leading-snug">{TERRITORY_DESC[t.id]}</div>
+            <div className="text-sm font-medium text-fg">{territoryName(terr.id, lang)}</div>
+            <div className="mt-1 text-xs leading-snug">{tt(TERRITORY_DESC_KEYS[terr.id])}</div>
           </figcaption>
         </figure>
       ))}
@@ -533,6 +392,7 @@ function RuleCard({ src, label }: { src: string; label?: string }) {
 }
 
 export function RulesPanel({ onClose }: { onClose: () => void }) {
+  const tt = useT();
   const [tab, setTab] = useState<RulesTab>("base");
   // Правила закрываются и Esc, и кликом по затемнению вокруг карточки.
   useEffect(() => {
@@ -551,13 +411,13 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
     >
       <div className="max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-t-[var(--radius-xl)] border border-border bg-surface p-5 sm:rounded-[var(--radius-xl)] sm:p-8">
         <div className="mb-4 flex items-start justify-between gap-4">
-          <h2 className="text-2xl">Правила</h2>
+          <h2 className="text-2xl">{tt("rules.title")}</h2>
           <Button variant="ghost" size="sm" onClick={onClose}>
-            Закрыть
+            {tt("common.close")}
           </Button>
         </div>
-        <div role="tablist" aria-label="Раздел правил" className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {RULES_TABS.map(({ id, label }) => (
+        <div role="tablist" aria-label={tt("rules.tabs")} className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {(Object.keys(RULES_TAB_KEYS) as RulesTab[]).map((id) => (
             <button
               key={id}
               type="button"
@@ -565,186 +425,173 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
               aria-selected={tab === id}
               onClick={() => setTab(id)}
               className={cn(
+                FOCUS_VISIBLE,
                 "h-11 rounded-[var(--radius-md)] border px-1 text-sm font-medium",
                 tab === id
                   ? "border-accent bg-accent text-accent-fg"
                   : "border-border bg-bg text-fg hover:bg-surface-2",
               )}
             >
-              {label}
+              {tt(RULES_TAB_KEYS[id])}
             </button>
           ))}
         </div>
         {tab === "base" && (
           <div className="space-y-4 text-sm text-muted">
-            <p>
-              Базовая русская «Эволюция» (Правильные игры, 2010). Колода 84 карты, 2–4 игрока. Побеждает тот, чья популяция набрала больше очков после последнего года.
-            </p>
-            <h3 className="text-fg">Ход года</h3>
+            <p>{tt("rules.base.intro")}</p>
+            <h3 className="text-fg">{tt("rules.base.year")}</h3>
             <ol className="list-decimal space-y-2 pl-5">
               <li>
-                <strong className="text-fg">Развитие.</strong> По кругу выкладывайте по одной карте: новое животное или свойство. Свойства кладутся лицом вверх — все видят, кто что выложил. Двойные карты — одно из двух свойств. Паразит только на чужих. Парная карта (симбиоз, сотрудничество, взаимодействие) кладётся между двумя животными — на пару может лежать только одна парная карта. Пас — и больше не играете в этой фазе; когда спасовали все, фаза заканчивается.
+                <strong className="text-fg">{tt("rules.base.dev")}</strong> {tt("rules.base.dev.text")}
                 <span className="mt-2 flex flex-wrap items-end gap-3">
-                  <RuleCard src={BG.cardBack} label="рука" />
-                  <RuleCard src={TRAIT_ART.carnivore!} label="свойство" />
-                  <RuleToken src={speciesArt({})} label="животное" />
+                  <RuleCard src={BG.cardBack} label={tt("rules.lbl.hand")} />
+                  <RuleCard src={TRAIT_ART.carnivore!} label={tt("rules.lbl.trait")} />
+                  <RuleToken src={speciesArt({})} label={tt("rules.lbl.animal")} />
                 </span>
               </li>
               <li>
-                <strong className="text-fg">Кормовая база.</strong> 2 игрока: 1d6+2. 3: 2d6. 4: 2d6+2.
+                <strong className="text-fg">{tt("rules.base.food")}</strong> 2: 1d6+2. 3: 2d6. 4: 2d6+2.
                 <span className="mt-2 flex flex-wrap items-end gap-3">
-                  <Dice3D values={[2, 5]} dieSize={44} gap={10} ariaLabel="Кости кормовой базы" />
-                  <RuleCube tone="red" label="фишка базы" />
+                  <Dice3D values={[2, 5]} dieSize={44} gap={10} ariaLabel={tt("rules.lbl.dice")} />
+                  <RuleCube tone="red" label={tt("rules.lbl.token")} />
                 </span>
               </li>
               <li>
-                <strong className="text-fg">Питание.</strong> Ход длится, пока не нажмёте «Закончить ход»: одно действие ход не отдаёт. За ход можно напасть каждым из своих хищников и/или использовать всех пиратов — либо взять одну фишку еды (накормленное животное берёт только в пустой жировой запас); если берёте еду, хищники и пираты в этот ход недоступны. Накормленное животное больше не использует свойства: не нападает, не пиратствует, не топчет, не уходит в спячку и не тратит жир. Топтуны топчут вместе с взятием еды, каждый — раз за ход. Превращение жира — свободное действие. Когда делать нечего совсем, ход передаётся сам. «Пас» выводит вас до конца фазы; фаза заканчивается, когда база пуста, все накормлены, все пасанули или никому нельзя ходить.
+                <strong className="text-fg">{tt("rules.base.feed")}</strong> {tt("rules.base.feed.text")}
                 <span className="mt-2 flex flex-wrap items-end gap-3">
-                  <RuleCube tone="red" label="красная" />
-                  <RuleCube tone="blue" label="синяя" />
-                  <RuleCube tone="yellow" label="жир" />
+                  <RuleCube tone="red" label={tt("rules.lbl.red")} />
+                  <RuleCube tone="blue" label={tt("rules.lbl.blue")} />
+                  <RuleCube tone="yellow" label={tt("rules.lbl.fat")} />
                 </span>
               </li>
               <li>
-                <strong className="text-fg">Вымирание.</strong> Ненакормленные погибают. Добор: число выживших + 1. Если никого нет и рука пуста — 6 карт. Пустая колода — последний год.
+                <strong className="text-fg">{tt("rules.base.ext")}</strong> {tt("rules.base.ext.text")}
                 <span className="mt-2 flex flex-wrap items-end gap-3">
-                  <RuleToken src={SPECIES_EXTINCT} label="вымерло" />
-                  <RuleCard src={BG.cardBack} label="добор" />
+                  <RuleToken src={SPECIES_EXTINCT} label={tt("rules.lbl.extinct")} />
+                  <RuleCard src={BG.cardBack} label={tt("rules.lbl.draw")} />
                 </span>
               </li>
             </ol>
-            <h3 className="text-fg">Очки</h3>
-            <p>2 за каждое выжившее животное, 1 за каждое свойство. Дополнительно: хищник и большой +1, паразит +2. Ничья — по картам в сбросе.</p>
+            <h3 className="text-fg">{tt("rules.base.score")}</h3>
+            <p>{tt("rules.base.score.text")}</p>
             <span className="flex flex-wrap items-end gap-3">
               <RuleToken src={speciesArt({})} label="+2" />
-              <RuleToken src={speciesArt({ carnivore: true })} label="+2 · хищнику +1" />
-              <RuleCard src={TRAIT_ART.parasite!} label="+1 · паразиту +2" />
+              <RuleToken src={speciesArt({ carnivore: true })} label={tt("rules.lbl.carnBonus")} />
+              <RuleCard src={TRAIT_ART.parasite!} label={tt("rules.lbl.parBonus")} />
             </span>
-            <h3 className="text-fg">Свойства базовой игры</h3>
+            <h3 className="text-fg">{tt("rules.base.traits")}</h3>
             <TraitList ids={TRAITS_BY_TAB.base} />
           </div>
         )}
         {tab === "continents" && (
           <div className="space-y-4 text-sm text-muted">
-            <p>
-              Дополнение «Континенты» (Правильные игры, 2012): 42 карты новых свойств. Включается в меню перед партией — все правила базовой игры остаются в силе.
-            </p>
+            <p>{tt("rules.continents.intro")}</p>
             <TerritoryList />
             <ul className="list-decimal space-y-2 pl-5">
               <li>
-                <strong className="text-fg">Территории.</strong> Животные живут на Лавразии, в Гондване и в Океане. Выкладывая животное, выбираете континент кликом по нему; в Океан животное попадает только со свойством «Водоплавающее». В океане водность перманентна: её не снять ни неоплазией, ни рекомбинацией, ни параличом — только миграция выводит животное на континент.
+                <strong className="text-fg">{tt("rules.cont.territories")}</strong> {tt("rules.cont.territories.text")}
               </li>
               <li>
-                <strong className="text-fg">Кормовые базы.</strong> У каждой территории своя база: 2 игрока — 8/7/5, три — 11/10/7, четыре — 14/13/9 (Лавразия/Гондвана/Океан). В свой ход вы привязаны к одной территории: берёте еду её базы и используете свойства животных, стоящих на ней. Хищник ест только в своей территории. «Эдификатор» добавляет 2 фишки в базу своей территории ежегодно.
+                <strong className="text-fg">{tt("rules.cont.bases")}</strong> {tt("rules.cont.bases.text")}
               </li>
               <li>
-                <strong className="text-fg">Парные карты.</strong> Кладутся между двумя животными одной территории. Разъехалась пара — карта уходит в сброс.
+                <strong className="text-fg">{tt("rules.cont.pairs")}</strong> {tt("rules.cont.pairs.text")}
               </li>
               <li>
-                <strong className="text-fg">Миграция.</strong> Объявите миграцию вместо обычного хода: ни еды, ни других свойств. Мигрирующие животные (в любом числе) переезжают: океан ↔ континенты, континент → континент напрямую нельзя. Сухопутное в океан не идёт. С мигрантом едут прилипалы — свои и чужие, даже с континента на континент.
+                <strong className="text-fg">{tt("rules.cont.migration")}</strong> {tt("rules.cont.migration.text")}
               </li>
               <li>
-                <strong className="text-fg">Новые свойства.</strong> Стадность: пока стадных в локации больше, чем хищников, их нельзя есть. Стрекательные клетки: атаковавший хищник теряет все свойства до конца года (потребность 1), в океане ещё и выбрасывается на континент. Регенерация: съеденное хищником животное оставляет свойства — в вымирание владелец кладёт на них карту из руки как новое животное (добора за него нет). Рекомбинация (парная): партнёры обмениваются по одному свойству. <span className="text-virus">Неоплазия</span> — вирус: играется на любое животное, своё или чужое, и каждый год в начале определения кормовой базы поднимается, выключая очередное непарное свойство (выключенное не работает, но очки даёт); когда выключать нечего — животное немедленно погибает. Вирусные свойства (паразит, неоплазия) помечены фиолетовым.
+                <strong className="text-fg">{tt("rules.cont.newTraits")}</strong> {tt("rules.cont.newTraits.text")}
               </li>
               <li>
-                <strong className="text-fg">Спасение.</strong> Игрок без руки и животных берёт 10 карт и две сразу кладёт животными по континенту.
+                <strong className="text-fg">{tt("rules.cont.rescue")}</strong> {tt("rules.cont.rescue.text")}
               </li>
             </ul>
-            <h3 className="text-fg">Свойства дополнения</h3>
+            <h3 className="text-fg">{tt("rules.cont.traits")}</h3>
             <TraitList ids={TRAITS_BY_TAB.continents} />
           </div>
         )}
         {tab === "plants" && (
           <div className="space-y-4 text-sm text-muted">
-            <p>
-              Дополнение «Растения» (Правильные игры, 2016): 36 двусторонних карт — свойство растения либо свойство животного. Включается в меню перед партией, совместимо с «Континентами».
-            </p>
+            <p>{tt("rules.plants.intro")}</p>
             <ul className="list-decimal space-y-2 pl-5">
               <li>
-                <strong className="text-fg">Кормовая база без кубика.</strong> Еда этого года лежит на растениях. В фазу определения базы броска нет: сразу питание. С «Континентами» растения стоят на Лавразии и Гондване, а Океан получает базу по обычным правилам. Растения общие — не принадлежат никому.
+                <strong className="text-fg">{tt("rules.plants.base")}</strong> {tt("rules.plants.base.text")}
               </li>
               <li>
-                <strong className="text-fg">Питание.</strong> Фишка берётся с растения на животное — но только если животное способно им питаться: «Водное» растение кормит лишь водоплавающих, «Корнеплод» — норных, «Дерево» — больших. Хищники едят только с растений со значком плода и с «Питательных». Вместо еды или атаки можно занять убежище растения — жетон защищает от хищников и хищных растений до конца фазы. Пасовать нельзя, пока хоть одно ваше животное способно получить еду или убежище.
+                <strong className="text-fg">{tt("rules.plants.feeding")}</strong> {tt("rules.plants.feeding.text")}
               </li>
               <li>
-                <strong className="text-fg">Хищное растение.</strong> Раз за фазу питания: контратакует животное, тянущее с него еду (выживший всё равно получает фишку), либо один из игроков направляет его на любое животное, которое смог бы атаковать хищник без свойств. Съело животное — 2 фишки, получило хвост — 1, съело ядовитое — гибнет в вымирание.
+                <strong className="text-fg">{tt("rules.plants.carnivorous")}</strong> {tt("rules.plants.carnivorous.text")}
               </li>
               <li>
-                <strong className="text-fg">Вымирание.</strong> Съеденные дочиста растения погибают — кроме однолетника (выживает) и растений-паразитов (гибнут только с хозяином). Связка микориз выживает, если хоть на одном растении осталась еда. Гриб получает фишку за каждое погибшее животное.
+                <strong className="text-fg">{tt("rules.plants.extinction")}</strong> {tt("rules.plants.extinction.text")}
               </li>
               <li>
-                <strong className="text-fg">Фаза роста.</strong> Выжившие растения разрастаются по своим схемам (многолетник 1→2, 2→3, 3+→5 и т.д.), лиана получает столько фишек, сколько на столе не-лиан, убежища восстанавливаются, из колоды выходят новые растения. Эдификатор с «Континентами» добавляет по фишке растениям своей локации.
+                <strong className="text-fg">{tt("rules.plants.growth")}</strong> {tt("rules.plants.growth.text")}
               </li>
               <li>
-                <strong className="text-fg">Очки.</strong> Растения и их свойства при подсчёте не учитываются — очки дают только животные и их свойства.
+                <strong className="text-fg">{tt("rules.plants.score")}</strong> {tt("rules.plants.score.text")}
               </li>
             </ul>
-            <h3 className="text-fg">Виды растений</h3>
+            <h3 className="text-fg">{tt("rules.plants.species")}</h3>
             <PlantsList />
-            <h3 className="text-fg">Свойства растений</h3>
+            <h3 className="text-fg">{tt("rules.plants.traits")}</h3>
             <TraitList ids={TRAITS_BY_TAB.plants} />
-            <p className="text-xs">
-              Свойства животных на вторых гранях карт «Растений» — из базовой игры, смотрите их во вкладке «Базовая игра».
-            </p>
+            <p className="text-xs">{tt("rules.plants.footnote")}</p>
           </div>
         )}
         {tab === "fungi" && (
           <div className="space-y-4 text-sm text-muted">
-            <p>
-              Дополнение «Трава и грибы» (Правильные игры, 2019): 24 длинные карты флоры (6 грибов и 6 трав по 2 копии), 8 меток последствий и 2 новых свойства животных. Кормовая база этого года — все красные фишки на картах флоры; флора — полноправный участник партии и может победить.
-            </p>
+            <p>{tt("rules.fungi.intro")}</p>
             <ul className="list-decimal space-y-2 pl-5">
               <li>
-                <strong className="text-fg">Стол флоры.</strong> На старте открыты 2 карты; в фазу кормовой базы из колоды выходят карты по числу игроков (максимум 8 на столе). Гриб входит в игру с 1 красной фишкой, трава — с 3; максимум фишек на карте — 4. С «Континентами» флора живёт на Лавразии и Гондване, Океан кормится по обычным правилам.
+                <strong className="text-fg">{tt("rules.fungi.table")}</strong> {tt("rules.fungi.table.text")}
               </li>
               <li>
-                <strong className="text-fg">Питание.</strong> Любое животное может брать фишки с любой травы или гриба — при взятии срабатывает способность карты. «Взаимодействие» и «Топотун» работают с картами флоры. Метки последствий: животное получает метку при взятии фишки с «меченой» карты, если не имеет такой же, если метка осталась на столе и если у него нет «Трына». Хищник, съевший добычу, получает все её метки.
+                <strong className="text-fg">{tt("rules.fungi.feeding")}</strong> {tt("rules.fungi.feeding.text")}
               </li>
               <li>
-                <strong className="text-fg">Разрастание грибов.</strong> Каждый раз, когда животное погибает (в питании и в вымирании), на любой гриб кладётся 1 красная фишка.
+                <strong className="text-fg">{tt("rules.fungi.spread")}</strong> {tt("rules.fungi.spread.text")}
               </li>
               <li>
-                <strong className="text-fg">Вымирание.</strong> Гибнут ненакормленные, отравлённые и животные с меткой «Яд» без «Антидота». С выживших снимаются все фишки и метки. Карты флоры без фишек уходят в сброс; каждая выжившая трава получает 1 фишку, грибы — только от гибели животных.
+                <strong className="text-fg">{tt("rules.fungi.extinction")}</strong> {tt("rules.fungi.extinction.text")}
               </li>
               <li>
-                <strong className="text-fg">Очки.</strong> «Трава и грибы» играют сами за себя: 2 очка за каждую выжившую карту флоры и 1 за каждую фишку на ней; при равенстве очков преимущество у флоры.
+                <strong className="text-fg">{tt("rules.fungi.score")}</strong> {tt("rules.fungi.score.text")}
               </li>
             </ul>
-            <h3 className="text-fg">Карты флоры</h3>
+            <h3 className="text-fg">{tt("rules.fungi.cards")}</h3>
             <FloraList />
-            <h3 className="text-fg">Метки последствий</h3>
+            <h3 className="text-fg">{tt("rules.fungi.marks")}</h3>
             <MarksList />
-            <h3 className="text-fg">Свойства животных</h3>
+            <h3 className="text-fg">{tt("rules.fungi.animalTraits")}</h3>
             <TraitList ids={TRAITS_BY_TAB.fungi} />
           </div>
         )}
         {tab === "mutations" && (
           <div className="space-y-4 text-sm text-muted">
-            <p>
-              Дополнение «Случайные мутации» (по одноимённой игре Правильных игр, 2013): рука карт исчезает — у каждого игрока личная слепая колода. В фазу развития вы сначала объявляете, как разыграете верхнюю карту, и только потом её вскрываете. Свойства достаются случайно, в том числе <strong className="text-fg">вредные мутации</strong> (тёмные карты). Совместимо со всеми дополнениями.
-            </p>
+            <p>{tt("rules.mutations.intro")}</p>
             <ul className="list-decimal space-y-2 pl-5">
               <li>
-                <strong className="text-fg">Личная колода.</strong> 7 карт на старте, просматривать нельзя. В свой ход развития объявите один из способов розыгрыша: (1) новый вид — карта ложится животным; (2) свойство — на свой вид из одного животного; (3) +1 животное к виду. С «Растениями» можно объявить и свойство растения — карта вскроется на выбранном растении.
+                <strong className="text-fg">{tt("rules.mut.deck")}</strong> {tt("rules.mut.deck.text")}
               </li>
               <li>
-                <strong className="text-fg">Судьба свойства.</strong> Если свойство нельзя сыграть на выбранный вид, оно переезжает на соседний вид справа; если не подходит нигде — само становится новым видом-мутантом. Вредные мутации обязательны: отказаться от них нельзя.
+                <strong className="text-fg">{tt("rules.mut.fate")}</strong> {tt("rules.mut.fate.text")}
               </li>
               <li>
-                <strong className="text-fg">Численность вида.</strong> Вид может состоять из нескольких животных (отмечается «×N» на карточке). Численность нельзя наращивать выше числа ваших видов — исключение «Почкование». Еда, охота, голод и яд действуют на животных по одному: атака снимает одно животное, а не весь вид.
+                <strong className="text-fg">{tt("rules.mut.population")}</strong> {tt("rules.mut.population.text")}
               </li>
               <li>
-                <strong className="text-fg">Добор.</strong> В конце года: число животных + 2 карты на дно личной колоды. Общий запас кончился — последний год.
+                <strong className="text-fg">{tt("rules.mut.draw")}</strong> {tt("rules.mut.draw.text")}
               </li>
               <li>
-                <strong className="text-fg">Очки.</strong> 2 за каждое животное (с учётом численности), 1 за свойство и бонусы свойств; метаболический синдром даёт 2 дополнительных очка.
+                <strong className="text-fg">{tt("rules.mut.score")}</strong> {tt("rules.mut.score.text")}
               </li>
             </ul>
-            <h3 className="text-fg">Свойства дополнения</h3>
+            <h3 className="text-fg">{tt("rules.mut.traits")}</h3>
             <TraitList ids={TRAITS_BY_TAB.mutations} />
-            <p className="text-xs">
-              Прочие свойства в слепой колоде — из базовой игры и включённых дополнений; их правила смотрите в соответствующих вкладках.
-            </p>
+            <p className="text-xs">{tt("rules.mut.footnote")}</p>
           </div>
         )}
       </div>
@@ -754,6 +601,8 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
 
 /** Экран статистики из меню: история партий, график очков и достижения. */
 export function StatsScreen({ onClose }: { onClose: () => void }) {
+  const tt = useT();
+  const lang = useLang();
   const stats = useMemo(() => readStats(), []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -771,12 +620,19 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
   const topTraits = useMemo(() => {
     const totals = new Map<TraitId, number>();
     for (const g of games) {
-      for (const [t, n] of Object.entries(g.traits) as Array<[TraitId, number]>) {
-        totals.set(t, (totals.get(t) ?? 0) + n);
+      for (const [tr, n] of Object.entries(g.traits) as Array<[TraitId, number]>) {
+        totals.set(tr, (totals.get(tr) ?? 0) + n);
       }
     }
     return [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
   }, [games]);
+
+  const labels: Array<[TKey, string]> = [
+    ["stats.games", String(games.length)],
+    ["stats.wins", String(wins)],
+    ["stats.winrate", `${winRate}%`],
+    ["stats.best", String(best)],
+  ];
 
   return (
     <div
@@ -787,34 +643,27 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
     >
       <div className="relative flex max-h-[92dvh] w-full max-w-2xl flex-col rounded-[var(--radius-xl)] border border-border bg-surface shadow-[var(--shadow-card)]">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
-          <h2 className="text-xl">Статистика</h2>
+          <h2 className="text-xl">{tt("stats.title")}</h2>
           <Button variant="secondary" size="sm" onClick={onClose}>
-            Закрыть
+            {tt("common.close")}
           </Button>
         </div>
         <div className="space-y-6 overflow-y-auto px-5 py-5">
           {games.length === 0 ? (
-            <p className="py-10 text-center text-sm text-muted">
-              Партий ещё не было — статистика появится после первой игры.
-            </p>
+            <p className="py-10 text-center text-sm text-muted">{tt("stats.empty")}</p>
           ) : (
             <>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {[
-                  ["Партий", String(games.length)],
-                  ["Побед", String(wins)],
-                  ["Винрейт", `${winRate}%`],
-                  ["Лучший счёт", String(best)],
-                ].map(([label, value]) => (
-                  <div key={label} className="rounded-[var(--radius-md)] border border-border bg-bg px-3 py-3">
-                    <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
+                {labels.map(([key, value]) => (
+                  <div key={key} className="rounded-[var(--radius-md)] border border-border bg-bg px-3 py-3">
+                    <div className="text-[10px] uppercase tracking-wider text-muted">{tt(key)}</div>
                     <div className="mt-1 font-display text-2xl tabular-nums">{value}</div>
                   </div>
                 ))}
               </div>
 
               <section>
-                <h3 className="mb-2 text-sm font-medium text-muted">Очки последних партий</h3>
+                <h3 className="mb-2 text-sm font-medium text-muted">{tt("stats.chart")}</h3>
                 <div className="h-44 rounded-[var(--radius-md)] border border-border bg-bg p-2">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chart} margin={{ top: 6, right: 10, bottom: 0, left: -18 }}>
@@ -823,8 +672,8 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
                       <YAxis tick={{ fill: "#9aa08f", fontSize: 11 }} axisLine={false} tickLine={false} />
                       <Tooltip
                         contentStyle={{ background: "#1c2119", border: "1px solid #2a3025", borderRadius: 8, fontSize: 12 }}
-                        labelFormatter={(i) => `Партия ${i}`}
-                        formatter={(v) => [`${v} очков`, "Счёт"]}
+                        labelFormatter={(i) => tt("stats.chartGame", { i })}
+                        formatter={(v) => [tt("stats.chartPoints", { n: v as number }), tt("stats.chartScore")]}
                       />
                       <Line type="monotone" dataKey="score" stroke="#8b9a74" strokeWidth={2} dot={{ r: 2.5, fill: "#8b9a74" }} isAnimationActive={false} />
                     </LineChart>
@@ -834,11 +683,11 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
 
               {topTraits.length ? (
                 <section>
-                  <h3 className="mb-2 text-sm font-medium text-muted">Любимые свойства</h3>
+                  <h3 className="mb-2 text-sm font-medium text-muted">{tt("stats.topTraits")}</h3>
                   <div className="flex flex-wrap gap-2">
-                    {topTraits.map(([t, n]) => (
-                      <span key={t} className="rounded-full border border-border bg-bg px-3 py-1 text-xs text-fg">
-                        {TRAITS[t].name} · <span className="font-display tabular-nums">{n}</span>
+                    {topTraits.map(([tr, n]) => (
+                      <span key={tr} className="rounded-full border border-border bg-bg px-3 py-1 text-xs text-fg">
+                        {traitName(tr, lang)} · <span className="font-display tabular-nums">{n}</span>
                       </span>
                     ))}
                   </div>
@@ -847,19 +696,25 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
 
               <section>
                 <h3 className="mb-2 text-sm font-medium text-muted">
-                  История партий <span className="text-subtle">· последние {Math.min(games.length, 10)}</span>
+                  {tt("stats.history")}
+                  <span className="text-subtle">{tt("stats.historyLast", { n: Math.min(games.length, 10) })}</span>
                 </h3>
                 <ul className="space-y-1.5">
                   {[...games].reverse().slice(0, 10).map((g) => (
                     <li key={g.date} className="flex items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-border bg-bg px-3 py-2 text-xs">
                       <span className="min-w-0">
-                        <span className="font-medium text-fg">{g.place}-е место из {g.players}</span>
-                        <span className="text-muted"> · {g.mode === "net" ? "сеть" : "соло"} · {formatDate(g.date)}</span>
-                        {g.modules.length ? <span className="text-subtle"> · {g.modules.length} доп.</span> : null}
+                        <span className="font-medium text-fg">{tt("stats.place", { place: g.place, players: g.players })}</span>
+                        <span className="text-muted">
+                          {" · "}
+                          {g.mode === "net" ? tt("stats.mode.net") : tt("stats.mode.solo")} · {formatDate(g.date, lang)}
+                        </span>
+                        {g.modules.length ? (
+                          <span className="text-subtle">{tt("stats.modules", { n: g.modules.length })}</span>
+                        ) : null}
                       </span>
                       <span className="flex shrink-0 items-center gap-2">
                         <span className="font-display text-sm tabular-nums">{g.score}</span>
-                        <span className={g.won ? "text-good" : "text-subtle"}>{g.won ? "победа" : "—"}</span>
+                        <span className={g.won ? "text-good" : "text-subtle"}>{g.won ? tt("stats.win") : "—"}</span>
                       </span>
                     </li>
                   ))}
@@ -868,7 +723,13 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
 
               <section>
                 <h3 className="mb-2 text-sm font-medium text-muted">
-                  Достижения <span className="text-subtle">· {Object.keys(stats.achievements).length} из {ACHIEVEMENTS.length}</span>
+                  {tt("stats.achievements")}
+                  <span className="text-subtle">
+                    {tt("stats.achievementsOf", {
+                      got: Object.keys(stats.achievements).length,
+                      total: ACHIEVEMENTS.length,
+                    })}
+                  </span>
                 </h3>
                 <div className="grid gap-2 sm:grid-cols-2">
                   {ACHIEVEMENTS.map((a) => {
@@ -888,8 +749,8 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
                           <Lock className="mt-0.5 size-5 shrink-0 text-subtle" />
                         )}
                         <span>
-                          <span className="block text-sm font-medium text-fg">{a.name}</span>
-                          <span className="mt-0.5 block text-xs text-muted">{a.desc}</span>
+                          <span className="block text-sm font-medium text-fg">{achievementName(a.id, lang)}</span>
+                          <span className="mt-0.5 block text-xs text-muted">{achievementDesc(a.id, lang)}</span>
                         </span>
                       </div>
                     );
@@ -904,10 +765,242 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
   );
 }
 
-function formatDate(ms: number): string {
-  return new Date(ms).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit" });
+function formatDate(ms: number, lang: "ru" | "en"): string {
+  return new Date(ms).toLocaleDateString(lang === "en" ? "en-GB" : "ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+  });
 }
 
+/**
+ * Подписи слагаемых в компактной формуле счёта. Строчные — так формула
+ * читается как строка данных: «животные 8 · свойства 3 · бонус 2 · сброс 1».
+ * У флоры за «животными» стоят карты, за «бонусом» — фишки на картах.
+ */
+function sourceLabels(row: ScoreBreakdown, lang: Lang): {
+  animals: string;
+  traits: string;
+  extras: string;
+  animalsHint: string;
+  traitsHint: string;
+  extrasHint: string;
+} {
+  if (row.playerId === -1) {
+    return {
+      animals: translate(lang, "final.labels.flora.animals"),
+      traits: translate(lang, "final.labels.flora.traits"),
+      extras: translate(lang, "final.labels.flora.extras"),
+      animalsHint: translate(lang, "final.hints.flora.animals"),
+      traitsHint: translate(lang, "final.hints.flora.traits"),
+      extrasHint: translate(lang, "final.hints.flora.extras"),
+    };
+  }
+  return {
+    animals: translate(lang, "final.labels.animals"),
+    traits: translate(lang, "final.labels.traits"),
+    extras: translate(lang, "final.labels.extras"),
+    animalsHint: translate(lang, "final.hints.animals"),
+    traitsHint: translate(lang, "final.hints.traits"),
+    extrasHint: translate(lang, "final.hints.extras"),
+  };
+}
+
+/** Места с учётом ничьих: равные очки и сброс делят одно место. */
+function competitionPlaces(scores: ScoreBreakdown[]): number[] {
+  const places: number[] = [];
+  scores.forEach((s, i) => {
+    const prev = scores[i - 1];
+    const tied = Boolean(prev) && prev!.total === s.total && prev!.discard === s.discard;
+    places.push(tied ? places[i - 1]! : i + 1);
+  });
+  return places;
+}
+
+/**
+ * «Почему не первое место» — только из чисел ScoreBreakdown, без домыслов.
+ * Если человек победил или честного объяснения не выводится, возвращает null.
+ */
+function explainDefeat(scores: ScoreBreakdown[], winnerIds: number[], humanId: number, lang: Lang): string | null {
+  if (winnerIds.includes(humanId)) return null;
+  const human = scores.find((s) => s.playerId === humanId);
+  const winners = scores.filter((s) => winnerIds.includes(s.playerId) && s.playerId !== humanId);
+  if (!human || !winners.length) return null;
+  const leader = winners[0]!;
+  const gap = leader.total - human.total;
+  const pw = pointsWord(lang, gap);
+  const leadText =
+    winners.length > 1
+      ? translate(lang, "final.defeat.sharedLead", {
+          n: winners.length,
+          players: playersWord(lang, winners.length),
+          gap,
+          points: pw,
+        })
+      : translate(lang, "final.defeat.behind", { gap, points: pw });
+  if (gap === 0) {
+    // Равные очки: движок отдаёт победу по сбросу, значит у лидера сброс больше.
+    return leader.discard > human.discard
+      ? translate(lang, "final.defeat.discardTie", {
+          total: human.total,
+          leader: leader.discard,
+          human: human.discard,
+        })
+      : null;
+  }
+  if (leader.playerId === -1) {
+    return translate(lang, "final.defeat.flora", {
+      gap,
+      points: pw,
+      name: leader.name,
+      leader: leader.total,
+      human: human.total,
+    });
+  }
+  const diffs = {
+    animals: leader.animals - human.animals,
+    traits: leader.traits - human.traits,
+    extras: leader.extras - human.extras,
+  };
+  const sources = [
+    { key: "animals" as const, on: translate(lang, "final.defeat.on.animals"), due: translate(lang, "final.defeat.due.animals") },
+    { key: "traits" as const, on: translate(lang, "final.defeat.on.traits"), due: translate(lang, "final.defeat.due.traits") },
+    { key: "extras" as const, on: translate(lang, "final.defeat.on.extras"), due: translate(lang, "final.defeat.due.extras") },
+  ];
+  const best = sources.reduce((m, s) => (diffs[s.key] > diffs[m.key] ? s : m), sources[0]!);
+  if (diffs[best.key] <= 0) return translate(lang, "final.defeat.plain", { lead: leadText });
+  if (diffs[best.key] === gap) {
+    return translate(lang, "final.defeat.fully", { lead: leadText, due: best.due, leader: leader[best.key], human: human[best.key] });
+  }
+  return translate(lang, "final.defeat.mostly", { lead: leadText, on: best.on, leader: leader[best.key], human: human[best.key] });
+}
+
+/** true, если система просит меньше движения; на сервере — false. */
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/** Следит за prefers-reduced-motion: при нём финал показывает всё сразу. */
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(prefersReducedMotion);
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = () => setReduced(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return reduced;
+}
+
+/**
+ * Строка игрока в финале: место, сумма и формула счёта по источникам.
+ * Слагаемые появляются по шагам (animate); при reduced-motion — сразу.
+ * Сброс стоит в формуле рядом, но помечен как «не в счёте»: он решает ничью.
+ */
+function ScoreRow({
+  row,
+  place,
+  winner,
+  animate,
+}: {
+  row: ScoreBreakdown;
+  place: number;
+  winner: boolean;
+  animate: boolean;
+}) {
+  const tt = useT();
+  const lang = useLang();
+  const labels = sourceLabels(row, lang);
+  const parts: Array<{ key: "animals" | "traits" | "extras"; label: string; value: number; hint: string }> = [
+    { key: "animals", label: labels.animals, value: row.animals, hint: labels.animalsHint },
+    { key: "traits", label: labels.traits, value: row.traits, hint: labels.traitsHint },
+    { key: "extras", label: labels.extras, value: row.extras, hint: labels.extrasHint },
+  ];
+  const tone: Record<(typeof parts)[number]["key"], string> = {
+    animals: "bg-accent",
+    traits: "bg-leaf",
+    extras: "bg-food-yellow",
+  };
+  const step = 180;
+  return (
+    <li
+      className={cn(
+        "score-row-in rounded-[var(--radius-md)] border px-3 py-3",
+        winner ? "border-accent bg-accent/10" : "border-border bg-bg",
+      )}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate font-medium">
+            {place}. {row.name}
+          </p>
+          {winner ? <p className="mt-0.5 text-[10px] uppercase tracking-wide text-accent">{tt("final.best")}</p> : null}
+        </div>
+        <CountUp to={row.total} delayMs={animate ? 160 : 0} />
+      </div>
+
+      {/* Полоска-пропорция: сразу видно, какой источник дал больше очков. */}
+      {row.total > 0 ? (
+        <div aria-hidden className="mt-2.5 flex h-1.5 overflow-hidden rounded-full bg-ink/20">
+          {parts.map((p) => (
+            <span key={p.key} className={tone[p.key]} style={{ width: `${(p.value / row.total) * 100}%` }} />
+          ))}
+        </div>
+      ) : null}
+
+      <dl className="mt-2.5 text-xs">
+        <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
+          {parts.map((p, i) => (
+            <Fragment key={p.key}>
+              {i > 0 ? (
+                <span aria-hidden className="text-subtle">
+                  ·
+                </span>
+              ) : null}
+              <span
+                className={cn("inline-flex items-baseline gap-1", animate && "score-row-in")}
+                style={animate ? { animationDelay: `${step + i * 90}ms` } : undefined}
+              >
+                <dt className="text-muted" title={p.hint}>
+                  {p.label}
+                </dt>
+                <dd className="font-display tabular-nums text-fg">{p.value}</dd>
+              </span>
+            </Fragment>
+          ))}
+          <span aria-hidden className="text-subtle">
+            ·
+          </span>
+          {/* Сброс — не очки: в сумму не входит, решает ничью при равенстве. */}
+          <span
+            className={cn("inline-flex items-baseline gap-1", animate && "score-row-in")}
+            style={animate ? { animationDelay: `${step + 3 * 90}ms` } : undefined}
+          >
+            <dt className="text-subtle" title={tt("final.discardHint")}>
+              {tt("final.discard")}
+            </dt>
+            <dd className="font-display tabular-nums text-subtle">{row.discard}</dd>
+          </span>
+        </div>
+        <div
+          className={cn("mt-2 flex items-center justify-between gap-2 border-t border-border pt-1.5", animate && "score-row-in")}
+          style={animate ? { animationDelay: `${step + 4 * 90}ms` } : undefined}
+        >
+          <dt className="text-muted">{tt("final.total")}</dt>
+          <dd className="font-display text-sm tabular-nums text-fg">{row.total}</dd>
+        </div>
+      </dl>
+    </li>
+  );
+}
+
+/**
+ * Финал партии. Объясняет счёт, а не только показывает места: у каждого игрока
+ * видно, из чего сложился итог (животные, свойства, бонусы свойств, сброс),
+ * слагаемые раскрываются по шагам, а проигравшему человеку экран честно
+ * говорит, на чём именно его обошли. Экран можно свернуть, чтобы посмотреть
+ * стол, и вернуть кнопкой «Итоги».
+ */
 export function GameOverScreen({
   scores,
   winnerIds,
@@ -918,9 +1011,11 @@ export function GameOverScreen({
   scores: ScoreBreakdown[];
   winnerIds: number[];
   humanId: number;
-  onAgain: () => void;
+  /** Нет обработчика — «Ещё партию» не показываем (так у зрителя). */
+  onAgain?: () => void;
   onMenu: () => void;
 }) {
+  const tt = useT();
   const won = winnerIds.includes(humanId);
   // Строгий режим монтирует эффект дважды — звук играет один раз.
   const soundedRef = useRef(false);
@@ -942,8 +1037,66 @@ export function GameOverScreen({
       })),
     [],
   );
+
+  const reduced = usePrefersReducedMotion();
+  // Порядок строк — как в движке (очки, затем сброс); флора встаёт на своё место.
+  const rows = useMemo(() => [...scores].sort((a, b) => b.total - a.total || b.discard - a.discard), [scores]);
+  const places = useMemo(() => competitionPlaces(rows), [rows]);
+  const lang = useLang();
+  const explanation = useMemo(
+    () => explainDefeat(rows, winnerIds, humanId, lang),
+    [rows, winnerIds, humanId, lang],
+  );
+  const humanIndex = rows.findIndex((r) => r.playerId === humanId);
+  // Раскрытие по шагам: строка за строкой; при reduced-motion — всё сразу.
+  const [reveal, setReveal] = useState(() => {
+    const r = prefersReducedMotion();
+    return { shown: r ? scores.length : 0, all: r };
+  });
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    if (reveal.all || reveal.shown >= rows.length) return;
+    const delay = reveal.shown === 0 ? 420 : 860;
+    const timer = window.setTimeout(() => {
+      setReveal((r) => (r.shown >= rows.length ? r : { ...r, shown: r.shown + 1 }));
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [reveal, rows.length]);
+
+  // Медиазапрос мог включиться уже после открытия экрана.
+  useEffect(() => {
+    if (reduced) setReveal({ shown: rows.length, all: true });
+  }, [reduced, rows.length]);
+
+  const allShown = reveal.all || reveal.shown >= rows.length;
+  const humanPlace = humanIndex >= 0 ? places[humanIndex]! : null;
+
+  // Свёрнутый финал: стол виден, а кнопка возвращает итоги обратно.
+  if (collapsed) {
+    return (
+      <div className="fixed bottom-4 right-4 z-40">
+        <Button
+          variant="secondary"
+          size="md"
+          className="shadow-[var(--shadow-card)]"
+          aria-label={tt("final.show")}
+          onClick={() => setCollapsed(false)}
+        >
+          <BarChart3 className="size-4" />
+          {tt("final.results")}
+          {won
+            ? tt("final.resultsWin")
+            : humanPlace
+              ? tt("final.resultsPlace", { place: placeLabel(lang, humanPlace) })
+              : ""}
+        </Button>
+      </div>
+    );
+  }
+
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-4">
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-3 sm:p-4">
       <img
         src={won ? BG.victory : BG.extinction}
         alt=""
@@ -968,38 +1121,69 @@ export function GameOverScreen({
           ))}
         </div>
       ) : null}
-      <div className="relative w-full max-w-lg rounded-[var(--radius-xl)] border border-border bg-surface p-6 shadow-[var(--shadow-card)] sm:p-8">
-        <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-muted">Конец эволюции</p>
-        <h2 className="mt-2 text-3xl">{won ? "Ваша популяция доминирует" : "Вас вытеснили"}</h2>
-        <ul className="mt-6 space-y-2">
-          {scores.map((s, i) => (
-            <li
-              key={s.playerId}
-              className={cn(
-                "score-row-in flex items-center justify-between rounded-[var(--radius-md)] border px-3 py-3",
-                winnerIds.includes(s.playerId) ? "border-accent bg-accent/10" : "border-border bg-bg",
-              )}
-              style={{ animationDelay: `${240 + i * 160}ms` }}
+      <div className="relative flex max-h-[94dvh] w-full max-w-lg flex-col overflow-hidden rounded-[var(--radius-xl)] border border-border bg-surface shadow-[var(--shadow-card)]">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 sm:p-7">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-muted">{tt("final.kicker")}</p>
+              <h2 className="mt-2 text-3xl">{won ? tt("final.win") : tt("final.lose")}</h2>
+            </div>
+            <Button
+              variant="ghost"
+              size="iconSm"
+              className="shrink-0"
+              aria-label={tt("final.collapseAria")}
+              title={tt("final.collapseTitle")}
+              onClick={() => setCollapsed(true)}
             >
-              <div>
-                <div className="font-medium">
-                  {i + 1}. {s.name}
-                </div>
-                <div className="text-xs text-muted">
-                  животные {s.animals} · свойства {s.traits} · бонус {s.extras} · сброс {s.discard}
-                </div>
-              </div>
-              <CountUp to={s.total} delayMs={240 + i * 160 + 220} />
-            </li>
-          ))}
-        </ul>
-        <div className="mt-6 flex flex-col gap-2 sm:flex-row">
-          <Button className="flex-1" onClick={onAgain}>
-            <RotateCcw className="size-4" />
-            Ещё партия
-          </Button>
-          <Button variant="secondary" className="flex-1" onClick={onMenu}>
-            В меню
+              <ChevronDown className="size-4" />
+            </Button>
+          </div>
+
+          {/* Расшифровка формулы: чтобы «бонус» и «сброс» в строках не были ребусом. */}
+          <p className="mt-3 text-xs leading-snug text-subtle">{tt("final.formula")}</p>
+
+          <ul aria-label={tt("final.scoreAria")} className="mt-4 space-y-2.5">
+            {rows.map((s, i) =>
+              i < reveal.shown ? (
+                <ScoreRow
+                  key={s.playerId}
+                  row={s}
+                  place={places[i]!}
+                  winner={winnerIds.includes(s.playerId)}
+                  animate={!reduced}
+                />
+              ) : null,
+            )}
+          </ul>
+
+          {!allShown ? (
+            <div className="mt-4 flex flex-col items-center gap-1">
+              <Button variant="secondary" size="md" onClick={() => setReveal({ shown: rows.length, all: true })}>
+                {tt("final.showAll")}
+              </Button>
+              <p className="text-xs text-subtle">{tt("final.stepHint")}</p>
+            </div>
+          ) : null}
+
+          {allShown && explanation ? (
+            <p className="score-row-in mt-4 flex items-start gap-2 rounded-[var(--radius-md)] border border-accent/40 bg-accent/10 px-3 py-3 text-sm text-fg">
+              <Lightbulb aria-hidden className="mt-0.5 size-4 shrink-0 text-accent" />
+              <span>{explanation}</span>
+            </p>
+          ) : null}
+        </div>
+        <div className="flex flex-col gap-2 border-t border-border bg-surface p-4 sm:flex-row sm:px-7">
+          {/* Зрителю «Ещё партия» недоступна: сервер знает только места, и
+              запрос со зрительским токеном выбросил бы его в меню с ошибкой. */}
+          {onAgain ? (
+            <Button className="flex-1" size="md" onClick={onAgain}>
+              <RotateCcw className="size-4" />
+              {tt("final.again")}
+            </Button>
+          ) : null}
+          <Button variant="secondary" className="flex-1" size="md" onClick={onMenu}>
+            {onAgain ? tt("final.menu") : tt("final.leave")}
           </Button>
         </div>
       </div>
@@ -1010,6 +1194,7 @@ export function GameOverScreen({
 /**
  * Очки места «докручиваются» от нуля на глазах: легче прочувствовать разрыв
  * с соперниками, чем увидеть готовые числа. При reduced-motion — сразу итог.
+ * Число декоративно (скринридеру его читает строка «Итого» в разбивке).
  */
 function CountUp({ to, delayMs = 0, durMs = 700 }: { to: number; delayMs?: number; durMs?: number }) {
   const [v, setV] = useState(0);
@@ -1029,5 +1214,9 @@ function CountUp({ to, delayMs = 0, durMs = 700 }: { to: number; delayMs?: numbe
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [to, delayMs, durMs]);
-  return <div className="font-display text-2xl tabular-nums">{v}</div>;
+  return (
+    <div aria-hidden className="font-display text-2xl tabular-nums">
+      {v}
+    </div>
+  );
 }

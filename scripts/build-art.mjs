@@ -67,7 +67,9 @@ const JOBS = [
   ["16415139", "bg/bank-bowl.jpg", ["bgw", 1200, 675]],
   ["1bec2502", "bg/texture-felt.jpg", "tex"],
   ["c11ec6f4", "bg/texture-paper.jpg", "tex"],
-  ["8ead0dfd", "bg/texture-water.jpg", "tex"],
+  // Водная текстура полосы океана: вырезка спокойной воды с тайла «Океан»
+  // (assets/continents/grok-world-ocean.jpg), см. kind texWater.
+  ["world-ocean", "bg/texture-water.jpg", "texWater"],
   // --- фазы ---
   ["f9d591ca", "phase/development.png", "art"],
   ["8a420a23", "phase/feeding.png", "art"],
@@ -233,6 +235,33 @@ const resolve = (prefix, dest) => {
   return hit;
 };
 
+// Кросс-фейд тайла с его копией, прокрученной на полпериода по каждой оси
+// (классический «make seamless»). Вес 1 на краях тайла: там шов заклеивается
+// прокрученной копией, у которой пиксели как раз соседние в исходнике;
+// вес 0 в центре: там прокрученная копия сама разрывна.
+function makeSeamless(raw, size, channels) {
+  const half = size >> 1;
+  const weight = (v) => Math.abs((2 * v) / size - 1); // 1 на краях, 0 в центре
+  let data = raw;
+  for (const axis of ["x", "y"]) {
+    const src = data;
+    data = Buffer.from(src);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const w = weight(axis === "x" ? x : y);
+        const sx = axis === "x" ? (x + half) % size : x;
+        const sy = axis === "x" ? y : (y + half) % size;
+        const dst = (y * size + x) * channels;
+        const s = (sy * size + sx) * channels;
+        for (let c = 0; c < channels; c++) {
+          data[dst + c] = Math.round((1 - w) * src[dst + c] + w * src[s + c]);
+        }
+      }
+    }
+  }
+  return data;
+}
+
 async function processKind(kind, src, dest) {
   const out = `${OUT}/${dest}`;
   await mkdir(dirname(out), { recursive: true });
@@ -262,6 +291,22 @@ async function processKind(kind, src, dest) {
     pipe = sharp(src).resize(kind[1], kind[2], { fit: "cover" });
   } else if (kind === "tex") {
     pipe = sharp(src).resize(512, 512, { fit: "cover" });
+  } else if (kind === "texWater") {
+    // Вода для .water-strip: вырезка 512×512 спокойной воды с гравюры
+    // «Pelagus profundum oceani» (левая срединная часть тайла — там нет
+    // китов, декоративной рамки и подписей), приглушение и лёгкое размытие,
+    // чтобы читалась текстура, а не иллюстрация; затем бесшовная укладка.
+    const size = 512;
+    const { data, info } = await sharp(src)
+      .extract({ left: 140, top: 430, width: 512, height: 512 })
+      .resize(size, size, { fit: "cover" })
+      .modulate({ brightness: 0.62, saturation: 0.85 })
+      .blur(1.2)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    pipe = sharp(makeSeamless(data, size, info.channels), {
+      raw: { width: size, height: size, channels: info.channels },
+    });
   } else if (kind === "cont" || (Array.isArray(kind) && kind[0] === "cont")) {
     const position = Array.isArray(kind) && kind[1] === "attention" ? "attention" : "centre";
     pipe = sharp(src).resize(640, 640, { fit: "cover", position });

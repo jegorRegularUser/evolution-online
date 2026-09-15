@@ -3,8 +3,11 @@
  * кучка улеглась, и убеждаемся, что канвас кубиков рисует непрозрачные
  * пиксели (не пустой), а сумма броска появилась в лотке.
  * node scripts/qa-dice-check.mjs
+ *
+ * Партия — сетевой стол с ботом (соло-режим удалён): see scripts/qa-lib.mjs.
  */
 import { chromium } from "playwright";
+import { advancePhase, phaseOf, startNetGame } from "./qa-lib.mjs";
 
 const base = process.env.EVO_URL ?? "http://127.0.0.1:8099";
 const browser = await chromium.launch();
@@ -17,18 +20,20 @@ page.on("console", (m) => {
 
 try {
   await page.goto(base, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: "Начать год" }).click();
+  await startNetGame(page, { name: "Кубики", players: 2, bots: 1 });
 
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if ((await page.evaluate(() => document.body.innerText)).includes("Кормовая база")) break;
-    const pass = page.getByRole("button", { name: "Пас", exact: true });
-    if ((await pass.isVisible().catch(() => false)) && (await pass.isEnabled().catch(() => false))) {
-      await pass.click();
-    }
-    await page.waitForTimeout(250);
+  // Фазу гонит общий хелпер: «Закончить развитие»/«Закончить ход» плюс
+  // «Закончить питание» с подтверждением. Цель — фаза броска по СТОРУ:
+  // подпись «Кормовая база» есть в панели-сукне уже в развитии и как маркер
+  // фазы не годится.
+  const reached = await advancePhase(page, () => phaseOf(page).then((p) => p === "foodBank" || p === "feeding"), {
+    timeout: 90_000,
+  });
+  console.log(reached ? `фаза броска достигнута (${await phaseOf(page)})` : "фаза броска НЕ достигнута");
+  if (!reached) {
+    console.log("текущая фаза:", await phaseOf(page));
+    process.exitCode = 1;
   }
-  console.log("фаза кормовой базы достигнута");
   // Фаза короткая (~2 с до Питания): опрашиваем канвасы, пока лоток жив.
   let sawCanvas = false;
   let painted = false;

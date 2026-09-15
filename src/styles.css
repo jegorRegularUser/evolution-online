@@ -146,26 +146,6 @@
   background-blend-mode: normal, normal, soft-light, normal;
 }
 
-/* Кубик кормовой базы */
-.die-body {
-  fill: var(--color-parchment);
-  stroke: color-mix(in oklab, var(--color-ink) 30%, transparent);
-  stroke-width: 1;
-}
-.die-pip {
-  fill: var(--color-ink);
-}
-@keyframes die-tumble {
-  0% { transform: rotate(-14deg) translateY(-2px); }
-  25% { transform: rotate(10deg) translateY(1px); }
-  50% { transform: rotate(-8deg) translateY(-1px); }
-  75% { transform: rotate(12deg) translateY(0); }
-  100% { transform: rotate(0deg); }
-}
-.die-tumble {
-  animation: die-tumble 0.32s ease-in-out infinite;
-}
-
 /* Появление фишек еды и чисел */
 @keyframes pop-in {
   0% { transform: scale(0.4); opacity: 0; }
@@ -347,18 +327,217 @@
   animation: spotlight-out-kf 0.28s var(--ease-out) forwards;
 }
 
-/* Восстановление прерванной партии: инлайн-скрипт в __root ставит флаг
-   data-evo-resume до гидратации, меню не мигает, пока сейв проверяется. */
-html[data-evo-resume="1"] .menu-screen {
-  visibility: hidden;
+
+
+/* ── Общий диалог подтверждения ─────────────────────────────────────── */
+
+/* Появление: затемнение проявляется, карточка чуть поднимается и растёт. */
+@keyframes modal-backdrop-in-kf {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
-html[data-evo-resume="1"] body::after {
-  content: "Продолжаем прерванную партию…";
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-items: center;
-  background: var(--color-bg);
-  color: var(--color-muted);
+@keyframes modal-card-in-kf {
+  0% { opacity: 0; transform: translateY(10px) scale(0.97); }
+  100% { opacity: 1; transform: none; }
+}
+@keyframes modal-backdrop-out-kf {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes modal-card-out-kf {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(6px) scale(0.98); }
+}
+.modal-backdrop-in {
+  animation: modal-backdrop-in-kf var(--motion-quick) var(--ease-out);
+}
+.modal-card-in {
+  animation: modal-card-in-kf var(--motion-quick) var(--ease-out);
+}
+.modal-backdrop-out {
+  animation: modal-backdrop-out-kf var(--motion-fast) var(--ease-out) forwards;
+}
+.modal-card-out {
+  animation: modal-card-out-kf var(--motion-fast) var(--ease-out) forwards;
+}
+
+/* ── Баннер смены фазы или года ─────────────────────────────────────── */
+
+@keyframes phase-banner-in-kf {
+  0% { opacity: 0; transform: translateY(-14px) scale(0.96); }
+  60% { opacity: 1; }
+  100% { opacity: 1; transform: none; }
+}
+.phase-banner-in {
+  animation: phase-banner-in-kf 0.45s var(--ease-out);
+}
+
+/* ── Лента событий: мягкое появление новой записи ───────────────────── */
+
+@keyframes feed-item-in-kf {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+.feed-item-in {
+  animation: feed-item-in-kf 0.24s var(--ease-out);
+}
+
+/* Спотлайт, не перехватывающий клики: фон прозрачен для мыши,
+   содержимое оверлея клики получает. */
+.spotlight-passthrough {
+  pointer-events: none;
+}
+.spotlight-passthrough > * {
+  pointer-events: auto;
+}
+/* Затемнение не ловит клики: стол под ним остаётся живым. */
+.spotlight-passthrough > .spotlight-backdrop {
+  pointer-events: none;
+}
+
+/* ── Карточка «Ваш ход»: короткая, без размытия, с уходом ─────────────── */
+/* Фон только затемняет: blur(7px) спотлайта здесь мешал читать стол. */
+.turn-card-backdrop {
+  background: color-mix(in oklab, var(--color-bg) 55%, transparent);
+  animation: fade-in 0.2s var(--ease-out);
+}
+@keyframes turn-card-in-kf {
+  0% { opacity: 0; transform: translateY(14px) scale(0.94); }
+  100% { opacity: 1; transform: none; }
+}
+@keyframes turn-card-out-kf {
+  0% { opacity: 1; transform: none; }
+  100% { opacity: 0; transform: translateY(10px) scale(0.96); }
+}
+.turn-card {
+  animation: turn-card-in-kf 0.28s var(--ease-out);
+}
+.turn-card-closing {
+  animation: turn-card-out-kf 0.2s var(--ease-out) forwards;
+}
+
+/* Новые анимации гасятся общим блоком prefers-reduced-motion выше. */
+
+/* ── Единый слайдер (.range-evo): размер колоды и другие «настройки» ──── */
+/* Дорожка плотнее фона карточки и с рамкой — иначе на bg-surface её просто
+   не видно; thumb крупный, пергаментная окантовка, фокус — кольцо.
+   Высота поля 44px — палец на телефоне попадает по ползунку без прицела;
+   сама дорожка и thumb остаются прежними. */
+.range-evo {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 44px;
+  background: transparent;
+  cursor: pointer;
+}
+.range-evo::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--color-ink) 55%, transparent);
+  border: 1px solid var(--color-border-strong);
+}
+.range-evo::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -7px;
+  height: 18px;
+  width: 18px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  border: 2px solid var(--color-parchment);
+  box-shadow: var(--shadow-card);
+}
+.range-evo::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--color-ink) 55%, transparent);
+  border: 1px solid var(--color-border-strong);
+}
+.range-evo::-moz-range-thumb {
+  height: 16px;
+  width: 16px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  border: 2px solid var(--color-parchment);
+  box-shadow: var(--shadow-card);
+}
+.range-evo:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+/* ── Цель под прицелом: красная рамка и мягкое свечение ────────────────── */
+/* Раньше жертву «покрывали трещинами» — они читались как повреждение карты.
+   Теперь цель помечается яркой рамкой и пульсацией, как прицел. */
+@keyframes target-marked-kf {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-danger) 42%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in oklab, var(--color-danger) 16%, transparent); }
+}
+.target-marked {
+  animation: target-marked-kf 1.6s var(--ease-out) infinite;
+}
+.target-badge {
+  animation: pop-in 0.24s var(--ease-out);
+}
+@keyframes crack-in-kf {
+  0% { transform: rotate(-1.2deg) scale(0.985); }
+  45% { transform: rotate(0.9deg) scale(1.005); }
+  100% { transform: none; }
+}
+
+/* ── Трещины на кнопках дока: выбран противоположный образ действия ────── */
+/* Кнопки питания трескаются при выбранной атаке и наоборот. Линии светлее
+   фона: target-cracked (тёмный) на тёмных кнопках не читался. */
+.dock-cracked {
+  background-image:
+    linear-gradient(74deg, transparent 43%, rgba(246, 239, 219, 0.34) 44%, rgba(246, 239, 219, 0.34) 45%, transparent 46%),
+    linear-gradient(-58deg, transparent 57%, rgba(246, 239, 219, 0.26) 58%, rgba(246, 239, 219, 0.26) 59%, transparent 60%),
+    linear-gradient(14deg, transparent 29%, rgba(246, 239, 219, 0.18) 30%, rgba(246, 239, 219, 0.18) 31%, transparent 32%);
+  box-shadow: inset 0 0 0 1px rgba(246, 239, 219, 0.14);
+  animation: crack-in-kf 0.32s var(--ease-out);
+}
+
+/* ── Единое выделение карт ──────────────────────────────────────────────
+   Одно кольцо на состояние вместо трёх наложенных (кольцо карты, кольцо
+   грани, рамка). Кольцо рисуем outline'ом: он повторяет радиус карты и не
+   спорит с box-shadow карточки (тень, пульсация цели, фокус с клавиатуры).
+   Приоритет состояний: цель под прицелом (target-marked) > выбрано >
+   обычное; приглушение — только прозрачностью. */
+.evo-picked {
+  outline: 2px solid color-mix(in oklab, var(--color-clay) 78%, transparent);
+  outline-offset: 2px;
+}
+.evo-picked-flat {
+  outline: 2px solid color-mix(in oklab, var(--color-clay) 78%, transparent);
+  outline-offset: 1px;
+}
+.evo-face-picked {
+  outline: 2px solid color-mix(in oklab, var(--color-accent) 72%, transparent);
+  outline-offset: -2px;
+}
+
+/* ── Реакции: панель уходит левее раскрытого журнала ─────────────────────
+   На xl журнал — колонка 340px, на sm…xl — панель 380px справа. Пока
+   журнал раскрыт, панель реакций и пузыри держатся над доком, но левее
+   колонки, а не поверх композера чата. */
+@media (min-width: 40rem) and (max-width: 79.999rem) {
+  .reactions-shift {
+    right: 396px;
+  }
+}
+@media (min-width: 80rem) {
+  .reactions-shift {
+    right: 356px;
+  }
+}
+
+/* ── Реакции: пузыри поднимаются и растворяются ─────────────────────────── */
+@keyframes reaction-bubble-kf {
+  0% { opacity: 0; transform: translateY(10px) scale(0.9); }
+  12% { opacity: 1; transform: translateY(0) scale(1); }
+  80% { opacity: 1; transform: translateY(-26px); }
+  100% { opacity: 0; transform: translateY(-44px); }
+}
+.reaction-bubble {
+  animation: reaction-bubble-kf 2.6s var(--ease-out) forwards;
 }

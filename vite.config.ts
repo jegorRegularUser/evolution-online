@@ -22,6 +22,21 @@ function hasGlobbedMigrations(root: string): boolean {
 }
 
 /**
+ * Модули с `createServerFn`, которые в dev Vite грузит лениво — при ПЕРВОМ
+ * вызове каждой серверной функции. Ленивая загрузка по ходу партии будит
+ * оптимизатор SSR-окружения: он обнаруживает новые deps, инвалидирует всю
+ * SSR-программу и шлёт full-reload → открытые вкладки перезагружаются
+ * (`[vite] (ssr) program reload` в логе). Прогреваем весь граф сразу после
+ * готовности БД, до первого запроса.
+ */
+const SSR_SERVER_FN_MODULES = [
+  "/src/lib/net/api.ts",
+  "/src/lib/app-data/client.server.ts",
+  "/src/lib/app-data/server-only.ts",
+  "/src/lib/auth/middleware.ts",
+] as const;
+
+/**
  * Finish PGLite bootstrap during dev-server setup (before traffic). Vite awaits
  * async `configureServer` hooks. Production: `src/lib/db` kicks `ensureDbReady`
  * on import.
@@ -43,6 +58,22 @@ function pgliteBootstrapPlugin(): Plugin {
         if (typeof mod.ensureDbReady === "function") {
           await mod.ensureDbReady();
         }
+        // Прогрев SSR-графа серверных функций: первый вызов любого serverFn во
+        // время игры не должен лениво тянуть модуль (иначе — program reload и
+        // перезагрузка всех вкладок). db.ts уже загружен выше; `/src/lib/net/api.ts`
+        // тянет за собой server.ts / shared.ts / движок.
+        for (const id of SSR_SERVER_FN_MODULES) {
+          try {
+            await server.ssrLoadModule(id);
+          } catch (prewarmErr) {
+            // Прогрев не критичен: сломанный модуль упадёт с той же ошибкой на
+            // реальном запросе — не валим старт дев-сервера.
+            console.error(`[app-builder] SSR prewarm failed for ${id}:`, prewarmErr);
+          }
+        }
+        console.info(
+          `[app-builder] SSR prewarm: loaded ${SSR_SERVER_FN_MODULES.length} serverFn module(s)`,
+        );
       } catch (err) {
         console.error("[app-builder] DB bootstrap failed:", err);
         throw err;
@@ -153,6 +184,32 @@ export default defineConfig(({ command, isPreview }) => ({
     // Quick tunnels (cloudflared) come with a random *.trycloudflare.com host;
     // a leading dot = suffix match. Direct IP access (LAN play) needs nothing.
     allowedHosts: [".trycloudflare.com"],
+    // Служебные файлы не должны дёргать вотчер: запись `qa-*.mjs` в корне или
+    // `scripts/*.txt` QA-скриптами вызывала `[vite] page reload` всех открытых
+    // вкладок, а появление новых файлов в `artifacts/` расширяло скан кандидатов
+    // Tailwind → перегенерация styles.css → hmr update + reload страниц прямо
+    // во время партии. Всё остальное (src/, scripts/*.mjs, vite.config.ts и пр.)
+    // отслеживается как раньше; в src/ файлов с префиксом qa- нет.
+    watch: {
+      ignored: [
+        "**/artifacts/**", // артефакты QA-прогонов (скриншоты и пр.)
+        "**/screenshots/**", // снимки Playwright (в git они tracked — .gitignore не трогаем)
+        "**/scripts/*.txt", // заметки QA-агентов рядом с скриптами
+        "**/*.log", // логи прогонов
+        "**/qa-*", // одноразовые QA-скрипты/данные (qa-net-debug.mjs и т.п.)
+        // Машинные папки/файлы в корне: их переписывают индексатор кода и
+        // инструменты сборки прямо во время игры, и каждая запись вызывала
+        // `[vite] (ssr) program reload` → полный перезагруз вкладок (~раз в
+        // минуту: сбрасывалась музыка и сетевая сессия). Исходниками они
+        // никогда не бывают, поэтому из вотчера их исключаем целиком.
+        "**/.repo-context/**",
+        "**/.repo-context.json",
+        "**/.vercel/**",
+        "**/.tanstack/**",
+        "**/.playwright-mcp/**",
+        "**/.zcode/**",
+      ],
+    },
   },
   preview: {
     host: "127.0.0.1",

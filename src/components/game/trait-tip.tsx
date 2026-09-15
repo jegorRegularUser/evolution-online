@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { TraitDef } from "@/game/traits";
 import { DARK_ART, TRAIT_ART } from "@/lib/art";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 import { TraitGlyph } from "./icons";
 
 /**
@@ -39,6 +40,7 @@ export function TraitTooltip({
   anchorRect: DOMRect;
   id: string;
 }) {
+  const tt = useT();
   const bubbleRef = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
@@ -88,12 +90,12 @@ export function TraitTooltip({
           <span className={cn("text-fg", def.virusLike && "text-virus")}>{def.name}</span>
           {def.extraFood && def.extraFood > 0 ? (
             <span className="rounded-full bg-clay/20 px-1.5 text-[9px] uppercase tracking-wide text-clay">
-              +{def.extraFood} к еде
+              {tt("traitTip.extraFood", { n: def.extraFood })}
             </span>
           ) : null}
           {def.scoreBonus && def.scoreBonus > 0 ? (
             <span className="rounded-full bg-good/20 px-1.5 text-[9px] uppercase tracking-wide text-good">
-              +{def.scoreBonus} очк.
+              {tt("traitTip.score", { n: def.scoreBonus })}
             </span>
           ) : null}
           {pair ? (
@@ -104,10 +106,10 @@ export function TraitTooltip({
               {pairColor ? (
                 <span className="size-2 rounded-full" style={{ background: pairColor }} />
               ) : null}
-              {pairNote ?? "пара"}
+              {pairNote ?? tt("traitTip.pair")}
             </span>
           ) : null}
-          {disabled ? <span className="text-[9px] uppercase tracking-wider text-clay">отключено</span> : null}
+          {disabled ? <span className="text-[9px] uppercase tracking-wider text-clay">{tt("traitTip.disabled")}</span> : null}
         </div>
         <p className="mt-0.5 text-[11px] leading-snug text-muted">{def.description}</p>
       </div>

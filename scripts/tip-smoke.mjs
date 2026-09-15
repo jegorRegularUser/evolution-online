@@ -1,11 +1,13 @@
 // QA подсказок свойств: hover на десктопе, тап на мобильном, закрытие, позиция «над чипом».
 // Использование: node scripts/tip-smoke.mjs [baseUrl]
-import { mkdirSync } from "node:fs";
+// Партия — сетевой стол с ботом (соло-режим удалён): see scripts/qa-lib.mjs.
 import { chromium } from "playwright";
+import { endPhaseStep, shotsDir, startNetGame } from "./qa-lib.mjs";
 
-const BASE = process.argv[2] ?? "http://127.0.0.1:8099/";
-const OUT = new URL("../screenshots/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
-mkdirSync(OUT, { recursive: true });
+const BASE = process.argv[2] ?? process.env.EVO_URL ?? "http://127.0.0.1:8099/";
+// Скриншоты — вне репозитория (дефолт — временная папка): PNG в screenshots/
+// дёргал Tailwind в dev и перезагружал вкладки. Переопределяется EVO_SHOTS.
+const OUT = shotsDir();
 
 const problems = [];
 function note(kind, text) {
@@ -21,13 +23,10 @@ async function track(page, label) {
   page.on("pageerror", (e) => note(`${label}/pageerror`, String(e)));
 }
 
+/** Сетевой стол с ботом: раньше здесь был соло-старт из меню. */
 async function startGame(page) {
   await page.goto(BASE, { waitUntil: "networkidle" });
-  const start = page.getByRole("button", { name: /Начать год/i });
-  await start.waitFor({ state: "visible", timeout: 20000 });
-  const fast = page.getByRole("button", { name: "Быстро" }).first();
-  if (await fast.isVisible().catch(() => false)) await fast.click();
-  await start.click();
+  await startNetGame(page, { name: "Подсказки", players: 2, bots: 1 });
 }
 
 /** Играет за человека, пока не появятся свойства на столе (чипы с data-trait-chip). */
@@ -57,7 +56,18 @@ async function playUntilChips(page, maxSteps = 40) {
       continue;
     }
     let acted = false;
-    for (const label of ["Взять еду", "Жир", "Спячка", "Только топтать", "Охота", "Пас"]) {
+    // Завершение хода: «Пас» волна 1 убрала из развития, поэтому пробуем
+    // «Закончить развитие» (развитие) и «Закончить ход» (питание, без диалога);
+    // «Закончить питание» жмётся хелпером — она открывает подтверждение.
+    for (const label of [
+      "Взять еду",
+      "Жир",
+      "Спячка",
+      "Только топтать",
+      "Охота",
+      "Закончить развитие",
+      "Закончить ход",
+    ]) {
       if (label === lastLabel && label !== "Охота") continue;
       const b = page.getByRole("button", { name: label, exact: true });
       if ((await b.count()) > 0 && (await b.first().isEnabled().catch(() => false))) {
@@ -67,6 +77,9 @@ async function playUntilChips(page, maxSteps = 40) {
         break;
       }
     }
+    // Ничего из списка нет — значит, питание можно завершить только целиком
+    // («Закончить питание» + подтверждение) или это чужой ход.
+    if (!acted) acted = await endPhaseStep(page);
     if (!acted) await sleep(400);
     await sleep(250);
   }
@@ -159,11 +172,11 @@ const verdict = { desktopHover: false, desktopClose: false, mobileTap: false, mo
       verdict.desktopHover = true;
 
       await sleep(300); // даём fade-in доигать, иначе скриншот поймает полупрозрачное окно
-      await page.screenshot({ path: `${OUT}desktop-trait-tip.png` });
+      await page.screenshot({ path: `${OUT}/desktop-trait-tip.png` });
       const r = await page.locator('[role="tooltip"]').boundingBox().catch(() => null);
       if (r) {
         await page.screenshot({
-          path: `${OUT}desktop-trait-tip-zoom.png`,
+          path: `${OUT}/desktop-trait-tip-zoom.png`,
           clip: { x: Math.max(0, r.x - 60), y: Math.max(0, r.y - 60), width: r.width + 120, height: r.height + 140 },
         });
       }
@@ -176,7 +189,7 @@ const verdict = { desktopHover: false, desktopClose: false, mobileTap: false, mo
     }
   } catch (e) {
     note("desktop/fail", String(e));
-    await page.screenshot({ path: `${OUT}desktop-fail.png` }).catch(() => {});
+    await page.screenshot({ path: `${OUT}/desktop-fail.png` }).catch(() => {});
   } finally {
     await browser.close();
   }
@@ -203,7 +216,7 @@ const verdict = { desktopHover: false, desktopClose: false, mobileTap: false, mo
       await checkBubble(page, "mobile/tap");
       verdict.mobileTap = true;
       await sleep(300); // fade-in доигрывает до скриншота
-      await page.screenshot({ path: `${OUT}mobile-trait-tip.png` });
+      await page.screenshot({ path: `${OUT}/mobile-trait-tip.png` });
 
       // Тап мимо — подсказка закрывается
       await page.locator("header").tap().catch(async () => {
@@ -215,7 +228,7 @@ const verdict = { desktopHover: false, desktopClose: false, mobileTap: false, mo
     }
   } catch (e) {
     note("mobile/fail", String(e));
-    await page.screenshot({ path: `${OUT}mobile-fail.png` }).catch(() => {});
+    await page.screenshot({ path: `${OUT}/mobile-fail.png` }).catch(() => {});
   } finally {
     await browser.close();
   }

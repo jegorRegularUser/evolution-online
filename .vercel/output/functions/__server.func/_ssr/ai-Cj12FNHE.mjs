@@ -1,10 +1,18 @@
 import { a as number, c as union, i as literal, n as boolean, o as object, r as custom, s as string, t as _enum } from "../_libs/zod.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/ai-Zhf9JnZS.js
+//#region node_modules/.nitro/vite/services/ssr/assets/ai-Cj12FNHE.js
 /**
 * Общий контракт сетевой партии: типы кадров опроса, zod-схемы входа и
 * серверные константы темпа. Импортируется и клиентом, и сервером;
 * единственный игровой тип здесь — сам GameState.
 */
+/** Набор реакций стола (захардкожен и на сервере — см. reactionInput). */
+var REACTION_EMOJI = [
+	"👏",
+	"🌿",
+	"🔥",
+	"😮",
+	"💚"
+];
 /**
 * Серверные паузы авточагов (мс) и прочие константы: боты и автофазы
 * двигаются лениво при любом запросе к комнате, темп не зависит от
@@ -23,6 +31,24 @@ var PACE = {
 };
 var NAME = string().trim().min(1).max(16);
 var CODE = string().trim().length(4);
+var DIFFICULTY = _enum([
+	"easy",
+	"normal",
+	"hard"
+]);
+var MODULES = object({
+	continents: boolean().optional(),
+	plants: boolean().optional(),
+	fungi: boolean().optional(),
+	randomMutations: boolean().optional()
+}).partial();
+/** Настройки стола: модули проверяются белым списком. */
+var roomSettingsSchema = object({
+	modules: MODULES.optional(),
+	difficulty: DIFFICULTY.optional(),
+	/** Границы — разумная вилка вокруг DECK_SIZE (84) с учётом всех модулей. */
+	deckSize: number().int().min(20).max(400).optional()
+});
 var createRoomInput = object({
 	name: NAME,
 	capacity: union([
@@ -35,18 +61,11 @@ var createRoomInput = object({
 		literal(8)
 	]),
 	botSeats: number().int().min(0).max(7),
-	difficulty: _enum([
-		"easy",
-		"normal",
-		"hard"
-	]),
+	difficulty: DIFFICULTY,
 	/** Включённые дополнения; ключи валидируются строго (белый список). */
-	modules: object({
-		continents: boolean().optional(),
-		plants: boolean().optional(),
-		fungi: boolean().optional(),
-		randomMutations: boolean().optional()
-	}).partial().default({}).optional()
+	modules: MODULES.default({}).optional(),
+	/** Целевой размер колоды на старте; хранится в settings комнаты. */
+	deckSize: number().int().min(20).max(400).optional()
 });
 var joinRoomInput = object({
 	code: CODE,
@@ -62,7 +81,35 @@ var actionInput = object({
 	token: string().min(10),
 	action: custom((v) => typeof v === "object" && v !== null && "type" in v)
 });
-var pollInput = codeTokenInput.extend({ sinceVersion: number().int().optional() });
+var pollInput = codeTokenInput.extend({
+	sinceVersion: number().int().optional(),
+	sinceChatId: number().int().optional(),
+	sinceReactionId: number().int().optional()
+});
+var roomInfoInput = codeTokenInput.extend({
+	sinceChatId: number().int().optional(),
+	sinceReactionId: number().int().optional()
+});
+var spectateInput = object({
+	code: CODE,
+	name: NAME
+});
+var spectatorPollInput = codeTokenInput.extend({
+	sinceChatId: number().int().optional(),
+	sinceReactionId: number().int().optional()
+});
+var reactionInput = codeTokenInput.extend({
+	emoji: _enum(REACTION_EMOJI),
+	kind: _enum(["reaction", "cheer"]),
+	targetSeat: number().int().min(0).max(7).nullable().optional()
+});
+var kickInput = codeTokenInput.extend({ seat: number().int().min(0).max(7) });
+var capacityInput = codeTokenInput.extend({ capacity: number().int().min(2).max(8) });
+var settingsInput = codeTokenInput.extend({ settings: roomSettingsSchema });
+var transferHostInput = codeTokenInput.extend({ seat: number().int().min(0).max(7) });
+var kickWaiterInput = codeTokenInput.extend({ index: number().int().min(0).max(99) });
+/** Верхняя граница выше лимита в 400 символов: сервер обрезает, а не ругается. */
+var chatInput = codeTokenInput.extend({ text: string().trim().min(1).max(2e3) });
 var SINGLES = [
 	["mimicry", 4],
 	["swimming", 8],
@@ -241,42 +288,49 @@ var MUTATIONS_SINGLES = [
 	["simplification", 4]
 ];
 SINGLES.reduce((n, [, c]) => n + c, 0) + DUALS.reduce((n, [, , c]) => n + c, 0);
-function buildDeck(nextId, modules) {
-	const cards = [];
-	for (const [trait, n] of SINGLES) for (let i = 0; i < n; i++) cards.push({
-		id: nextId("c"),
-		faces: [trait]
-	});
-	for (const [a, b, n] of DUALS) for (let i = 0; i < n; i++) cards.push({
-		id: nextId("c"),
-		faces: [a, b]
-	});
+/** Сколько копий карты нужно при масштабе: минимум одна на уникальную карту. */
+function scaledCount(n, scale) {
+	return Math.max(1, Math.round(n * scale));
+}
+/**
+* Состав колоды с учётом включённых дополнений: грани карты и число копий.
+* Порядок групп — как в физической колоде (база, «Континенты», «Растения»,
+* «Трава и грибы», «Случайные мутации»).
+*/
+function deckEntries(modules) {
+	const entries = [];
+	for (const [trait, n] of SINGLES) entries.push([[trait], n]);
+	for (const [a, b, n] of DUALS) entries.push([[a, b], n]);
 	if (modules?.continents) {
-		for (const [trait, n] of CONTINENTS_SINGLES) for (let i = 0; i < n; i++) cards.push({
+		for (const [trait, n] of CONTINENTS_SINGLES) entries.push([[trait], n]);
+		for (const [a, b, n] of CONTINENTS_DUALS) entries.push([[a, b], n]);
+		for (const [trait, n] of CONTINENTS_PAIRS) entries.push([[trait], n]);
+	}
+	if (modules?.plants) for (const [a, b, n] of PLANTS_DUALS) entries.push([[a, b], n]);
+	if (modules?.fungi) for (const [trait, n] of FUNGI_SINGLES) entries.push([[trait], n]);
+	if (modules?.randomMutations) for (const [trait, n] of MUTATIONS_SINGLES) entries.push([[trait], n]);
+	return entries;
+}
+/**
+* Ожидаемый размер колоды при заданном масштабе — для UI (показать число карт)
+* и для точной подгонки: scale = желаемый размер / deckSizeFor(1, modules).
+*/
+function deckSizeFor(scale, modules) {
+	return deckEntries(modules).reduce((sum, [, n]) => sum + scaledCount(n, scale), 0);
+}
+/**
+* Собрать колоду. scale < 1 уменьшает число копий (минимум 1 на уникальную
+* карту), scale > 1 — увеличивает; по умолчанию колода полного состава.
+*/
+function buildDeck(nextId, modules, scale = 1) {
+	const cards = [];
+	for (const [faces, n] of deckEntries(modules)) {
+		const count = scaledCount(n, scale);
+		for (let i = 0; i < count; i++) cards.push({
 			id: nextId("c"),
-			faces: [trait]
-		});
-		for (const [a, b, n] of CONTINENTS_DUALS) for (let i = 0; i < n; i++) cards.push({
-			id: nextId("c"),
-			faces: [a, b]
-		});
-		for (const [trait, n] of CONTINENTS_PAIRS) for (let i = 0; i < n; i++) cards.push({
-			id: nextId("c"),
-			faces: [trait]
+			faces: [...faces]
 		});
 	}
-	if (modules?.plants) for (const [a, b, n] of PLANTS_DUALS) for (let i = 0; i < n; i++) cards.push({
-		id: nextId("c"),
-		faces: [a, b]
-	});
-	if (modules?.fungi) for (const [trait, n] of FUNGI_SINGLES) for (let i = 0; i < n; i++) cards.push({
-		id: nextId("c"),
-		faces: [trait]
-	});
-	if (modules?.randomMutations) for (const [trait, n] of MUTATIONS_SINGLES) for (let i = 0; i < n; i++) cards.push({
-		id: nextId("c"),
-		faces: [trait]
-	});
 	return cards;
 }
 var FLORA = {
@@ -1658,8 +1712,10 @@ var AI_NAMES = [
 	"Геккель"
 ];
 function log(state, text, tone = "neutral") {
+	const prev = state.logSeq ?? state.log.at(-1)?.id ?? 0;
+	state.logSeq = (Number.isFinite(prev) ? prev : 0) + 1;
 	state.log.push({
-		id: state.log.length + 1,
+		id: state.logSeq,
 		text,
 		tone
 	});
@@ -1673,7 +1729,30 @@ function nid(state, prefix) {
 	state.idSeq += 1;
 	return `${prefix}${state.idSeq}`;
 }
-function createGame(playerCount, difficulty, seed = Date.now() % 1e6, seats, modules) {
+/**
+* Колода партии: полный состав либо масштабированный до deckSize.
+* Сначала число копий свойств масштабируется (минимум 1 на уникальную карту),
+* затем размер доводится точно: лишние карты убираются с конца, недостающие —
+* копии случайных карт (с новыми id; партии остаются воспроизводимыми).
+*/
+function buildScaledDeck(state, deckSize) {
+	const nextId = (prefix) => nid(state, prefix);
+	const target = deckSize && deckSize > 0 ? Math.floor(deckSize) : 0;
+	if (!target) return buildDeck(nextId, state.modules);
+	const base = deckSizeFor(1, state.modules);
+	const cards = buildDeck(nextId, state.modules, target / base);
+	while (cards.length > target) cards.pop();
+	while (cards.length < target) {
+		const src = cards[Math.floor(nextRandom(state) * cards.length)];
+		if (!src) break;
+		cards.push({
+			id: nid(state, "c"),
+			faces: [...src.faces]
+		});
+	}
+	return cards;
+}
+function createGame(playerCount, difficulty, seed = Date.now() % 1e6, seats, modules, deckSize) {
 	const names = ["Вы", ...AI_NAMES].slice(0, playerCount);
 	const state = {
 		players: (seats && seats.length === playerCount ? seats.map((seat, id) => ({
@@ -1703,6 +1782,7 @@ function createGame(playerCount, difficulty, seed = Date.now() % 1e6, seats, mod
 		lastYear: false,
 		deckEmptyAfterDraw: false,
 		log: [],
+		logSeq: 0,
 		pendingAttack: null,
 		playSeq: 0,
 		humanId: 0,
@@ -1718,7 +1798,7 @@ function createGame(playerCount, difficulty, seed = Date.now() % 1e6, seats, mod
 		paralyzed: modules?.continents ? [] : void 0,
 		turnUse: freshTurnUse()
 	};
-	state.deck = shuffled(state, buildDeck((prefix) => nid(state, prefix), state.modules));
+	state.deck = shuffled(state, buildScaledDeck(state, deckSize));
 	if (state.modules.plants) {
 		state.plants = [];
 		state.plantDeck = shuffled(state, [...plantDeckKinds()]);
@@ -2337,7 +2417,7 @@ function legalFeedActions(state, playerId) {
 				targetId: t.id
 			});
 		}
-		if (hasTrait(a, "hibernation") && !a.hibernatedLastYear && !state.lastYear && !a.hibernating && !isFed(a)) actions.push({
+		if (hasTrait(a, "hibernation") && !a.hibernatedLastYear && !state.lastYear && !a.hibernating && !isFed(a) && (used.hibernated ?? []).length === 0) actions.push({
 			type: "feedHibernate",
 			animalId: a.id
 		});
@@ -2454,7 +2534,136 @@ function migrationTargets(state, a) {
 	else if (swim) out.push("ocean");
 	return out.filter((z) => z !== from);
 }
-function defenseOptions(animal, attack) {
+/**
+* Почему конкретное действие питания недоступно игроку; null — доступно или
+* причина неизвестна (не ход игрока, ждём защиту и т.п.). Повторяет гейты
+* legalFeedActions и защитные проверки мутаторов: UI показывает причины на
+* заблокированных кнопках.
+*/
+function feedBlockReason(state, playerId, kind) {
+	if (state.phase !== "feeding" || state.pendingAttack || state.currentPlayerId !== playerId) return null;
+	if (legalFeedActions(state, playerId).some((a) => a.type === kind)) return null;
+	const p = state.players.find((x) => x.id === playerId);
+	if (!p) return null;
+	const used = state.turnUse;
+	const hibernated = used.hibernated ?? [];
+	const cont = state.modules.continents;
+	const plants = state.modules.plants ? state.plants ?? [] : [];
+	const flora = state.modules.fungi ? state.flora ?? [] : [];
+	if (state.rageTurn) {
+		if (kind === "feedHunt") return "Сейчас ход бешенства: атаковать может только бешеное животное.";
+		if (kind === "feedEndTurn") return null;
+		return "Сейчас ход бешенства — другие действия недоступны.";
+	}
+	/** Территория животного (вне «Континентов» зон нет). */
+	const zoneOf = (a) => a.zoneId ?? "laurasia";
+	const zoneUnlocked = (zone) => !cont || state.turnTerritory === void 0 || state.turnTerritory === zone;
+	/** Кормовая база доступна животному этой территории. */
+	const bankOk = (zone) => {
+		if (!zoneUnlocked(zone)) return false;
+		if (!cont) return !plants.length && state.foodBank > 0;
+		if (plants.length && zone !== "ocean") return false;
+		return (state.territoryFood?.[zone] ?? 0) > 0;
+	};
+	switch (kind) {
+		case "feedEndTurn": return null;
+		case "feedTake": {
+			if (used.foodTaken) return "В этот ход уже брали еду из кормовой базы.";
+			if (used.combatUsed) return "После охоты или пиратства красные фишки из базы брать нельзя.";
+			if (used.sheltered) return "Убежище занимает ход — еду брать нельзя.";
+			if (used.migrated) return "Ход потрачен на миграцию — еду брать нельзя.";
+			if (!p.animals.length) return "У игрока нет животных.";
+			if (plants.length && !cont) return "В этот год еда на растениях — кормовая база не действует.";
+			const hungry = p.animals.filter((a) => canReceiveFood(state, a) && !hasTrait(a, "obligateCarnivore"));
+			if (!hungry.length) return p.animals.every((a) => hasTrait(a, "obligateCarnivore")) ? "Облигатный хищник кормится только добычей." : "Все животные накормлены.";
+			if (!hungry.some((a) => bankOk(zoneOf(a)))) return "В кормовой базе этой территории нет еды.";
+			return null;
+		}
+		case "feedHunt": {
+			if (used.foodTaken) return "После взятия еды хищник не охотится.";
+			if (used.sheltered) return "Убежище занимает ход — охотиться нельзя.";
+			if (cont && used.migrated) return "Ход потрачен на миграцию — охотиться нельзя.";
+			const hunters = p.animals.filter((a) => canHuntWith(state, a));
+			if (!hunters.length) return p.animals.some(isCarnivoreLike) ? "Хищники накормлены или не могут охотиться." : "Нет голодного хищника.";
+			const ready = hunters.filter((a) => !used.carnivores.includes(a.id));
+			if (!ready.length) return "Все хищники уже атаковали в этот ход.";
+			if (!allAnimals(state).some((t) => ready.some((c) => canAttack(state, c, t)))) return "Нет добычи, доступной для атаки.";
+			return null;
+		}
+		case "feedPirate": {
+			if (used.foodTaken) return "После взятия еды пират не ворует.";
+			if (used.sheltered) return "Убежище занимает ход — пиратство недоступно.";
+			if (cont && used.migrated) return "Ход потрачен на миграцию.";
+			const pirates = p.animals.filter((a) => hasTrait(a, "piracy") && !a.hibernating && !isParalyzed(state, a.id) && !hasMark(a, "pacifism") && !hasTrait(a, "obligateCarnivore"));
+			if (!pirates.length) return "Нет животного с пиратством, которое может забрать еду.";
+			const hungry = pirates.filter((a) => !isFed(a));
+			if (!hungry.length) return "Пираты накормлены — воровать нечего.";
+			if (hungry.every((a) => used.pirates.includes(a.id))) return "Пиратство в этот ход уже использовано.";
+			if (!hungry.some((a) => !used.pirates.includes(a.id) && allAnimals(state).some((t) => t.id !== a.id && !isFed(t) && t.food > 0 && (!cont || zoneOf(t) === zoneOf(a))))) return "Нет животного с едой, у которого можно украсть.";
+			return null;
+		}
+		case "feedHibernate": {
+			if (hibernated.length) return "Спячка в этот ход уже использована.";
+			if (state.lastYear) return "В последний год спячка недоступна.";
+			const sleepers = p.animals.filter((a) => hasTrait(a, "hibernation"));
+			if (!sleepers.length) return "Нет животного со спячкой.";
+			if (sleepers.every((a) => a.hibernatedLastYear)) return "Животное уже спало в прошлом году.";
+			if (sleepers.every((a) => a.hibernating || isFed(a))) return "Все животные накормлены.";
+			return null;
+		}
+		case "feedShelter": {
+			if (!state.modules.plants) return "Модуль «Растения» не включён.";
+			if (used.foodTaken) return "Ход уже занят едой — убежище недоступно.";
+			if (used.combatUsed) return "После боя убежище недоступно.";
+			if (used.sheltered) return "Убежище в этот ход уже занято.";
+			if (used.migrated) return "Ход потрачен на миграцию.";
+			const free = plants.filter((pl) => pl.shelters > 0 && zoneUnlocked(pl.zoneId ?? "gondwana"));
+			if (!free.length) return "На растениях не осталось свободных убежищ.";
+			const who = p.animals.filter((a) => !a.hibernating && !a.sheltered);
+			if (!who.length) return "Нет животного, которому нужно убежище.";
+			if (!who.some((a) => free.some((pl) => canTakeShelterFrom(state, a, pl)))) return "Убежища остались в другой территории.";
+			return null;
+		}
+		case "feedGraze": {
+			if (used.sheltered) return "Убежище занимает ход — топтать нельзя.";
+			const grazers = p.animals.filter((a) => hasTrait(a, "grazing"));
+			if (!grazers.length) return "Нет животного с топтанием.";
+			const hungry = grazers.filter((a) => !isFed(a));
+			if (!hungry.length) return "Все топтуны накормлены.";
+			if (hungry.every((a) => used.grazers.includes(a.id))) return "Топтуны в этот ход уже топтали.";
+			const food = hungry.some((a) => {
+				const zone = zoneOf(a);
+				if (!zoneUnlocked(zone)) return false;
+				if (cont) return (state.territoryFood?.[zone] ?? 0) > 0;
+				if (plants.length) return false;
+				return state.foodBank > 0;
+			});
+			const plantFood = plants.some((pl) => pl.food > 0 && zoneUnlocked(pl.zoneId ?? "gondwana"));
+			const floraFood = flora.some((f) => f.food > 0 && zoneUnlocked(f.zoneId ?? "gondwana"));
+			if (!food && !plantFood && !floraFood) return "Нет еды, которую можно вытоптать.";
+			return null;
+		}
+		case "feedConvertFat": {
+			const fat = p.animals.filter((a) => a.fatTokens > 0);
+			if (!fat.length) return "Нет запасов жира.";
+			if (!fat.some((a) => !a.hibernating && !isFed(a))) return "Конвертировать жир может только голодное животное.";
+			return null;
+		}
+		case "feedMigrate": {
+			if (!cont) return "Миграция доступна только с дополнением «Континенты».";
+			if (used.migrated) return "Миграция в этот ход уже объявлена.";
+			const ready = p.animals.filter((a) => canMigrate(state, a));
+			if (!ready.length) return "Нет животного, готового мигрировать.";
+			if (!ready.some((a) => migrationTargets(state, a).length > 0)) return "Этому животному некуда мигрировать.";
+			return null;
+		}
+		case "feedSkip":
+			if (state.modules.plants && canStillFeedOrShelter(state, playerId)) return "Пас недоступен: есть животные, способные получить еду или убежище.";
+			return null;
+		default: return null;
+	}
+}
+function defenseOptions(state, animal, attack) {
 	if (animal.sedated || isAsleep(animal)) return [];
 	const opts = [];
 	for (const t of animal.traits) {
@@ -2462,7 +2671,10 @@ function defenseOptions(animal, attack) {
 		if (attack.ignoredTraitId && t.id === attack.ignoredTraitId) continue;
 		const kind = TRAITS[t.type].defense;
 		if (!kind || attack.usedDefenses.includes(kind)) continue;
-		if (kind === "mimicry" && attack.mimicryChain.includes(animal.id)) continue;
+		if (kind === "mimicry") {
+			if (attack.mimicryChain.includes(animal.id)) continue;
+			if (mimicryTargets(state, attack, animal).length === 0) continue;
+		}
 		if (!opts.includes(kind)) opts.push(kind);
 	}
 	return opts;
@@ -2497,7 +2709,7 @@ function legalDefenseActions(state, playerId) {
 		type: "chooseDefense",
 		kind: "none"
 	}];
-	const opts = defenseOptions(prey, atk);
+	const opts = defenseOptions(state, prey, atk);
 	if (opts.includes("running")) actions.push({
 		type: "chooseDefense",
 		kind: "running"
@@ -2846,6 +3058,10 @@ function playPair(state, cardId, face, aId, bId) {
 function passDev(state) {
 	const p = player(state, state.currentPlayerId);
 	p.passedDev = true;
+	ev(state, {
+		kind: "passed",
+		playerId: p.id
+	});
 	log(state, `${p.name} пасует.`);
 	advanceDev(state);
 }
@@ -3158,9 +3374,7 @@ function playPlantPair(state, cardId, face, aId, bId) {
 function advanceDev(state) {
 	if (state.modules.randomMutations) {
 		for (const p of state.players) if (!(p.blindDeck ?? []).length) p.passedDev = true;
-	} else if (state.players.every((p) => p.passedDev || p.hand.length === 0)) {
-		for (const p of state.players) if (p.hand.length === 0) p.passedDev = true;
-	}
+	} else for (const p of state.players) if (p.hand.length === 0) p.passedDev = true;
 	if (state.players.every((p) => p.passedDev)) {
 		revealAndStartFood(state);
 		return;
@@ -3313,7 +3527,8 @@ function freshTurnUse() {
 		foodTaken: false,
 		combatUsed: false,
 		migrated: false,
-		sheltered: false
+		sheltered: false,
+		hibernated: []
 	};
 }
 /** Кормовые базы «Континентов» по официальной таблице (игроки → Лавразия/Гондвана/Океан). */
@@ -3589,7 +3804,7 @@ function feedTakePlant(state, animalId, plantId) {
 			counter: true
 		});
 		log(state, `Хищное растение контратакует ${p.name}!`, "hunt");
-		if (defenseOptions(a, atk).length === 0) resolveNoDefense(state);
+		if (defenseOptions(state, a, atk).length === 0) resolveNoDefense(state);
 		return;
 	}
 	state.turnUse.foodTaken = true;
@@ -3799,7 +4014,7 @@ function feedPlantAttack(state, plantId, preyId) {
 		counter: false
 	});
 	log(state, `${p.name} направляет хищное растение на животное ${ownerOf(state, prey.id).name}!`, "hunt");
-	if (defenseOptions(prey, atk).length === 0) resolveNoDefense(state);
+	if (defenseOptions(state, prey, atk).length === 0) resolveNoDefense(state);
 }
 /** «Растения»: перекинуть фишку с растения-хозяина на растение-паразит. */
 function feedParasitize(state, hostId, parasiteId) {
@@ -3841,7 +4056,7 @@ function feedHunt(state, carnivoreId, preyId) {
 		};
 		state.pendingAttack = atk;
 		log(state, `Бешеное животное игрока ${p.name} атакует!`, "hunt");
-		if (defenseOptions(prey, atk).length === 0) {
+		if (defenseOptions(state, prey, atk).length === 0) {
 			resolveNoDefense(state);
 			return;
 		}
@@ -3865,7 +4080,7 @@ function feedHunt(state, carnivoreId, preyId) {
 		ignoredTraitId: hazeIgnoreTraitId(state, carnivore, prey)
 	};
 	state.pendingAttack = atk;
-	if (defenseOptions(prey, atk).length === 0) {
+	if (defenseOptions(state, prey, atk).length === 0) {
 		resolveNoDefense(state);
 		return;
 	}
@@ -3892,13 +4107,18 @@ function feedPirate(state, pirateId, targetId) {
 	log(state, `${p.name} пиратствует у ${ownerOf(state, target.id).name}.`, "hunt");
 	maybeEndTurn(state);
 }
+/** Спячка — действие животного: одна за ход, ход при этом не передаётся. */
 function feedHibernate(state, animalId) {
 	const p = player(state, state.currentPlayerId);
 	spendTurn(state, p.id);
 	const a = mustFind(state, animalId);
+	if ((state.turnUse.hibernated ?? []).length > 0) return;
+	if (a.hibernatedLastYear || state.lastYear || a.hibernating || isFed(a)) return;
+	if (!hasTrait(a, "hibernation")) return;
+	state.turnUse.hibernated.push(animalId);
 	a.hibernating = true;
 	log(state, `${p.name} использует спячку.`, "good");
-	advanceFeed(state);
+	maybeEndTurn(state);
 }
 /** «Закончить ход»: передача хода следующему игроку без паса до конца фазы. */
 function feedEndTurn(state) {
@@ -4105,6 +4325,10 @@ function moveAnimalToZoneHuman(state, animalId, zone) {
 function skipFeed(state) {
 	const p = player(state, state.currentPlayerId);
 	p.passedFeed = true;
+	ev(state, {
+		kind: "passed",
+		playerId: p.id
+	});
 	log(state, `${p.name} пасует.`);
 	advanceFeed(state);
 }
@@ -4138,7 +4362,7 @@ function applyDefense(state, action) {
 			return;
 		}
 		log(state, `Быстрое: выпало ${roll} — хищник догнал.`, "bad");
-		if (defenseOptions(prey, atk).length === 0) resolveNoDefense(state);
+		if (defenseOptions(state, prey, atk).length === 0) resolveNoDefense(state);
 		return;
 	}
 	if (action.kind === "mimicry" && action.mimicryTargetId) {
@@ -4153,7 +4377,7 @@ function applyDefense(state, action) {
 			preyId: atk.preyId
 		});
 		log(state, "Мимикрия перенаправляет атаку.");
-		if (defenseOptions(mustFind(state, atk.preyId), atk).length === 0) resolveNoDefense(state);
+		if (defenseOptions(state, mustFind(state, atk.preyId), atk).length === 0) resolveNoDefense(state);
 		return;
 	}
 	if (action.kind === "tailLoss") {
@@ -4230,7 +4454,7 @@ function applyPlantDefense(state, action) {
 			return;
 		}
 		log(state, `Быстрое: выпало ${roll} — растение настигло.`, "bad");
-		if (defenseOptions(prey, atk).length === 0) resolveNoDefense(state);
+		if (defenseOptions(state, prey, atk).length === 0) resolveNoDefense(state);
 		return;
 	}
 	if (action.kind === "mimicry" && action.mimicryTargetId) {
@@ -4245,7 +4469,7 @@ function applyPlantDefense(state, action) {
 			preyId: atk.preyId
 		});
 		log(state, "Мимикрия перенаправляет атаку растения.");
-		if (defenseOptions(mustFind(state, atk.preyId), atk).length === 0) resolveNoDefense(state);
+		if (defenseOptions(state, mustFind(state, atk.preyId), atk).length === 0) resolveNoDefense(state);
 		return;
 	}
 	if (action.kind === "tailLoss") {
@@ -4330,8 +4554,20 @@ function endFeeding(state) {
 		const a = findAnimal(state, id);
 		if (!a) continue;
 		const p = ownerOf(state, id);
-		log(state, a.poisoned ? `Хищник ${p.name} погибает от яда.` : hasMark(a, "poison") && !hasMark(a, "antidote") ? `Животное ${p.name} погибает от метки «Яд».` : `Животное ${p.name} вымирает — не накормлено.`, "bad");
+		const cause = deathCauseOf(a);
+		ev(state, {
+			kind: "animalDied",
+			animalId: id,
+			cause
+		});
+		log(state, cause === "poison" ? `Хищник ${p.name} погибает от яда.` : cause === "poisonMark" ? `Животное ${p.name} погибает от метки «Яд».` : `Животное ${p.name} вымирает — не накормлено.`, "bad");
 	}
+}
+/** Почему животное погибает в вымирание. */
+function deathCauseOf(a) {
+	if (a.poisoned && !hasMark(a, "antidote")) return "poison";
+	if (hasMark(a, "poison") && !hasMark(a, "antidote")) return "poisonMark";
+	return "starved";
 }
 /**
 * Подъём «неоплазии» в начале определения кормовой базы: карта поднимается на
@@ -4368,11 +4604,6 @@ function continueAfterExtinction(state) {
 	for (const id of state.extinctionDeaths) {
 		const a = findAnimal(state, id);
 		if (!a) continue;
-		ev(state, {
-			kind: "animalDied",
-			animalId: id,
-			cause: a.poisoned ? "poison" : "starved"
-		});
 		discardAnimal(state, a);
 	}
 	state.extinctionDeaths = [];
@@ -4773,13 +5004,21 @@ function finishGame(state) {
 		});
 		if (total >= best.total) {
 			state.winnerIds = [-1];
-			log(state, `Победа: Трава и грибы (${total} очков).`, "good");
 			state.phase = "gameOver";
+			log(state, `Победа: Трава и грибы (${total} очков).`, "good");
+			ev(state, {
+				kind: "gameFinished",
+				winnerIds: state.winnerIds
+			});
 			return;
 		}
 	}
 	state.phase = "gameOver";
 	log(state, winners.length > 1 ? `Ничья: ${winners.map((w) => w.name).join(", ")}.` : `Победа: ${winners[0].name} (${winners[0].total} очков).`, "good");
+	ev(state, {
+		kind: "gameFinished",
+		winnerIds: state.winnerIds
+	});
 }
 function currentActor(state) {
 	if (state.phase === "gameOver") return null;
@@ -5025,4 +5264,4 @@ function pickFeed(state, acts) {
 	return best;
 }
 //#endregion
-export { legalFeedActions as A, foodNeeded as C, joinRoomInput as D, isFed as E, player as M, pollInput as N, legalDefenseActions as O, speciesNeed as P, findAnimal as S, isCarnivoreLike as T, chooseAIAction as _, MUTATIONS_TRAIT_IDS as a, createRoomInput as b, PLANTS_TRAIT_IDS as c, actionInput as d, applyAction as f, canRageAttack as g, canPlantAttackTarget as h, MARKS as i, liveScore as j, legalDevActions as k, TRAITS as l, canAttack as m, FLORA as n, PACE as o, botsInput as p, FUNGI_TRAIT_IDS as r, PLANTS as s, CONTINENTS_TRAIT_IDS as t, TRAIT_ORDER as u, codeTokenInput as v, hasTrait as w, currentActor as x, createGame as y };
+export { isCarnivoreLike as A, pollInput as B, createRoomInput as C, findAnimal as D, feedBlockReason as E, legalDefenseActions as F, spectateInput as G, roomInfoInput as H, legalDevActions as I, spectatorPollInput as K, legalFeedActions as L, joinRoomInput as M, kickInput as N, foodNeeded as O, kickWaiterInput as P, liveScore as R, createGame as S, deckSizeFor as T, settingsInput as U, reactionInput as V, speciesNeed as W, canRageAttack as _, MUTATIONS_TRAIT_IDS as a, chooseAIAction as b, PLANTS_TRAIT_IDS as c, TRAIT_ORDER as d, actionInput as f, canPlantAttackTarget as g, canAttack as h, MARKS as i, isFed as j, hasTrait as k, REACTION_EMOJI as l, botsInput as m, FLORA as n, PACE as o, applyAction as p, transferHostInput as q, FUNGI_TRAIT_IDS as r, PLANTS as s, CONTINENTS_TRAIT_IDS as t, TRAITS as u, capacityInput as v, currentActor as w, codeTokenInput as x, chatInput as y, player as z };

@@ -119,56 +119,63 @@ export function continentsDeckSize(): number {
 
 export const BASE_DECK_SIZE = DECK_SIZE;
 
-export function buildDeck(nextId: (prefix: string) => string, modules?: Partial<Record<ModuleId, boolean>>): Card[] {
-  const cards: Card[] = [];
-  for (const [trait, n] of SINGLES) {
-    for (let i = 0; i < n; i++) {
-      cards.push({ id: nextId("c"), faces: [trait] });
-    }
-  }
-  for (const [a, b, n] of DUALS) {
-    for (let i = 0; i < n; i++) {
-      cards.push({ id: nextId("c"), faces: [a, b] });
-    }
-  }
+/** Сколько копий карты нужно при масштабе: минимум одна на уникальную карту. */
+function scaledCount(n: number, scale: number): number {
+  return Math.max(1, Math.round(n * scale));
+}
+
+/**
+ * Состав колоды с учётом включённых дополнений: грани карты и число копий.
+ * Порядок групп — как в физической колоде (база, «Континенты», «Растения»,
+ * «Трава и грибы», «Случайные мутации»).
+ */
+function deckEntries(
+  modules?: Partial<Record<ModuleId, boolean>>,
+): Array<[TraitId[], number]> {
+  const entries: Array<[TraitId[], number]> = [];
+  for (const [trait, n] of SINGLES) entries.push([[trait], n]);
+  for (const [a, b, n] of DUALS) entries.push([[a, b], n]);
   if (modules?.continents) {
-    for (const [trait, n] of CONTINENTS_SINGLES) {
-      for (let i = 0; i < n; i++) {
-        cards.push({ id: nextId("c"), faces: [trait] });
-      }
-    }
+    for (const [trait, n] of CONTINENTS_SINGLES) entries.push([[trait], n]);
     // Карты с гранью «водоплавающее»: игрок выбирает одну из двух граней.
-    for (const [a, b, n] of CONTINENTS_DUALS) {
-      for (let i = 0; i < n; i++) {
-        cards.push({ id: nextId("c"), faces: [a, b] });
-      }
-    }
-    for (const [trait, n] of CONTINENTS_PAIRS) {
-      for (let i = 0; i < n; i++) {
-        cards.push({ id: nextId("c"), faces: [trait] });
-      }
-    }
+    for (const [a, b, n] of CONTINENTS_DUALS) entries.push([[a, b], n]);
+    for (const [trait, n] of CONTINENTS_PAIRS) entries.push([[trait], n]);
   }
   if (modules?.plants) {
     // Двусторонние карты: свойство растения либо свойство животного.
-    for (const [a, b, n] of PLANTS_DUALS) {
-      for (let i = 0; i < n; i++) {
-        cards.push({ id: nextId("c"), faces: [a, b] });
-      }
-    }
+    for (const [a, b, n] of PLANTS_DUALS) entries.push([[a, b], n]);
   }
   if (modules?.fungi) {
-    for (const [trait, n] of FUNGI_SINGLES) {
-      for (let i = 0; i < n; i++) {
-        cards.push({ id: nextId("c"), faces: [trait] });
-      }
-    }
+    for (const [trait, n] of FUNGI_SINGLES) entries.push([[trait], n]);
   }
   if (modules?.randomMutations) {
-    for (const [trait, n] of MUTATIONS_SINGLES) {
-      for (let i = 0; i < n; i++) {
-        cards.push({ id: nextId("c"), faces: [trait] });
-      }
+    for (const [trait, n] of MUTATIONS_SINGLES) entries.push([[trait], n]);
+  }
+  return entries;
+}
+
+/**
+ * Ожидаемый размер колоды при заданном масштабе — для UI (показать число карт)
+ * и для точной подгонки: scale = желаемый размер / deckSizeFor(1, modules).
+ */
+export function deckSizeFor(scale: number, modules?: Partial<Record<ModuleId, boolean>>): number {
+  return deckEntries(modules).reduce((sum, [, n]) => sum + scaledCount(n, scale), 0);
+}
+
+/**
+ * Собрать колоду. scale < 1 уменьшает число копий (минимум 1 на уникальную
+ * карту), scale > 1 — увеличивает; по умолчанию колода полного состава.
+ */
+export function buildDeck(
+  nextId: (prefix: string) => string,
+  modules?: Partial<Record<ModuleId, boolean>>,
+  scale = 1,
+): Card[] {
+  const cards: Card[] = [];
+  for (const [faces, n] of deckEntries(modules)) {
+    const count = scaledCount(n, scale);
+    for (let i = 0; i < count; i++) {
+      cards.push({ id: nextId("c"), faces: [...faces] });
     }
   }
   return cards;

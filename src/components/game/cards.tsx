@@ -1,4 +1,6 @@
 import { memo } from "react";
+import type { DraggableSyntheticListeners } from "@dnd-kit/core";
+import { Crosshair } from "lucide-react";
 import { TRAITS } from "@/game/traits";
 import type { Animal, Card, TraitId } from "@/game/types";
 import { hasTrait, isCarnivoreLike, isFed, speciesNeed } from "@/game/queries";
@@ -14,6 +16,29 @@ import { useTraitTip } from "./use-trait-tip";
  * базы, синяя — от свойств (охота, сотрудничество, пиратство, падальщик,
  * хвост, жир), поэтому blueFood рисуется отдельными синими жетонами.
  */
+/**
+ * Пустое «гнездо» под фишку еды: тот же изометрический силуэт, что у FoodCube,
+ * но прозрачный и пунктирный. Так видно, что сюда ляжет кубик еды, а не просто
+ * кружок нормы.
+ */
+const FoodSlot = memo(function FoodSlot() {
+  return (
+    <svg viewBox="0 0 20 21" className="size-3.5 shrink-0" aria-hidden>
+      <g
+        fill="none"
+        stroke="color-mix(in oklab, var(--color-ink) 45%, transparent)"
+        strokeWidth="1"
+        strokeDasharray="2.4 1.7"
+        strokeLinejoin="round"
+      >
+        <polygon points="1,6.2 10,11.4 10,20.6 1,15.4" />
+        <polygon points="19,6.2 10,11.4 10,20.6 19,15.4" />
+        <polygon points="10,1 19,6.2 10,11.4 1,6.2" />
+      </g>
+    </svg>
+  );
+});
+
 export const FoodDots = memo(function FoodDots({ animal }: { animal: Animal }) {
   const need = speciesNeed(animal);
   const blue = Math.min(animal.blueFood, animal.food);
@@ -26,7 +51,7 @@ export const FoodDots = memo(function FoodDots({ animal }: { animal: Animal }) {
         animal.fatTokens > 0 ? ` · жир ${animal.fatTokens}` : ""
       }`}
     >
-      <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center gap-1">
         {Array.from({ length: red }).map((_, i) => (
           <FoodCube key={`r${i}`} tone="red" title="Красная фишка" className="token-pop size-3.5" />
         ))}
@@ -34,7 +59,7 @@ export const FoodDots = memo(function FoodDots({ animal }: { animal: Animal }) {
           <FoodCube key={`b${i}`} tone="blue" title="Синяя фишка" className="token-pop size-3.5" />
         ))}
         {Array.from({ length: empty }).map((_, i) => (
-          <span key={`e${i}`} className="inline-block size-3.5 rounded-full border border-ink/40 bg-parchment-2" />
+          <FoodSlot key={`e${i}`} />
         ))}
         {Array.from({ length: animal.fatTokens }).map((_, i) => (
           <FoodCube key={`f${i}`} tone="yellow" title="Жир" className="token-pop size-3.5" />
@@ -160,6 +185,9 @@ export const TraitChip = memo(function TraitChip({
  * Карточка животного. Клик обрабатывается делегированием на контейнере
  * (data-animal-id), поэтому компонент можно мемоизировать: он перерисовывается
  * только при смене своих примитивных пропсов или самого объекта животного.
+ *
+ * Перетаскивание — снаружи (@dnd-kit): сюда приходят ref и слушатели датчиков,
+ * компонент остаётся презентационным и про библиотеку не знает.
  */
 export const AnimalCard = memo(function AnimalCard({
   animal,
@@ -169,14 +197,15 @@ export const AnimalCard = memo(function AnimalCard({
   selected,
   dimmed,
   highlight,
+  danger,
   dying,
   freshSince,
   draggable,
+  dragging,
   dropTarget,
-  onDragStartCard,
-  onDragOverCard,
-  onDropCard,
-  onDragEndCard,
+  insertSide,
+  dragRef,
+  dragListeners,
 }: {
   animal: Animal;
   name?: string;
@@ -187,40 +216,73 @@ export const AnimalCard = memo(function AnimalCard({
   selected?: boolean;
   dimmed?: boolean;
   highlight?: boolean;
+  /** Цель атаки/пиратства: красная рамка с трещинами, лёгкая анимация слома. */
+  danger?: boolean;
   /** Животное погибнет в текущей стадии вымирания. */
   dying?: boolean;
   /** Свойства с playSeq больше этого значения вложены в текущем круге развития. */
   freshSince?: number;
-  /** Свой животное можно перетаскивать (менять порядок, позже — зоны «Континентов»). */
+  /** Своё животное можно перетаскивать — только в свой ход. */
   draggable?: boolean;
+  /** Зверя сейчас тащат: источник приглушён, но место в ряду остаётся видимым. */
+  dragging?: boolean;
   dropTarget?: boolean;
-  onDragStartCard?: (e: React.DragEvent) => void;
-  onDragOverCard?: (e: React.DragEvent) => void;
-  onDropCard?: () => void;
-  onDragEndCard?: () => void;
+  /** Куда встанет тащимое животное: полоса слева (до цели) или справа (после). */
+  insertSide?: "before" | "after";
+  /** ref и слушатели датчиков @dnd-kit (мыши/пальца). */
+  dragRef?: (el: HTMLDivElement | null) => void;
+  dragListeners?: DraggableSyntheticListeners;
 }) {
   const fed = isFed(animal);
   // Много свойств — карточка растёт в ширину, а не только в высоту.
   const width = 168 + Math.min(Math.max(animal.traits.length - 3, 0), 3) * 38;
   return (
     <div
+      ref={dragRef}
+      {...dragListeners}
+      // Нативный HTML5-драг картинок/текста внутри карточки мешал бы датчикам.
+      onDragStartCapture={(e) => e.preventDefault()}
       data-animal-id={animal.id}
-      draggable={draggable || undefined}
-      onDragStart={onDragStartCard}
-      onDragOver={onDragOverCard}
-      onDrop={onDropCard}
-      onDragEnd={onDragEndCard}
       style={{ width }}
       className={cn(
-        "animal-card anim-card-in relative shrink-0 cursor-pointer rounded-[var(--radius-lg)] border bg-parchment p-3 text-left text-ink shadow-[var(--shadow-card)] transition-[transform,border-color,opacity,box-shadow] duration-[var(--motion-fast)] ease-[var(--ease-out)]",
-        selected ? "border-clay ring-2 ring-clay/40" : "border-ink/10",
-        highlight ? "ring-2 ring-accent" : "",
+        "animal-card anim-card-in relative shrink-0 rounded-[var(--radius-lg)] border border-ink/10 bg-parchment p-3 text-left text-ink shadow-[var(--shadow-card)] transition-[transform,opacity] duration-[var(--motion-fast)] ease-[var(--ease-out)]",
+        draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+        // Единый признак состояния — одно кольцо. Приоритет:
+        // цель под прицелом > выбрано > обычное; цвет рамки не меняем.
+        danger
+          ? "target-marked border-danger ring-[3px] ring-danger"
+          : selected
+            ? "evo-picked"
+            : highlight
+              ? "ring-2 ring-accent"
+              : "",
         dimmed ? "opacity-45" : "",
         dying ? "dying-pulse border-danger/60" : "",
         dropTarget ? "border-accent ring-2 ring-accent/60" : "",
+        dragging ? "opacity-40" : "",
         "hover:-translate-y-0.5",
       )}
     >
+      {/* Куда встанет тащимое животное: вертикальная полоса у края карточки-цели. */}
+      {insertSide ? (
+        <span
+          aria-hidden
+          data-insert-side={insertSide}
+          className={cn(
+            "pointer-events-none absolute bottom-1 top-1 w-1.5 rounded-full bg-accent shadow-[0_0_6px_var(--color-accent)]",
+            insertSide === "before" ? "-left-2" : "-right-2",
+          )}
+        />
+      ) : null}
+      {/* Метка цели: прицел в углу карточки — видно, кого можно атаковать. */}
+      {danger ? (
+        <span
+          aria-hidden
+          className="target-badge pointer-events-none absolute -right-2 -top-2 grid size-6 place-items-center rounded-full border border-danger bg-danger text-parchment shadow-[var(--shadow-card)]"
+        >
+          <Crosshair className="size-3.5" />
+        </span>
+      ) : null}
       {/* Шапка переносится при нехватке места: название усекается, бейджи
           (численность, убежище, сон, метки) уходят на вторую строку, а не
           выпадают за край карточки. */}
@@ -319,8 +381,23 @@ export const AnimalCard = memo(function AnimalCard({
  * в настольной игре: на узком экране животные стоят столбиком, поэтому плашка
  * становится горизонтальной полосой между ними, а на широком — вертикальной
  * карточкой в ряду. На плашке рисуется арт свойства и цвет своей пары.
+ * Состояния — как у карт: одно кольцо на выбор, приглушение прозрачностью.
  */
-export function PairPlate({ type, color, note }: { type: TraitId; color?: string; note?: string }) {
+export function PairPlate({
+  type,
+  color,
+  note,
+  selected,
+  highlight,
+  dimmed,
+}: {
+  type: TraitId;
+  color?: string;
+  note?: string;
+  selected?: boolean;
+  highlight?: boolean;
+  dimmed?: boolean;
+}) {
   const def = TRAITS[type];
   const dark = DARK_ART.has(type);
   const tip = useTraitTip({ isolateClick: true });
@@ -333,7 +410,11 @@ export function PairPlate({ type, color, note }: { type: TraitId; color?: string
       data-trait-chip
       title={`${def.name}${note ? ` · ${note}` : ""} — ${def.description}`}
       style={color ? { borderColor: color, backgroundColor: `${color}14` } : undefined}
-      className="relative flex w-full shrink-0 cursor-help items-center gap-2 self-center rounded-[var(--radius-sm)] border border-dashed border-ink/30 bg-parchment-2/80 px-2 py-1 text-ink shadow-[var(--shadow-card)] sm:w-[58px] sm:flex-col sm:justify-center sm:gap-1 sm:px-1 sm:py-2"
+      className={cn(
+        "relative flex w-full shrink-0 cursor-help items-center gap-2 self-center rounded-[var(--radius-sm)] border border-dashed border-ink/30 bg-parchment-2/80 px-2 py-1 text-ink shadow-[var(--shadow-card)] sm:w-[58px] sm:flex-col sm:justify-center sm:gap-1 sm:px-1 sm:py-2",
+        selected ? "evo-picked-flat" : highlight ? "ring-2 ring-accent" : "",
+        dimmed ? "opacity-45" : "",
+      )}
     >
       {TRAIT_ART[type] ? (
         <img
@@ -382,13 +463,22 @@ const HandFace = memo(function HandFace({
   divided,
   active,
   disabled,
+  dimmed,
+  blocked,
   onSelect,
+  onBlocked,
 }: {
   face: TraitId;
   divided: boolean;
   active?: boolean;
   disabled?: boolean;
+  /** У игрока нет животных: низ карты слегка сереет, пока не сыграна карта. */
+  dimmed?: boolean;
+  /** Грань недоступна: легального действия для неё сейчас нет. */
+  blocked?: boolean;
   onSelect: () => void;
+  /** Клик по недоступной грани: звук отказа и подсказка, без выбора. */
+  onBlocked?: () => void;
 }) {
   const def = TRAITS[face];
   const dark = DARK_ART.has(face);
@@ -403,11 +493,23 @@ const HandFace = memo(function HandFace({
         {...tip.triggerProps}
         type="button"
         disabled={disabled}
-        onClick={() => onSelect()}
+        onClick={(e) => {
+          if (blocked) {
+            // Отказ звучит сам (треск): щелчок дока здесь не нужен.
+            e.stopPropagation();
+            onBlocked?.();
+            return;
+          }
+          onSelect();
+        }}
+        aria-disabled={blocked || undefined}
         className={cn(
-          "flex min-h-0 flex-1 flex-col items-stretch text-left transition-colors duration-[var(--motion-fast)] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
+          "flex min-h-0 flex-1 flex-col items-stretch text-left outline-none transition-colors duration-[var(--motion-fast)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
           divided ? "border-b border-dashed border-ink/15" : "",
-          active ? "ring-2 ring-inset ring-accent/70" : "hover:bg-ink/5",
+          // Одно кольцо на состояние: выбранная грань — акцент, приглушение —
+          // прозрачностью (без второй заливки и рамки).
+          active ? "evo-face-picked" : "hover:bg-ink/5",
+          dimmed && "opacity-55",
         )}
       >
         <span className={cn("relative block min-h-0 w-full flex-1 overflow-hidden", dark && "bg-ink")}>
@@ -442,26 +544,57 @@ const HandFace = memo(function HandFace({
   );
 });
 
-/** Карта руки: кнопка «Животное» плюс по кнопке на каждое свойство грани. */
+/**
+ * Карта руки: кнопка «Животное» плюс по кнопке на каждое свойство грани.
+ * Перетаскивается целиком (карта в руке — один объект), но клики по кнопкам
+ * остаются: датчики @dnd-kit включаются только после порога движения.
+ */
 export function HandCard({
   card,
   selected,
   selectedFace,
   onSelect,
+  onBlockedFace,
+  blockedFace,
   disabled,
+  noAnimals,
+  dragRef,
+  dragListeners,
+  dragging,
 }: {
   card: Card;
   selected?: boolean;
   selectedFace?: number | null;
   onSelect: (face: number | "animal") => void;
+  /** Клик по недоступной грани (её нельзя разыграть прямо сейчас). */
+  onBlockedFace?: (face: number) => void;
+  /** Какие грани недоступны: источник правды — легальные действия движка. */
+  blockedFace?: (face: number) => boolean;
   disabled?: boolean;
+  /** У игрока нет животных: низ карты сереет, а «Животное» подсвечивается —
+   *  первым делом нужно выложить животное, свойства без него бессмысленны. */
+  noAnimals?: boolean;
+  /** ref и слушатели @dnd-kit: карта едет мышью или пальцем в зону/на животное. */
+  dragRef?: (el: HTMLDivElement | null) => void;
+  dragListeners?: DraggableSyntheticListeners;
+  /** Карту сейчас тащат: в руке она приглушена, «призрак» едет под курсором. */
+  dragging?: boolean;
 }) {
+  // Кольцо карты показываем только когда выбран сам «низ» карты; выбранная
+  // грань помечается своим кольцом — на карте не сходятся два выделения.
+  const cardPicked = Boolean(selected) && (selectedFace === null || selectedFace === undefined);
   return (
     <div
+      ref={dragRef}
+      {...dragListeners}
+      // Нативный HTML5-драг картинок внутри карты перебивал бы датчики dnd-kit.
+      onDragStartCapture={(e) => e.preventDefault()}
+      data-card-id={card.id}
       className={cn(
-        "relative flex h-[200px] w-[124px] shrink-0 flex-col overflow-hidden rounded-[var(--radius-md)] border bg-parchment text-ink shadow-[var(--shadow-card)]",
-        selected ? "border-clay ring-2 ring-clay/40" : "border-ink/12",
-        disabled ? "opacity-50" : "",
+        "relative flex h-[200px] w-[124px] shrink-0 flex-col overflow-hidden rounded-[var(--radius-md)] border border-ink/12 bg-parchment text-ink shadow-[var(--shadow-card)]",
+        cardPicked ? "evo-picked" : "",
+        disabled ? "opacity-50" : "cursor-grab active:cursor-grabbing",
+        dragging ? "opacity-40" : "",
       )}
     >
       <button
@@ -469,8 +602,10 @@ export function HandCard({
         disabled={disabled}
         onClick={() => onSelect("animal")}
         className={cn(
-          "flex h-8 items-center justify-center border-b border-ink/10 text-[10px] font-medium uppercase tracking-wider",
-          selected && selectedFace === null ? "bg-ink text-parchment" : "bg-parchment-2/60 text-ink-soft hover:bg-parchment-2",
+          // h-11: тап-таргет 44px — «Животное» первый ход партии, его жмут пальцем.
+          "flex h-11 items-center justify-center border-b border-ink/10 text-[10px] font-medium uppercase tracking-wider",
+          cardPicked ? "bg-ink text-parchment" : "bg-parchment-2/60 text-ink-soft hover:bg-parchment-2",
+          noAnimals && !selected && "bg-clay/20 text-ink ring-1 ring-inset ring-clay/50",
         )}
       >
         Животное
@@ -481,10 +616,62 @@ export function HandCard({
           face={face}
           divided={i === 0 && card.faces.length > 1}
           active={selected && selectedFace === i}
+          blocked={blockedFace?.(i)}
+          onBlocked={() => onBlockedFace?.(i)}
           disabled={disabled}
+          dimmed={noAnimals && !selected}
           onSelect={() => onSelect(i)}
         />
       ))}
+    </div>
+  );
+}
+
+/**
+ * «Призрак» карты для DragOverlay: те же грани, но без кнопок и обработчиков —
+ * в оверлее карта едет под курсором и не должна ловить клики и фокус.
+ */
+export function CardPreview({ card }: { card: Card }) {
+  return (
+    <div
+      aria-hidden
+      className="flex h-[200px] w-[124px] shrink-0 flex-col overflow-hidden rounded-[var(--radius-md)] border border-ink/12 bg-parchment text-ink shadow-[var(--shadow-card)]"
+    >
+      <span className="flex h-8 items-center justify-center border-b border-ink/10 bg-parchment-2/70 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
+        Карта
+      </span>
+      {card.faces.map((face, i) => {
+        const def = TRAITS[face];
+        const dark = DARK_ART.has(face);
+        return (
+          <span
+            key={`${card.id}-${face}-${i}`}
+            className={cn("flex min-h-0 flex-1 flex-col", i === 0 && card.faces.length > 1 && "border-b border-dashed border-ink/15")}
+          >
+            <span className={cn("relative block min-h-0 w-full flex-1 overflow-hidden", dark && "bg-ink")}>
+              {TRAIT_ART[face] ? (
+                <img
+                  src={TRAIT_ART[face]}
+                  alt=""
+                  loading="lazy"
+                  className={cn(
+                    "absolute inset-0 h-full w-full",
+                    dark ? "scale-[0.86] object-contain" : "object-cover object-[50%_28%]",
+                  )}
+                />
+              ) : (
+                <span className="absolute inset-0 flex items-center justify-center bg-parchment-2">
+                  <TraitGlyph id={face} className="size-10 text-ink-soft" />
+                </span>
+              )}
+            </span>
+            <span className="flex items-center gap-1 px-2 pb-1.5 pt-1.5 text-[11px] font-semibold leading-tight">
+              <TraitGlyph id={face} className="size-3.5 shrink-0" />
+              <span className="truncate">{def.name}</span>
+            </span>
+          </span>
+        );
+      })}
     </div>
   );
 }

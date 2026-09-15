@@ -9,11 +9,16 @@ import type { GameEvent, GameState, TraitId } from "../../game/types.ts";
 /** Обезличенный тип для чужих закрытых свойств: UI в режиме «рубашка» его не читает. */
 const REDACTED: TraitId = "swimming";
 
-function redactEvents(events: GameEvent[], seat: number, full: GameState): GameEvent[] {
+/**
+ * Обезличить скрытые размещения свойств в чужом событии. Если владелец
+ * животного не найден (оно уже погибло), событие тоже обезличивается —
+ * безопаснее показать «рубашку», чем раскрыть тип.
+ */
+export function redactEvents(events: GameEvent[], seat: number, full: GameState): GameEvent[] {
   return events.map((e) => {
     if (e.kind !== "traitPlaced" || !e.hidden) return e;
     const owner = full.players.find((p) => p.animals.some((a) => a.id === e.animalId));
-    if (!owner || owner.id === seat) return e;
+    if (owner && owner.id === seat) return e;
     return { ...e, type: REDACTED };
   });
 }

@@ -1,14 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { applyAction, createGame, legalDefenseActions, legalDevActions, legalFeedActions } from "./engine.ts";
+import { applyAction, createGame, feedBlockReason, legalDefenseActions, legalDevActions, legalFeedActions } from "./engine.ts";
 import { chooseAIAction } from "./ai.ts";
-import { buildDeck, DECK_SIZE } from "./deck.ts";
+import { buildDeck, deckSizeFor, DECK_SIZE } from "./deck.ts";
 import { FLORA, floraDeckSize, fullMarksPool } from "./flora.ts";
 import { PLANTS } from "./plants.ts";
 import { nextRandom } from "./rng.ts";
-import { allAnimals, canAttack, foodNeeded, hasTrait } from "./queries.ts";
+import { allAnimals, canAttack, canReceiveFood, foodNeeded, hasTrait } from "./queries.ts";
 import { TRAITS } from "./traits.ts";
-import type { Animal, FloraCard, FloraKind, GameAction, GameState, Plant, PlantKind, TraitId, TraitInstance } from "./types.ts";
+import type { Animal, FloraCard, FloraKind, GameAction, GameEvent, GameState, Plant, PlantKind, TraitId, TraitInstance } from "./types.ts";
 
 let idc = 0;
 function nid(p: string) {
@@ -249,7 +249,7 @@ describe("feeding", () => {
 });
 
 describe("extinction staging", () => {
-  it("shows deaths first, removes them on continueExtinction", () => {
+  it("убирает тела на continueExtinction, не объявляя смерть повторно", () => {
     const starver = mkAnimal("dead", 0, []);
     const survivor = mkAnimal("alive", 0, []);
     survivor.food = 1;
@@ -262,7 +262,9 @@ describe("extinction staging", () => {
     assert.equal(next.players[0]!.animals.some((a) => a.id === "alive"), true);
     assert.equal(next.year, 2);
     assert.ok(next.eventSeq > 0);
-    assert.ok(next.lastEvents.some((e) => e.kind === "animalDied"));
+    // animalDied объявляется раньше — в действии, завершившем питание
+    // (endFeeding); здесь только удаление тел без повторного события.
+    assert.equal(next.lastEvents.some((e) => e.kind === "animalDied"), false);
   });
 
   it("endFeeding computes death list without removing animals", () => {
@@ -593,33 +595,75 @@ describe("открытая выкладка свойств", () => {
 describe("парные свойства", () => {
   const pairCard = (id: string, trait: TraitId) => ({ id, faces: [trait] });
 
-  it("между парой животных может лежать только одна парная карта", () => {
-    let g = scenario([[mkAnimal("pa", 0, []), mkAnimal("pb", 0, [])], []]);
+  it("у животного не больше двух пар: партнёры встают по сторонам (B — A — C)", () => {
+    let g = scenario([[mkAnimal("pa", 0, []), mkAnimal("pb", 0, []), mkAnimal("pc", 0, [])], []]);
     g.phase = "development";
     g.currentPlayerId = 0;
-    const card = pairCard("pc1", "cooperation");
-    g.players[0]!.hand = [card];
+    g.players[0]!.hand = [pairCard("pc1", "cooperation")];
     g = applyAction(g, { type: "devPlayPair", cardId: "pc1", face: 0, a: "pa", b: "pb" });
-    // Вторая парная карта (взаимодействие) на ту же пару не допускается.
+    // Первая пара животного: партнёр встал слева.
+    assert.deepEqual(g.players[0]!.animals.map((a) => a.id), ["pb", "pa", "pc"]);
+    // Вторая пара того же животного — ещё законна (лимит — две).
     g.phase = "development";
     g.currentPlayerId = 0;
     for (const p of g.players) p.passedDev = false;
     g.players[0]!.hand = [pairCard("pc2", "communication")];
-    const acts = legalDevActions(g, 0).filter((a) => a.type === "devPlayPair");
-    assert.ok(!acts.some((a) => (a.a === "pa" && a.b === "pb") || (a.a === "pb" && a.b === "pa")));
-    // Но на другую пару — можно.
-    g.players[0]!.animals.push(mkAnimal("pc", 0, []));
     const acts2 = legalDevActions(g, 0).filter((a) => a.type === "devPlayPair");
     assert.ok(acts2.some((a) => a.a === "pa" && a.b === "pc"));
-  });
-
-  it("карта пары кладётся между животными: второе встаёт сразу после первого", () => {
-    let g = scenario([[mkAnimal("m1", 0, []), mkAnimal("other", 0, []), mkAnimal("m2", 0, [])], []]);
+    g = applyAction(g, { type: "devPlayPair", cardId: "pc2", face: 0, a: "pa", b: "pc" });
+    // Второй партнёр встал справа: B — A — C, обе плашки между соседями.
+    assert.deepEqual(g.players[0]!.animals.map((a) => a.id), ["pb", "pa", "pc"]);
+    // Третья пара того же животного запрещена — и в списке действий, и в заявке.
     g.phase = "development";
     g.currentPlayerId = 0;
-    g.players[0]!.hand = [pairCard("pc3", "cooperation")];
-    g = applyAction(g, { type: "devPlayPair", cardId: "pc3", face: 0, a: "m1", b: "m2" });
-    assert.deepEqual(g.players[0]!.animals.map((a) => a.id), ["m1", "m2", "other"]);
+    for (const p of g.players) p.passedDev = false;
+    g.players[0]!.animals.push(mkAnimal("pd", 0, []));
+    g.players[0]!.hand = [pairCard("pc3", "symbiosis")];
+    const acts3 = legalDevActions(g, 0).filter((a) => a.type === "devPlayPair");
+    assert.ok(!acts3.some((a) => a.a === "pa" || a.b === "pa"));
+    assert.throws(
+      () => applyAction(g, { type: "devPlayPair", cardId: "pc3", face: 0, a: "pa", b: "pd" }),
+      /pair limit/,
+    );
+  });
+
+  it("новая связь не замыкает цепочку пар в кольцо", () => {
+    let g = scenario([[mkAnimal("ca", 0, []), mkAnimal("cb", 0, []), mkAnimal("cc", 0, [])], []]);
+    g.phase = "development";
+    g.currentPlayerId = 0;
+    g.players[0]!.hand = [pairCard("k1", "cooperation")];
+    g = applyAction(g, { type: "devPlayPair", cardId: "k1", face: 0, a: "ca", b: "cb" });
+    g.phase = "development";
+    g.currentPlayerId = 0;
+    for (const p of g.players) p.passedDev = false;
+    g.players[0]!.hand = [pairCard("k2", "communication")];
+    g = applyAction(g, { type: "devPlayPair", cardId: "k2", face: 0, a: "cb", b: "cc" });
+    // Цепочка остаётся линией: ca — cb — cc, все соседи рядом.
+    assert.deepEqual(g.players[0]!.animals.map((a) => a.id), ["cc", "cb", "ca"]);
+    // Замыкание ca—cc дало бы кольцо: плашке негде лежать.
+    g.phase = "development";
+    g.currentPlayerId = 0;
+    for (const p of g.players) p.passedDev = false;
+    g.players[0]!.hand = [pairCard("k3", "symbiosis")];
+    const acts = legalDevActions(g, 0).filter((a) => a.type === "devPlayPair");
+    assert.ok(!acts.some((a) => a.a === "ca" && a.b === "cc"));
+    assert.ok(!acts.some((a) => a.a === "cc" && a.b === "ca"));
+  });
+
+  it("цепочка второго партнёра переносится целиком, не разрываясь", () => {
+    let g = scenario([[mkAnimal("d1", 0, []), mkAnimal("d2", 0, []), mkAnimal("d3", 0, [])], []]);
+    g.phase = "development";
+    g.currentPlayerId = 0;
+    g.players[0]!.hand = [pairCard("q1", "cooperation")];
+    // Пара d2—d3, затем d1 встаёт слева от d2: d1 — d2 — d3.
+    g = applyAction(g, { type: "devPlayPair", cardId: "q1", face: 0, a: "d2", b: "d3" });
+    assert.deepEqual(g.players[0]!.animals.map((a) => a.id), ["d1", "d3", "d2"]);
+    g.phase = "development";
+    g.currentPlayerId = 0;
+    for (const p of g.players) p.passedDev = false;
+    g.players[0]!.hand = [pairCard("q2", "communication")];
+    g = applyAction(g, { type: "devPlayPair", cardId: "q2", face: 0, a: "d2", b: "d1" });
+    assert.deepEqual(g.players[0]!.animals.map((a) => a.id), ["d3", "d2", "d1"]);
   });
 });
 
@@ -826,7 +870,7 @@ describe("континенты: питание по территориям", () 
     g = applyAction(g, { type: "feedHunt", carnivoreId: "cz", preyId: "ne" });
     assert.ok(g.paralyzed?.includes("cz"));
     // Парализованный не охотится.
-    const hunts = legalFeedActions({ ...g, currentPlayerId: 1, turnUse: { carnivores: [], pirates: [], grazers: [], foodTaken: false, combatUsed: false, migrated: false, sheltered: false } }, 1)
+    const hunts = legalFeedActions({ ...g, currentPlayerId: 1, turnUse: { carnivores: [], pirates: [], grazers: [], foodTaken: false, combatUsed: false, migrated: false, sheltered: false, hibernated: [] } }, 1)
       .filter((a) => a.type === "feedHunt");
     assert.equal(hunts.length, 0);
   });
@@ -980,7 +1024,7 @@ function plantScenario(
   g.phase = "feeding";
   g.currentPlayerId = 0;
   for (const p of g.players) p.passedFeed = false;
-  g.turnUse = { carnivores: [], pirates: [], grazers: [], foodTaken: false, combatUsed: false, migrated: false, sheltered: false };
+  g.turnUse = { carnivores: [], pirates: [], grazers: [], foodTaken: false, combatUsed: false, migrated: false, sheltered: false, hibernated: [] };
   return g;
 }
 
@@ -1405,7 +1449,7 @@ function floraScenario(
   g.phase = "feeding";
   g.currentPlayerId = 0;
   for (const p of g.players) p.passedFeed = false;
-  g.turnUse = { carnivores: [], pirates: [], grazers: [], foodTaken: false, combatUsed: false, migrated: false, sheltered: false };
+  g.turnUse = { carnivores: [], pirates: [], grazers: [], foodTaken: false, combatUsed: false, migrated: false, sheltered: false, hibernated: [] };
   return g;
 }
 
@@ -2086,5 +2130,343 @@ describe("случайные мутации: полные партии бото�
     for (const pl of g.plants ?? []) {
       assert.ok(pl.zoneId === "laurasia" || pl.zoneId === "gondwana");
     }
+  });
+});
+
+// ── Исправления движка (лог, события, спячка, причины блокировок) ───────────
+
+describe("лог: уникальные id после обрезки", () => {
+  it("id не повторяются, logSeq растёт", () => {
+    const g0 = scenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]]);
+    g0.phase = "feeding";
+    g0.currentPlayerId = 0;
+    g0.firstPlayerId = 0;
+    g0.foodBank = 900;
+    let g = g0;
+    // Каждый «Закончить ход» пишет запись; журнал обрезается до 80, а id —
+    // сквозные, поэтому дублей быть не должно.
+    for (let i = 0; i < 120; i++) g = applyAction(g, { type: "feedEndTurn" });
+    assert.ok(g.logSeq > 80, `logSeq=${g.logSeq}`);
+    assert.equal(g.log.length, 80);
+    const ids = g.log.map((e) => e.id);
+    assert.equal(new Set(ids).size, ids.length);
+    assert.equal(g.logSeq, g.log.at(-1)!.id);
+    assert.ok(Math.min(...ids) > 40, "должны остаться свежие записи, а не id 1..80");
+  });
+
+  it("старый сейв без logSeq самовосстанавливает счётчик", () => {
+    const g = scenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]]);
+    g.phase = "feeding";
+    g.currentPlayerId = 0;
+    g.firstPlayerId = 0;
+    g.foodBank = 3;
+    const legacy = { ...g, logSeq: undefined as unknown as number };
+    const next = applyAction(legacy, { type: "feedEndTurn" });
+    assert.ok(Number.isFinite(next.logSeq));
+    const ids = next.log.map((e) => e.id);
+    assert.equal(new Set(ids).size, ids.length);
+  });
+});
+
+describe("событие паса", () => {
+  it("пас в развитии и в питании попадает в lastEvents", () => {
+    const dev = createGame(2, "normal", 33);
+    dev.currentPlayerId = 0;
+    const afterDev = applyAction(dev, { type: "devPass" });
+    assert.ok(afterDev.lastEvents.some((e) => e.kind === "passed" && e.playerId === 0));
+
+    const feed = scenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]]);
+    feed.phase = "feeding";
+    feed.currentPlayerId = 0;
+    feed.firstPlayerId = 0;
+    feed.foodBank = 3;
+    const afterSkip = applyAction(feed, { type: "feedSkip" });
+    assert.ok(afterSkip.lastEvents.some((e) => e.kind === "passed" && e.playerId === 0));
+  });
+});
+
+describe("смерть в конце питания", () => {
+  it("animalDied приходит при переходе в вымирание с точной причиной", () => {
+    const starved = mkAnimal("starved", 0, []);
+    const poisoned = mkAnimal("poisoned", 0, [t("carnivore")]);
+    poisoned.food = 2;
+    poisoned.poisoned = true;
+    const marked = mkAnimal("marked", 1, []);
+    marked.food = 1;
+    marked.marks = ["poison"];
+    const g = scenario([[starved, poisoned], [marked]]);
+    g.phase = "feeding";
+    g.currentPlayerId = 0;
+    g.firstPlayerId = 0;
+    g.foodBank = 0;
+    for (const p of g.players) p.passedFeed = true;
+
+    const next = applyAction(g, { type: "feedSkip" });
+    assert.equal(next.phase, "extinction");
+    const deaths = next.lastEvents.filter(
+      (e): e is Extract<GameEvent, { kind: "animalDied" }> => e.kind === "animalDied",
+    );
+    assert.deepEqual(
+      deaths.map((e) => [e.animalId, e.cause]).sort(),
+      [
+        ["marked", "poisonMark"],
+        ["poisoned", "poison"],
+        ["starved", "starved"],
+      ],
+    );
+    assert.deepEqual([...next.extinctionDeaths].sort(), ["marked", "poisoned", "starved"]);
+    // Тела ещё на столе — игроки видят стадию вымирания.
+    assert.equal(next.players[0]!.animals.length, 2);
+    // continueExtinction убирает тела, но не объявляет смерти повторно.
+    const after = applyAction(next, { type: "continueExtinction" });
+    assert.equal(after.lastEvents.some((e) => e.kind === "animalDied"), false);
+    assert.equal(allAnimals(after).length, 0);
+  });
+});
+
+describe("пустая рука завершает развитие", () => {
+  it("игрок без карт автоматически пасует, фаза не зацикливается", () => {
+    const g = createGame(3, "normal", 34);
+    g.players[0]!.hand = [];
+    g.players[0]!.passedDev = false;
+    g.currentPlayerId = 0;
+    const passed = applyAction(g, { type: "devPass" });
+    assert.equal(passed.players[0]!.passedDev, true);
+    assert.ok(passed.lastEvents.some((e) => e.kind === "passed" && e.playerId === 0));
+    // Ход не возвращается к игроку без карт: оставшиеся пасуют, фаза меняется.
+    let s = passed;
+    for (let i = 0; i < 30 && s.phase === "development"; i++) {
+      assert.notEqual(s.currentPlayerId, 0, "ход вернулся к игроку с пустой рукой");
+      s = applyAction(s, { type: "devPass" });
+    }
+    assert.equal(s.phase, "foodBank");
+    assert.equal(s.players[0]!.passedDev, true);
+  });
+});
+
+describe("мимикрия без целей", () => {
+  it("не предлагается, если других животных нет; атака резолвится сразу", () => {
+    const car = mkAnimal("car", 0, [t("carnivore")]);
+    const mimic = mkAnimal("mim", 1, [t("mimicry")]);
+    const g = scenario([[car], [mimic]]);
+    g.phase = "feeding";
+    g.currentPlayerId = 0;
+    g.firstPlayerId = 0;
+    g.foodBank = 0;
+    // Искусственная атака: мимикрия есть, но подставить некого.
+    const atkState: GameState = {
+      ...g,
+      pendingAttack: {
+        carnivoreId: "car",
+        preyId: "mim",
+        mimicryChain: [],
+        waitingFor: 1,
+        usedDefenses: [],
+      },
+    };
+    const defs = legalDefenseActions(atkState, 1).map((a) =>
+      a.type === "chooseDefense" ? a.kind : "?",
+    );
+    assert.deepEqual(defs, ["none"]);
+    // Настоящая атака не ждёт защиту и съедает животное.
+    const next = applyAction(g, { type: "feedHunt", carnivoreId: "car", preyId: "mim" });
+    assert.equal(next.pendingAttack, null);
+    assert.equal(next.players[1]!.animals.length, 0);
+  });
+
+  it("цель есть — мимикрия остаётся доступной", () => {
+    const car = mkAnimal("car", 0, [t("carnivore")]);
+    const mimic = mkAnimal("mim", 1, [t("mimicry")]);
+    const other = mkAnimal("other", 1, []);
+    let g = scenario([[car], [mimic, other]]);
+    g.phase = "feeding";
+    g.currentPlayerId = 0;
+    g.firstPlayerId = 0;
+    g.foodBank = 0;
+    g = applyAction(g, { type: "feedHunt", carnivoreId: "car", preyId: "mim" });
+    assert.ok(g.pendingAttack);
+    const kinds = legalDefenseActions(g, 1).map((a) =>
+      a.type === "chooseDefense" ? a.kind : "?",
+    );
+    assert.deepEqual(kinds.sort(), ["mimicry", "none"]);
+  });
+});
+
+describe("спячка", () => {
+  it("не отдаёт ход и доступна один раз за ход", () => {
+    const h1 = mkAnimal("h1", 0, [t("hibernation")]);
+    const h2 = mkAnimal("h2", 0, [t("hibernation")]);
+    const g = scenario([[h1, h2], [mkAnimal("b", 1, [])]]);
+    g.phase = "feeding";
+    g.currentPlayerId = 0;
+    g.firstPlayerId = 0;
+    g.foodBank = 2;
+    const next = applyAction(g, { type: "feedHibernate", animalId: "h1" });
+    const slept = next.players[0]!.animals.find((a) => a.id === "h1")!;
+    assert.equal(slept.hibernating, true);
+    assert.deepEqual(next.turnUse.hibernated, ["h1"]);
+    // Ход не передан: спячка — действие, а не конец хода.
+    assert.equal(next.currentPlayerId, 0);
+    // Вторая спячка в этот ход недоступна.
+    assert.ok(!legalFeedActions(next, 0).some((a) => a.type === "feedHibernate"));
+    const second = applyAction(next, { type: "feedHibernate", animalId: "h2" });
+    assert.equal(second.players[0]!.animals.find((a) => a.id === "h2")!.hibernating, false);
+    // Спящее животное не может получать еду.
+    assert.equal(canReceiveFood(next, slept), false);
+    const takes = legalFeedActions(next, 0).filter(
+      (a): a is Extract<GameAction, { type: "feedTake" }> => a.type === "feedTake",
+    );
+    assert.ok(!takes.some((a) => a.animalId === "h1"));
+  });
+
+  it("если больше нечего делать, ход после спячки заканчивается сам", () => {
+    const h1 = mkAnimal("h1", 0, [t("hibernation")]);
+    const g = scenario([[h1], [mkAnimal("b", 1, [])]]);
+    g.phase = "feeding";
+    g.currentPlayerId = 0;
+    g.firstPlayerId = 0;
+    g.foodBank = 0;
+    const next = applyAction(g, { type: "feedHibernate", animalId: "h1" });
+    assert.equal(next.phase, "extinction");
+    // Спящее выживает (считается накормленным), голодное животное бота — нет.
+    assert.deepEqual(next.extinctionDeaths, ["b"]);
+  });
+});
+
+describe("feedBlockReason", () => {
+  it("null, когда действие доступно; причина — после боя и взятия еды", () => {
+    const car = mkAnimal("car", 0, [t("carnivore")]);
+    // Второе голодное животное держит ход после охоты (иначе фаза сразу уйдёт
+    // в вымирание и причина не понадобится).
+    const rest = mkAnimal("rest", 0, []);
+    const prey = mkAnimal("prey", 1, []);
+    const g = scenario([[car, rest], [prey]]);
+    g.phase = "feeding";
+    g.currentPlayerId = 0;
+    g.firstPlayerId = 0;
+    g.foodBank = 5;
+    assert.equal(feedBlockReason(g, 0, "feedTake"), null);
+
+    const hunted = applyAction(g, { type: "feedHunt", carnivoreId: "car", preyId: "prey" });
+    assert.equal(hunted.phase, "feeding");
+    assert.match(feedBlockReason(hunted, 0, "feedTake") ?? "", /боев|охот|пират/);
+    assert.ok(feedBlockReason(hunted, 0, "feedHunt"));
+
+    // После пиратства — та же причина (боевые действия).
+    const pirate = mkAnimal("pir", 0, [t("piracy"), t("highBodyWeight")]);
+    const victim = mkAnimal("victim", 1, [t("carnivore")]);
+    victim.food = 1;
+    const p0 = scenario([[pirate], [victim]]);
+    p0.phase = "feeding";
+    p0.currentPlayerId = 0;
+    p0.firstPlayerId = 0;
+    p0.foodBank = 5;
+    const robbed = applyAction(p0, { type: "feedPirate", pirateId: "pir", targetId: "victim" });
+    assert.equal(robbed.phase, "feeding");
+    assert.match(feedBlockReason(robbed, 0, "feedTake") ?? "", /боев|охот|пират/);
+
+    const fresh = scenario([[mkAnimal("a", 0, []), mkAnimal("c", 0, [])], [mkAnimal("b", 1, [])]]);
+    fresh.phase = "feeding";
+    fresh.currentPlayerId = 0;
+    fresh.firstPlayerId = 0;
+    fresh.foodBank = 5;
+    const took = applyAction(fresh, { type: "feedTake", animalId: "a" });
+    assert.equal(took.phase, "feeding");
+    assert.match(feedBlockReason(took, 0, "feedTake") ?? "", /уже брали/);
+  });
+
+  it("пиратство, спячка, пас и голодные хищники", () => {
+    const plain = scenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]]);
+    plain.phase = "feeding";
+    plain.currentPlayerId = 0;
+    plain.firstPlayerId = 0;
+    plain.foodBank = 5;
+    assert.match(feedBlockReason(plain, 0, "feedPirate") ?? "", /пиратств/);
+
+    const cold = scenario([
+      [mkAnimal("h", 0, [t("hibernation")]), mkAnimal("rest", 0, [])],
+      [mkAnimal("b", 1, [])],
+    ]);
+    cold.phase = "feeding";
+    cold.currentPlayerId = 0;
+    cold.firstPlayerId = 0;
+    cold.foodBank = 3;
+    const slept = applyAction(cold, { type: "feedHibernate", animalId: "h" });
+    assert.equal(slept.phase, "feeding");
+    assert.match(feedBlockReason(slept, 0, "feedHibernate") ?? "", /спячк/i);
+
+    // Хищник есть, добычи нет.
+    const noPrey = scenario([[mkAnimal("car", 0, [t("carnivore")])], []]);
+    noPrey.phase = "feeding";
+    noPrey.currentPlayerId = 0;
+    noPrey.firstPlayerId = 0;
+    noPrey.foodBank = 5;
+    assert.match(feedBlockReason(noPrey, 0, "feedHunt") ?? "", /добыч|хищник/i);
+
+    // Все накормлены, база есть — брать некому.
+    const fed = scenario([[mkAnimal("full", 0, [])], [mkAnimal("b", 1, [])]]);
+    fed.phase = "feeding";
+    fed.currentPlayerId = 0;
+    fed.firstPlayerId = 0;
+    fed.foodBank = 5;
+    fed.players[0]!.animals[0]!.food = 1;
+    assert.match(feedBlockReason(fed, 0, "feedTake") ?? "", /накормлены/);
+
+    // «Растения»: пас недоступен, пока животное может получить еду/убежище.
+    const planted = plantScenario(
+      [[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]],
+      [mkPlant("p1", "perennial", 3)],
+    );
+    assert.match(feedBlockReason(planted, 0, "feedSkip") ?? "", /пас/i);
+  });
+});
+
+describe("масштаб колоды", () => {
+  it("deckSizeFor и buildDeck: минимум одна копия на карту", () => {
+    assert.equal(deckSizeFor(1), DECK_SIZE);
+    assert.equal(buildDeck(nid, undefined, 0.5).length, 42);
+    assert.equal(deckSizeFor(0.5), 42);
+    assert.ok(deckSizeFor(0) < DECK_SIZE);
+    assert.equal(buildDeck(nid, undefined, 0).length, deckSizeFor(0));
+  });
+
+  it("createGame с deckSize даёт точный размер колоды", () => {
+    const g = createGame(2, "normal", 61, undefined, {}, 30);
+    const total = g.deck.length + g.players.reduce((s, p) => s + p.hand.length, 0);
+    assert.equal(total, 30);
+  });
+
+  it("укороченная колода даёт меньше лет и корректный финал", () => {
+    function drive(seed: number, deckSize: number): GameState {
+      let g = createGame(2, "normal", seed, undefined, {}, deckSize);
+      for (let i = 0; i < 4000 && g.phase !== "gameOver"; i++) {
+        if (g.phase === "foodBank") {
+          g = applyAction(g, g.foodRoll ? { type: "beginFeeding" } : { type: "rollFoodBank" });
+          continue;
+        }
+        if (g.phase === "extinction") {
+          g = applyAction(g, { type: "continueExtinction" });
+          continue;
+        }
+        if (g.pendingAttack) {
+          const acts = legalDefenseActions(g, g.pendingAttack.waitingFor);
+          g = applyAction(g, acts[0] ?? { type: "chooseDefense", kind: "none" });
+          continue;
+        }
+        const act = chooseAIAction(g);
+        if (!act) break;
+        g = applyAction(g, act);
+      }
+      return g;
+    }
+    const short = drive(62, 24);
+    const full = drive(62, DECK_SIZE);
+    assert.equal(short.phase, "gameOver");
+    assert.ok(short.scores && short.scores.length >= 2);
+    assert.ok(short.lastEvents.some((e) => e.kind === "gameFinished"));
+    assert.ok(
+      short.year < full.year,
+      `короткая колода: ${short.year} лет, полная: ${full.year}`,
+    );
   });
 });

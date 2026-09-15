@@ -1,14 +1,21 @@
 /**
- * Охота за багом «после фазы питания игра сбрасывается в меню», версия 3:
- * логируем все console-сообщения (Vite сообщает о page reload через log),
- * навигации фрейма, крах рендер-процесса, потерю WebGL-контекста и рост
- * кучи JS; в момент сброса снимаем скриншот и пишем лог в файл.
- * node scripts/qa-bug-hunt.mjs   (EVO_URL=http://127.0.0.1:8080 для dev)
+ * Охота за багом «игра сбрасывается в главное меню» (раньше ловили сброс после
+ * фазы питания в соло; теперь то же самое ловим на СЕТЕВОМ столе — потеря
+ * сессии у активного игрока): логируем все console-сообщения (Vite сообщает о
+ * page reload через log), навигации фрейма, крах рендер-процесса, потерю
+ * WebGL-контекста и рост кучи JS; в момент сброса снимаем скриншот и лог.
+ * node scripts/qa-bug-hunt.mjs   (EVO_URL=http://127.0.0.1:8099 для dev)
  */
 import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { chromium } from "playwright";
+import { endPhaseStep, phaseOf, shotsDir, startNetGame } from "./qa-lib.mjs";
 
 const base = process.env.EVO_URL ?? "http://127.0.0.1:8099";
+// Улики (скриншот и лог) — вне репозитория: запись PNG в scripts/ дёргала
+// Tailwind в dev и сама могла провоцировать перезагрузку вкладки, которую
+// этот скрипт расследует. Переопределяется переменной EVO_SHOTS.
+const SHOTS = shotsDir();
 const browser = await chromium.launch();
 const page = await browser.newPage();
 const notes = [];
@@ -93,8 +100,13 @@ try {
       .then((type) => notes.push(`${stamp()} PAGE ${type.toUpperCase()}: ` + page.url()))
       .catch(() => notes.push(`${stamp()} PAGE RELOADED: ` + page.url()));
   });
-  await page.getByRole("button", { name: "Начать год" }).click();
-  console.log("партия запущена");
+  const code = await startNetGame(page, { name: "Охота", players: 2, bots: 1 });
+  console.log(`партия запущена (стол ${code})`);
+
+  /** Игра выпала в главное меню? В партии фаза есть, в меню — нет. */
+  const inMenu = async () =>
+    (await phaseOf(page)) === null &&
+    (await page.getByLabel("Ваше имя").isVisible().catch(() => false));
 
   const deadline = Date.now() + 240_000;
   let actions = 0;
@@ -104,11 +116,11 @@ try {
       console.log("OK: партия дошла до финала без сброса в меню");
       break;
     }
-    if (await page.getByRole("button", { name: "Начать год" }).isVisible().catch(() => false)) {
+    if (await inMenu()) {
       // В dev модули грузятся медленно: даём восстановлению партии 6 секунд,
       // чтобы не принять SSR-меню за сброс.
       await page.waitForTimeout(6000);
-      if (!(await page.getByRole("button", { name: "Начать год" }).isVisible().catch(() => false))) {
+      if (!(await inMenu())) {
         console.log("OK: после перезагрузки партия восстановилась");
         continue;
       }
@@ -117,29 +129,17 @@ try {
         JSON.stringify(performance.getEntriesByType("navigation").map((n) => ({ type: n.type, activationStart: n.activationStart }))),
       ).catch(() => "n/a");
       console.log("navigation entries:", nav);
-      const solo = await page
-        .evaluate(() => {
-          const raw = localStorage.getItem("evo-solo-game");
-          if (!raw) return null;
-          try {
-            const p = JSON.parse(raw);
-            return { savedAt: p.savedAt, phase: p.state?.phase, year: p.state?.year, ageMs: Date.now() - p.savedAt };
-          } catch {
-            return "broken json";
-          }
-        })
+      const seat = await page
+        .evaluate((c) => {
+          const raw = localStorage.getItem(`evo-seat-${c}`);
+          return raw ? { code: c, tokenLen: raw.length } : null;
+        }, code)
         .catch((e) => "eval error: " + e.message);
-      console.log("evo-solo-game:", JSON.stringify(solo));
-      await page.screenshot({ path: "scripts/qa-bug-menu.png" });
-      writeFileSync("scripts/qa-bug-notes.txt", notes.join("\n"));
-      console.log("лог сохранён: scripts/qa-bug-notes.txt");
+      console.log(`evo-seat-${code}:`, JSON.stringify(seat));
+      await page.screenshot({ path: join(SHOTS, "qa-bug-menu.png") });
+      writeFileSync(join(SHOTS, "qa-bug-notes.txt"), notes.join("\n"));
+      console.log(`лог сохранён: ${join(SHOTS, "qa-bug-notes.txt")}`);
       break;
-    }
-    const noDefense = page.getByRole("button", { name: "Не защищаться" });
-    if (await noDefense.isVisible().catch(() => false)) {
-      await noDefense.click();
-      actions++;
-      continue;
     }
     const spotlight = page.locator(".spotlight-backdrop");
     if (await spotlight.isVisible().catch(() => false)) {
@@ -152,26 +152,15 @@ try {
       phaseSeen = phase;
       console.log(`[${stamp()}] фаза:`, phase.trim().replace(/\s+/g, " "));
     }
-    const pass = page.getByRole("button", { name: "Пас", exact: true });
-    if ((await pass.isVisible().catch(() => false)) && (await pass.isEnabled().catch(() => false))) {
-      await pass.click();
-      actions++;
-      await page.waitForTimeout(220);
-      continue;
-    }
-    const endTurn = page.getByRole("button", { name: "Закончить ход" });
-    if ((await endTurn.isVisible().catch(() => false)) && (await endTurn.isEnabled().catch(() => false))) {
-      await endTurn.click();
-      actions++;
-      await page.waitForTimeout(220);
-      continue;
-    }
-    await page.waitForTimeout(200);
+    // Ход двигает общий endPhaseStep: «Не защищаться», «Закончить развитие»,
+    // «Закончить ход» и «Закончить питание» с подтверждением диалога.
+    if (await endPhaseStep(page)) actions++;
+    await page.waitForTimeout(220);
   }
   console.log("итераций действий:", actions);
 } finally {
   clearInterval(heapTimer);
-  writeFileSync("scripts/qa-bug-notes.txt", notes.join("\n"));
+  writeFileSync(join(SHOTS, "qa-bug-notes.txt"), notes.join("\n"));
   console.log("── события страницы ──\n" + notes.join("\n"));
   await browser.close();
 }

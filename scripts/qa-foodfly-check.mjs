@@ -2,8 +2,11 @@
  * Диагностика полёта фишки еды: доходим до фазы питания, берём еду и следим
  * за элементом .food-fly — где он оказывается сразу после вставки и двигается
  * ли анимация. node scripts/qa-foodfly-check.mjs
+ *
+ * Партия — сетевой стол с ботом (соло-режим удалён): see scripts/qa-lib.mjs.
  */
 import { chromium } from "playwright";
+import { advancePhase, endPhaseStep, phaseOf, startNetGame, waitHumanTurn } from "./qa-lib.mjs";
 
 const base = process.env.EVO_URL ?? "http://127.0.0.1:8099";
 const browser = await chromium.launch();
@@ -13,20 +16,24 @@ page.on("pageerror", (e) => errors.push("PAGEERROR: " + e.message));
 
 try {
   await page.goto(base, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: "Начать год" }).click();
+  await startNetGame(page, { name: "Еда", players: 2, bots: 1 });
 
-  // Доходим до фазы питания: пасуем в развитии.
-  const deadline = Date.now() + 90_000;
-  while (Date.now() < deadline) {
-    const txt = await page.evaluate(() => document.body.innerText);
-    if (txt.includes("Питание")) break;
-    const pass = page.getByRole("button", { name: "Пас", exact: true });
-    if ((await pass.isVisible().catch(() => false)) && (await pass.isEnabled().catch(() => false))) {
-      await pass.click();
+  // Доходим до фазы питания: завершаем развитие и кормовую базу общим
+  // хелпером («Закончить развитие» → «Закончить ход»/«Закончить питание»).
+  // Сначала разыграем животное в свой ход: без животного еду взять нельзя,
+  // и проверять полёт фишки будет не на чем.
+  if (await waitHumanTurn(page, 60_000)) {
+    const face = page.locator("[data-hand-row] button", { hasText: "Животное" }).first();
+    if (await face.count()) {
+      await face.click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(500);
     }
-    await page.waitForTimeout(250);
   }
-  console.log("фаза питания достигнута");
+  const inFeed = await advancePhase(page, () => phaseOf(page).then((p) => p === "feeding"), {
+    timeout: 120_000,
+  });
+  console.log(inFeed ? "фаза питания достигнута" : `фаза питания НЕ достигнута (${await phaseOf(page)})`);
+  if (!inFeed) process.exitCode = 1;
 
   // Слежение за .food-fly: MutationObserver пишет в window.__flies.
   await page.evaluate(() => {
@@ -61,7 +68,16 @@ try {
   });
 
   const take = page.getByRole("button", { name: "Взять еду" });
-  const hadFood = (await take.isVisible().catch(() => false)) && (await take.isEnabled().catch(() => false));
+  let hadFood = (await take.isVisible().catch(() => false)) && (await take.isEnabled().catch(() => false));
+  if (!hadFood) {
+    // Ход мог быть не наш: прокручиваем ходы/фазу, пока «Взять еду» не станет
+    // доступна (или пока не выйдем из питания).
+    for (let i = 0; i < 20 && !hadFood; i++) {
+      await endPhaseStep(page);
+      await page.waitForTimeout(350);
+      hadFood = (await take.isVisible().catch(() => false)) && (await take.isEnabled().catch(() => false));
+    }
+  }
   if (hadFood) {
     await take.click();
     console.log("еда взята");

@@ -18,8 +18,12 @@ const buttonVariants = cva(
       size: {
         default: "h-11 rounded-[var(--radius-md)] px-4 text-sm",
         sm: "h-9 rounded-[var(--radius-sm)] px-3 text-xs",
+        // Крупные игровые действия: высота как у lg, но текст компактнее.
+        md: "h-12 rounded-[var(--radius-md)] px-5 text-sm",
         lg: "h-12 rounded-[var(--radius-md)] px-5 text-base",
         icon: "size-11 rounded-[var(--radius-md)]",
+        // Маленькая иконочная кнопка для плотных панелей (лента, чипы).
+        iconSm: "size-9 rounded-[var(--radius-sm)]",
       },
     },
     defaultVariants: { variant: "default", size: "default" },

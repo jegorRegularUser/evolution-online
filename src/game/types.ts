@@ -93,6 +93,13 @@ export interface Animal {
   id: string;
   ownerId: number;
   cardId: string;
+  /**
+   * Порядковый номер у владельца («№1», «№2»). Присваивается при появлении
+   * животного и НЕ меняется при перестановках: игрок узнаёт своих зверей
+   * по номеру, а не по месту в ряду. У старых сейвов номера нет — UI тогда
+   * показывает позицию в списке.
+   */
+  no?: number;
   traits: TraitInstance[];
   food: number;
   /** Из них синих (мясо, пиратство, сотрудничество, жир) — для показа цвета. */
@@ -137,6 +144,12 @@ export interface Player {
   hand: Card[];
   animals: Animal[];
   discardCount: number;
+  /**
+   * Сетевой стол: игрок сдался — место и имя остаются до конца партии,
+   * ходы пропускает серверная автоматика, животные гибнут от голода как
+   * ненакормленные, очки при финальном подсчёте сохраняются.
+   */
+  resigned?: boolean;
   passedDev: boolean;
   /** Пас в фазе питания: пропускается, пока сам не сделает реальное действие. */
   passedFeed: boolean;
@@ -294,7 +307,13 @@ export type GameEvent =
   | { kind: "preyKilled"; preyId: string; carnivoreId: string }
   | { kind: "defenseUsed"; defense: "running" | "mimicry" | "tailLoss" | "none"; roll?: number; preyId: string }
   | { kind: "cardsDrawn"; counts: number[] }
-  | { kind: "animalDied"; animalId: string; cause: "starved" | "poison" | "neoplasia" }
+  /** playerId — кто пасует (фаза развития или питания). */
+  | { kind: "passed"; playerId: number }
+  /**
+   * cause: starved — не накормлено; poison — отравлено ядовитой добычей;
+   * poisonMark — погибло от метки «Яд» («Трава и грибы»); neoplasia — неоплазия.
+   */
+  | { kind: "animalDied"; animalId: string; cause: "starved" | "poison" | "poisonMark" | "neoplasia" }
   | { kind: "traitsRevealed" }
   | { kind: "bankBurned"; amount: number; territory?: TerritoryId }
   | { kind: "migrated"; moves: Array<{ animalId: string; from?: TerritoryId; to: TerritoryId }> }
@@ -332,12 +351,24 @@ export type GameEvent =
     }
   | { kind: "budding"; animalId: string; playerId: number }
   | { kind: "populationGrown"; animalId: string; to: number }
-  | { kind: "populationLost"; animalId: string; to: number };
+  | { kind: "populationLost"; animalId: string; to: number }
+  /** Партия завершена: победители посчитаны (в т.ч. флора с playerId -1). */
+  | { kind: "gameFinished"; winnerIds: number[] };
 
 
 export interface LogEntry {
   id: number;
+  /** Готовый русский текст (источник правды для ru и старых кадров без key). */
   text: string;
+  /**
+   * Ключ словаря i18n (ru.ts/en.ts) для перевода записи: движок пишет журнал
+   * по-русски, клиент при lang=en рендерит по ключу. Параметры со смыслом
+   * игровых терминов (`trait`/`plant`/`flora`/`mark`/`zone`) несут id термина
+   * и переводятся на клиенте через хелперы terms.ts.
+   */
+  key?: string;
+  /** Параметры подстановки к `key` (имена игроков, числа, id терминов). */
+  params?: Record<string, string | number>;
   tone?: "neutral" | "good" | "bad" | "hunt";
 }
 
@@ -372,6 +403,11 @@ export interface FeedTurnUse {
    * «Растения»: в этот ход уже занято убежище (убежище — вместо еды или атаки).
    */
   sheltered: boolean;
+  /**
+   * Спячка — действие животного: одна спячка за ход. Ход при этом не
+   * передаётся, игрок продолжает действовать (если есть чем).
+   */
+  hibernated: string[];
 }
 
 export interface GameState {
@@ -403,6 +439,11 @@ export interface GameState {
   lastYear: boolean;
   deckEmptyAfterDraw: boolean;
   log: LogEntry[];
+  /**
+   * Сквозной счётчик id записей лога: id не повторяются даже после обрезки
+   * журнала до 80 записей (и восстанавливаются у старых сейвов без поля).
+   */
+  logSeq: number;
   /** Сетевой вид (viewFor): размер колоды без её содержимого. */
   deckCount?: number;
   pendingAttack: PendingAttack | null;

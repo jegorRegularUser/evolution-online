@@ -88,7 +88,7 @@ var HEADERS = { TSS_SHELL: "X-TSS_SHELL" };
 * the dev styles URL for route-scoped CSS collection.
 */
 async function getStartManifest(matchedRoutes) {
-	const { tsrStartManifest } = await import("../_tanstack-start-manifest_v-hsGDwKJ3.mjs");
+	const { tsrStartManifest } = await import("../_tanstack-start-manifest_v-Cv_xwZcs.mjs");
 	const startManifest = tsrStartManifest();
 	let routes = startManifest.routes;
 	routes[rootRouteId];
@@ -108,37 +108,85 @@ async function getStartManifest(matchedRoutes) {
 	};
 }
 var manifest = {
+	"052ff9dfc236bd0e1ff1a962b0659ec3f2343e685982ac4ea46dbc2a5c6c93dd": {
+		functionName: "netSetSettings_createServerFn_handler",
+		importer: () => import("./api-DcBzcFHw.mjs")
+	},
 	"0ae6763f4a9392d1dc978022ba9a80b0b3aa8d50b84dfd2903b7639f24bfb552": {
 		functionName: "netSetBots_createServerFn_handler",
-		importer: () => import("./api-B58F9c2u.mjs")
+		importer: () => import("./api-DcBzcFHw.mjs")
+	},
+	"13eed1a17da62dcb9e70eec71b4e8a976934b02a5dcff01613a937167cd6f9b3": {
+		functionName: "netChat_createServerFn_handler",
+		importer: () => import("./api-DcBzcFHw.mjs")
+	},
+	"14d6256128aa0959545fb4a848837599d1e846ecdbdb8a1d74a6f7011a2ce4fd": {
+		functionName: "netSetCapacity_createServerFn_handler",
+		importer: () => import("./api-DcBzcFHw.mjs")
 	},
 	"18b6efd10626f6282f46662236a9f4efa95081d933b3c79a203a2bf43f221fa0": {
 		functionName: "netAction_createServerFn_handler",
-		importer: () => import("./api-B58F9c2u.mjs")
+		importer: () => import("./api-DcBzcFHw.mjs")
 	},
 	"20bb5f392b3e05a16098d48523e3b73255d44092301929c9ed9a4bed4959d3d0": {
 		functionName: "netJoinRoom_createServerFn_handler",
-		importer: () => import("./api-B58F9c2u.mjs")
+		importer: () => import("./api-DcBzcFHw.mjs")
+	},
+	"28b67066d7856a0b8f76eba41be987486847193af04d0f5db299eaffecb7430c": {
+		functionName: "netReaction_createServerFn_handler",
+		importer: () => import("./api-DcBzcFHw.mjs")
 	},
 	"5d10ae946134fb6b27bc7c68ea783639ad617431c539331dc58524d97407b4bb": {
 		functionName: "netCreateRoom_createServerFn_handler",
-		importer: () => import("./api-B58F9c2u.mjs")
+		importer: () => import("./api-DcBzcFHw.mjs")
+	},
+	"7027acf2c9da3ca327d58640cca56e593fd6d897f85525ed64c21cabee308f2c": {
+		functionName: "netSpectatorPoll_createServerFn_handler",
+		importer: () => import("./api-DcBzcFHw.mjs")
+	},
+	"77458ceff388f54d00051c41e26ba9da5450ff9a0991ee4e0f03c3612cfd48e3": {
+		functionName: "netKickWaiter_createServerFn_handler",
+		importer: () => import("./api-DcBzcFHw.mjs")
+	},
+	"817dba9d018a54d9d1f8db2118a3e88ee47f87c735e346de37f37247b0b7db75": {
+		functionName: "netClaimSeat_createServerFn_handler",
+		importer: () => import("./api-DcBzcFHw.mjs")
 	},
 	"97c6cf3f2776e31a2770acfbc62d86143077f49705e3043649873d49707919d1": {
 		functionName: "netPoll_createServerFn_handler",
-		importer: () => import("./api-B58F9c2u.mjs")
+		importer: () => import("./api-DcBzcFHw.mjs")
 	},
 	"9be6f8dbb902e4d7a86ed61a5ec451298b7693cb95cd353b30302c3968525e24": {
 		functionName: "netRejoin_createServerFn_handler",
-		importer: () => import("./api-B58F9c2u.mjs")
+		importer: () => import("./api-DcBzcFHw.mjs")
+	},
+	"b6e16925f8dea3e55e70b929ead0135b8dbf491c796f2bc20222a71969975540": {
+		functionName: "netTransferHost_createServerFn_handler",
+		importer: () => import("./api-DcBzcFHw.mjs")
 	},
 	"c863eef5e87854022b362f26f321d98a7752563244b6bf8043f48c6e5e79acfc": {
 		functionName: "netAgain_createServerFn_handler",
-		importer: () => import("./api-B58F9c2u.mjs")
+		importer: () => import("./api-DcBzcFHw.mjs")
+	},
+	"d4f11d2f35652a14c7006852467cb5ddf47674736c584cc4fd1a035dafd457c4": {
+		functionName: "netSpectate_createServerFn_handler",
+		importer: () => import("./api-DcBzcFHw.mjs")
+	},
+	"e93383b5647ec0a72ceef449d96876a16800ef6dad33d4e3233c9a64f988fa5b": {
+		functionName: "netLeaveQueue_createServerFn_handler",
+		importer: () => import("./api-DcBzcFHw.mjs")
+	},
+	"e9edd1f6cab243b2b1387028a5e185e4c9d038d81c4079de8752e760bfb05745": {
+		functionName: "netRoomInfo_createServerFn_handler",
+		importer: () => import("./api-DcBzcFHw.mjs")
 	},
 	"fafa464b4c4488361c51f863768135107e02c148e255f23da160ffa440fc3f99": {
 		functionName: "netStart_createServerFn_handler",
-		importer: () => import("./api-B58F9c2u.mjs")
+		importer: () => import("./api-DcBzcFHw.mjs")
+	},
+	"fc1d0b35176a800d8b3842e8acc96a7ac0c86234a693afc1c829068eea6c2d17": {
+		functionName: "netKick_createServerFn_handler",
+		importer: () => import("./api-DcBzcFHw.mjs")
 	}
 };
 async function getServerFnById(id, access) {
@@ -1408,7 +1456,7 @@ var getBaseManifest = getProdBaseManifest;
 var createEarlyHintsForRequest = createEarlyHintsCollector;
 async function loadEntries() {
 	const [routerEntry, startEntry, pluginAdapters] = await Promise.all([
-		import("./router-DoYrGGVC.mjs").then((n) => n.t),
+		import("./router-CL2bWTHk.mjs").then((n) => n.t),
 		import("./start-5Z2QO8AU.mjs"),
 		import("./empty-plugin-adapters-D9UWiqvJ.mjs")
 	]);

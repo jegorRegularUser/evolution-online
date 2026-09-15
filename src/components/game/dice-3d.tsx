@@ -1,61 +1,77 @@
 import { useEffect, useRef } from "react";
 import * as CANNON from "cannon-es";
 import * as THREE from "three";
+import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { cn } from "@/lib/utils";
 
 /**
  * Настоящие 3D-кости с физикой (cannon-es): падают в лоток кормовой базы,
- * сталкиваются и сваливаются в кучку, а затем мягко перекатываются нужной
- * гранью кверху — значение задаёт движок партии, физика только «оживляет»
- * бросок. Пока значения нет, кубики вечно подбрасываются.
+ * сталкиваются и сваливаются в кучку, а затем доворачиваются выпавшей гранью
+ * кверху — значения задаёт движок партии, физика только «оживляет» бросок.
+ * Пока значения нет, кубики спокойно лежат: без подпрыгиваний и дрожи.
  *
- * Значение грани видно зрителю (камера смотрит сверху и спереди):
- * материалы BoxGeometry идут в порядке +x,−x,+y,−y,+z,−z — раскладываем
- * очки так, чтобы противоположные грани давали в сумме 7, как на настоящей кости.
+ * Оформление — «родственник» фишек еды (FoodCube в icons.tsx): тот же красный
+ * тон кормовой базы, светлая кромка-фаска по ребру и тёплая кость очков.
+ * Значение читается по ВЕРХНЕЙ грани, как у настоящей кости на столе.
  */
-const FACE_BY_MATERIAL = [1, 6, 2, 5, 3, 4];
 
-/** Поворот, которым грань со значением оказывается к зрителю. */
-const FACE_EULER: Record<number, [number, number, number]> = {
-  3: [0, 0, 0],
-  4: [0, Math.PI, 0],
-  1: [0, -Math.PI / 2, 0],
-  6: [0, Math.PI / 2, 0],
-  2: [Math.PI / 2, 0, 0],
-  5: [-Math.PI / 2, 0, 0],
+/** Значение грани для материала BoxGeometry: +x, −x, +y, −y, +z, −z. */
+const FACE_BY_MATERIAL = [1, 6, 2, 5, 3, 4] as const;
+
+/** Нормаль грани со значением в системе кубика (та же раскладка, что выше). */
+const FACE_NORMAL: Record<number, readonly [number, number, number]> = {
+  1: [1, 0, 0],
+  6: [-1, 0, 0],
+  2: [0, 1, 0],
+  5: [0, -1, 0],
+  3: [0, 0, 1],
+  4: [0, 0, -1],
 };
 
-const PIPS: Record<number, Array<[number, number]>> = {
+const UP = new THREE.Vector3(0, 1, 0);
+const TAU = Math.PI * 2;
+
+/**
+ * Грань кости рисуется в canvas 512×512. Кромка (внешние ~5.5% — ровно доля
+ * скругления геометрии) — «фаска»: светлая сверху-слева, тёмная снизу-справа,
+ * как светлое ребро фишек еды. Середина грани — плита с бумажной фактурой.
+ */
+const FACE_PX = 512;
+const PLATE_INSET = 0.055;
+/** Радиус очка в долях грани: как у настоящей кости, с зазором между рядами. */
+const PIP_R = 0.088;
+/** Центры очков в долях грани (0…1). Ряды через 0.22–0.25 — точки не слипаются. */
+const PIP_LAYOUT: Record<number, ReadonlyArray<readonly [number, number]>> = {
   1: [[0.5, 0.5]],
   2: [
-    [0.3, 0.3],
-    [0.7, 0.7],
+    [0.28, 0.28],
+    [0.72, 0.72],
   ],
   3: [
-    [0.3, 0.3],
+    [0.28, 0.28],
     [0.5, 0.5],
-    [0.7, 0.7],
+    [0.72, 0.72],
   ],
   4: [
-    [0.3, 0.3],
-    [0.7, 0.3],
-    [0.3, 0.7],
-    [0.7, 0.7],
+    [0.28, 0.28],
+    [0.72, 0.28],
+    [0.28, 0.72],
+    [0.72, 0.72],
   ],
   5: [
-    [0.3, 0.3],
-    [0.7, 0.3],
+    [0.28, 0.28],
+    [0.72, 0.28],
     [0.5, 0.5],
-    [0.3, 0.7],
-    [0.7, 0.7],
+    [0.28, 0.72],
+    [0.72, 0.72],
   ],
   6: [
-    [0.3, 0.26],
-    [0.7, 0.26],
+    [0.3, 0.25],
+    [0.7, 0.25],
     [0.3, 0.5],
     [0.7, 0.5],
-    [0.3, 0.74],
-    [0.7, 0.74],
+    [0.3, 0.75],
+    [0.7, 0.75],
   ],
 };
 
@@ -72,72 +88,110 @@ function paperImage(): Promise<HTMLImageElement | null> {
   return paperCache;
 }
 
+/** Прямоугольник со скруглёнными углами (arcTo — без опоры на ctx.roundRect). */
+function roundedPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
 /**
- * Грань кости: ровный тон цвета кормовой базы с лёгкой бумажной фактурой
- * поверх (текстура стола, но приглушённо — тон доминирует), виньетка к кромке
- * для объёма, очки — светлая кость с тёмной обводкой, как на окрашенной кости.
+ * Очко-углубление: тень вокруг, тёплая кость со скошенной в тень верхней
+ * стенкой, тёмная кромка отверстия и блик на нижней стенке. Так точка
+ * читается как выбранная в кости, а не как наклейка.
+ */
+function drawPip(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) {
+  const hole = ctx.createRadialGradient(cx, cy, r * 0.8, cx, cy, r * 1.5);
+  hole.addColorStop(0, "rgba(34,18,10,0)");
+  hole.addColorStop(0.5, "rgba(34,18,10,0.3)");
+  hole.addColorStop(1, "rgba(34,18,10,0)");
+  ctx.fillStyle = hole;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 1.5, 0, TAU);
+  ctx.fill();
+
+  const bone = ctx.createLinearGradient(cx - r, cy - r, cx + r, cy + r);
+  bone.addColorStop(0, "#c6b795");
+  bone.addColorStop(0.45, "#f1e7cf");
+  bone.addColorStop(1, "#fffaf0");
+  ctx.fillStyle = bone;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, TAU);
+  ctx.fill();
+
+  ctx.lineWidth = Math.max(1.5, r * 0.16);
+  ctx.strokeStyle = "rgba(46,26,14,0.55)";
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, TAU);
+  ctx.stroke();
+
+  // Блик на нижней (освещённой) стенке углубления.
+  ctx.beginPath();
+  ctx.arc(cx + r * 0.16, cy + r * 0.18, r * 0.66, Math.PI * 0.12, Math.PI * 0.88);
+  ctx.strokeStyle = "rgba(255,255,255,0.5)";
+  ctx.lineWidth = Math.max(1.5, r * 0.24);
+  ctx.lineCap = "round";
+  ctx.stroke();
+}
+
+/**
+ * Грань кости: фаска по ребру, плита в тон кормовой базы с бумажной фактурой,
+ * объёмным светом от верхнего левого угла и очками-углублениями.
  */
 function dieFaceTexture(value: number, paper: HTMLImageElement | null, tint: string): THREE.CanvasTexture {
-  const S = 256;
+  const S = FACE_PX;
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = S;
   const ctx = canvas.getContext("2d")!;
-  const r = 30;
-  const roundPath = () => {
-    ctx.beginPath();
-    ctx.moveTo(r, 0);
-    ctx.arcTo(S, 0, S, S, r);
-    ctx.arcTo(S, S, 0, S, r);
-    ctx.arcTo(0, S, 0, 0, r);
-    ctx.arcTo(0, 0, S, 0, r);
-    ctx.closePath();
-  };
 
-  // Насыщенный тон с мягким световым градиентом — основа грани.
+  // Фаска по всему квадрату: скруглённое ребро кубика ловит свет.
   ctx.fillStyle = tint;
   ctx.fillRect(0, 0, S, S);
-  const light = ctx.createLinearGradient(0, 0, 0, S);
-  light.addColorStop(0, "rgba(255,246,225,0.32)");
-  light.addColorStop(0.5, "rgba(255,255,255,0)");
-  light.addColorStop(1, "rgba(24,14,6,0.24)");
-  ctx.fillStyle = light;
-  ctx.fillRect(0, 0, S, S);
-  // Бумажная фактура стола поверх — приглушённо, чтобы не гасить тон.
-  if (paper) {
-    roundPath();
-    ctx.save();
-    ctx.clip();
-    ctx.globalAlpha = 0.24;
-    ctx.drawImage(paper, 0, 0, S, S);
-    ctx.restore();
-  }
-  const vig = ctx.createRadialGradient(S / 2, S / 2, S * 0.32, S / 2, S / 2, S * 0.78);
-  vig.addColorStop(0, "rgba(0,0,0,0)");
-  vig.addColorStop(1, "rgba(28,18,10,0.34)");
-  ctx.fillStyle = vig;
+  const bevel = ctx.createLinearGradient(0, 0, S, S);
+  bevel.addColorStop(0, "rgba(255,247,228,0.62)");
+  bevel.addColorStop(0.3, "rgba(255,247,228,0.1)");
+  bevel.addColorStop(0.7, "rgba(26,12,6,0.12)");
+  bevel.addColorStop(1, "rgba(26,12,6,0.5)");
+  ctx.fillStyle = bevel;
   ctx.fillRect(0, 0, S, S);
 
-  roundPath();
-  ctx.lineWidth = 6;
-  ctx.strokeStyle = "rgba(35,24,15,0.5)";
+  // Плита грани — плоская часть: тон базы, объём, бумага.
+  const inset = S * PLATE_INSET;
+  const plate = S - inset * 2;
+  const radius = S * 0.16;
+  ctx.save();
+  roundedPath(ctx, inset, inset, plate, plate, radius);
+  ctx.clip();
+  ctx.fillStyle = tint;
+  ctx.fillRect(inset, inset, plate, plate);
+  const dome = ctx.createRadialGradient(S * 0.34, S * 0.3, S * 0.04, S * 0.5, S * 0.52, S * 0.8);
+  dome.addColorStop(0, "rgba(255,246,226,0.38)");
+  dome.addColorStop(0.55, "rgba(255,255,255,0)");
+  dome.addColorStop(1, "rgba(28,16,8,0.3)");
+  ctx.fillStyle = dome;
+  ctx.fillRect(inset, inset, plate, plate);
+  if (paper) {
+    ctx.globalAlpha = 0.22;
+    ctx.drawImage(paper, inset, inset, plate, plate);
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+
+  // Кромка плиты: тёмная линия отделяет площадку от фаски.
+  roundedPath(ctx, inset, inset, plate, plate, radius);
+  ctx.lineWidth = S * 0.011;
+  ctx.strokeStyle = "rgba(40,22,12,0.34)";
   ctx.stroke();
 
-  for (const [fx, fy] of PIPS[value] ?? []) {
-    const x = fx * S;
-    const y = fy * S;
-    // Очки — кость с двойным контуром: тёмная кромка и внутренняя тень-блик.
-    ctx.beginPath();
-    ctx.arc(x, y, 30, 0, Math.PI * 2);
-    ctx.fillStyle = "#f8f1de";
-    ctx.fill();
-    ctx.lineWidth = 6;
-    ctx.strokeStyle = "rgba(30,20,12,0.6)";
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(x - 4, y - 5, 11, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255,255,255,0.5)";
-    ctx.fill();
+  for (const [fx, fy] of PIP_LAYOUT[value] ?? PIP_LAYOUT[1]!) {
+    drawPip(ctx, fx * S, fy * S, PIP_R * S);
   }
+
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -148,6 +202,28 @@ interface Die {
   body: CANNON.Body;
   /** Целевой кватернион «нужная грань кверху»; null — значение ещё неизвестно. */
   target: THREE.Quaternion | null;
+  /** Высота покоя: доводка приподнимает кубик над ней, но не «топит» в полу. */
+  restY: number;
+}
+
+/** Детерминированный ГПСЧ: один и тот же бросок выглядит одинаково. */
+function mulberry32(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function seedFrom(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
 }
 
 export function Dice3D({
@@ -190,25 +266,37 @@ export function Dice3D({
     if (!canvas) return;
     let disposed = false;
     let cleanup: (() => void) | undefined;
-    // Сцена строится после загрузки бумаги и следующего кадра — создание
-    // WebGL-контекста и текстур не блокирует отрисовку хода партии.
-    paperImage().then((paper) => {
-      requestAnimationFrame(() => {
-        if (disposed || !canvasRef.current) return;
-        cleanup = buildScene(canvasRef.current, paper, tint);
-      });
-    });
+    // Бросок начинается, только когда лоток реально виден: иначе анимация
+    // проигрывается за экраном (правила, мобильный скролл) и к пользователю
+    // кубики приезжают уже лежащими — выглядит как «анимации сломаны».
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        io.disconnect();
+        // Сцена строится после загрузки бумаги и следующего кадра — создание
+        // WebGL-контекста и текстур не блокирует отрисовку хода партии.
+        paperImage().then((paper) => {
+          requestAnimationFrame(() => {
+            if (disposed || !canvasRef.current) return;
+            cleanup = buildScene(canvasRef.current, paper, tint, rollKey);
+          });
+        });
+      },
+      { threshold: 0.2 },
+    );
+    io.observe(canvas);
     return () => {
       disposed = true;
+      io.disconnect();
       cleanup?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rollKey, n, width, height, tint]);
 
-  function buildScene(canvas: HTMLCanvasElement, paper: HTMLImageElement | null, tint: string) {
+  function buildScene(canvas: HTMLCanvasElement, paper: HTMLImageElement | null, tint: string, seed: string) {
     // preserveDrawingBuffer — чтобы кубики попадали в скриншоты (QA, шеринг).
     const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(width, height, false);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -217,32 +305,48 @@ export function Dice3D({
     renderer.shadowMap.autoUpdate = false;
 
     // Ортографическая камера с наклоном сверху: «настольный» вид, кубики
-    // одинакового размера в любой точке лотка, верхняя грань всегда читается.
+    // одинакового размера в любой точке лотка. Наклон круче прежнего — верхняя
+    // грань со значением читается, а над задним бортом остаётся место для
+    // кубика «на углу» (иначе задняя грань уходила за кадр).
     const aspect = width / height;
-    const frustumH = 2.5;
+    // Запас по высоте кадра: кубик у заднего борта не должен срезаться сверху.
+    const frustumH = 2.85;
     const frustumW = frustumH * aspect;
-    const camera = new THREE.OrthographicCamera(-frustumW / 2, frustumW / 2, frustumH / 2, -frustumH / 2, 0.1, 50);
-    camera.position.set(0, 4.6, 3.4);
-    camera.lookAt(0, 0.3, 0);
+    const camera = new THREE.OrthographicCamera(-frustumW / 2, frustumW / 2, frustumH / 2, -frustumH / 2, 0.1, 60);
+    camera.position.set(0, 5.6, 3.0);
+    // Смотрим чуть ниже центра кубика: над задним бортом остаётся запас кадра,
+    // чтобы лежащий у борта кубик не срезался верхним краем канваса.
+    camera.lookAt(0, 0.42, 0);
 
     const scene = new THREE.Scene();
-    scene.add(new THREE.AmbientLight(0xfff6e6, 0.95));
-    const key = new THREE.DirectionalLight(0xffffff, 1.8);
+    scene.add(new THREE.AmbientLight(0xfff4e4, 0.5));
+    scene.add(new THREE.HemisphereLight(0xfff8ec, 0x4a3a2c, 0.6));
+    const key = new THREE.DirectionalLight(0xfff3df, 1.55);
     // Свет высокий и почти отвесный: тени короткие и не вылезают за кадр.
-    key.position.set(2, 9, 1.5);
+    key.position.set(2.2, 8, 2.4);
     key.castShadow = true;
-    key.shadow.mapSize.set(512, 512);
-    key.shadow.camera.left = -5;
-    key.shadow.camera.right = 5;
-    key.shadow.camera.top = 5;
-    key.shadow.camera.bottom = -5;
+    key.shadow.mapSize.set(768, 768);
+    key.shadow.camera.left = -3.6;
+    key.shadow.camera.right = 3.6;
+    key.shadow.camera.top = 3.6;
+    key.shadow.camera.bottom = -3.6;
+    key.shadow.camera.near = 1;
+    key.shadow.camera.far = 24;
+    // Смещение по нормали убирает самозатенение граней (акне) на кубике.
+    key.shadow.normalBias = 0.02;
+    key.shadow.camera.updateProjectionMatrix();
     scene.add(key);
-    const fill = new THREE.DirectionalLight(0x9fb4c8, 0.5);
-    fill.position.set(-4, 2, -2);
+    const fill = new THREE.DirectionalLight(0xa9c0d6, 0.32);
+    fill.position.set(-4, 2.4, -2.6);
     scene.add(fill);
+    // Тёплый контровой свет спереди-слева: подсвечивает передние грани и
+    // даёт лёгкий блик, как светлое ребро фишек еды.
+    const rim = new THREE.DirectionalLight(0xffe6c2, 0.4);
+    rim.position.set(-2.4, 1.8, 4.2);
+    scene.add(rim);
 
     // Пол ловит только тень — фон канваса остаётся прозрачным.
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.ShadowMaterial({ opacity: 0.32 }));
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.ShadowMaterial({ opacity: 0.3 }));
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
     scene.add(floor);
@@ -250,49 +354,70 @@ export function Dice3D({
     // ── Физика: лоток с невидимыми бортами, кубики падают и кучкуются ──
     const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -20, 0) });
     world.broadphase = new CANNON.SAPBroadphase(world);
+    // Решатель по умолчанию — GSSolver; больше итераций = меньше продавливания
+    // кубиков друг в друга в кучке.
+    if (world.solver instanceof CANNON.GSSolver) world.solver.iterations = 12;
     world.allowSleep = true;
     const diceMaterial = new CANNON.Material("dice");
     const floorMaterial = new CANNON.Material("floor");
     world.addContactMaterial(
-      new CANNON.ContactMaterial(floorMaterial, diceMaterial, { restitution: 0.25, friction: 0.55 }),
+      // Трение о дно большое, отскок слабый: кубик садится и не скачет.
+      new CANNON.ContactMaterial(floorMaterial, diceMaterial, { restitution: 0.12, friction: 0.62 }),
     );
-    world.addContactMaterial(new CANNON.ContactMaterial(diceMaterial, diceMaterial, { restitution: 0.15, friction: 0.12 }));
+    world.addContactMaterial(new CANNON.ContactMaterial(diceMaterial, diceMaterial, { restitution: 0.06, friction: 0.25 }));
 
     const ground = new CANNON.Body({ mass: 0, shape: new CANNON.Plane(), material: floorMaterial });
     ground.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
     world.addBody(ground);
 
-    // Борта внутри кадра: кучка не расползается за края канваса. Запас от
-    // края — больше полукуба с поворотом и тени, чтобы кучка не «выпадала
-    // из квадратика». Стены высокие — с разгона не перелететь.
-    const wallX = Math.max(frustumW / 2 - 1.3, 0.6);
-    const wallZ = 0.7;
-    const wallShape = new CANNON.Box(new CANNON.Vec3(10, 4, 0.25));
-    for (const [x, z, rz] of [
-      [-wallX, 0, Math.PI / 2],
-      [wallX, 0, Math.PI / 2],
-      [0, -wallZ, 0],
-      [0, wallZ, 0],
-    ] as const) {
-      const wall = new CANNON.Body({ mass: 0, shape: wallShape, material: floorMaterial });
-      wall.position.set(x, 2, z);
-      wall.quaternion.setFromEuler(0, 0, rz);
+    const diceCount = Math.max(valuesRef.current.length, 1);
+    // Коридор лотка: кубик должен свободно лежать «на углу» (полудиагональ
+    // 0.707), поэтому минимум 0.95 от центра, а не впритык к полукубу:
+    // в тесном лотке кубики заклинивало между бортами и они дрожали.
+    // Сверху коридор ограничен, чтобы кучка не расползалась по кадру.
+    const wallX = Math.max(Math.min(frustumW / 2 - 0.68, 0.66 * n - 0.02), 0.95);
+    // По глубине коридор ограничен кадром: у заднего борта кубик «на углу»
+    // не должен уходить за верхний край.
+    const wallZ = 0.86;
+    // Борта — плоскости-полупространства, а не тонкие боксы: столкновение
+    // «плоскость × бокс» решается устойчиво и кубик не может ни застрять
+    // в борту, ни проскочить сквозь него.
+    for (const [normal, point] of [
+      [new CANNON.Vec3(1, 0, 0), new CANNON.Vec3(-wallX, 0, 0)],
+      [new CANNON.Vec3(-1, 0, 0), new CANNON.Vec3(wallX, 0, 0)],
+      [new CANNON.Vec3(0, 0, 1), new CANNON.Vec3(0, 0, -wallZ)],
+      [new CANNON.Vec3(0, 0, -1), new CANNON.Vec3(0, 0, wallZ)],
+    ]) {
+      const wall = new CANNON.Body({ mass: 0, shape: new CANNON.Plane(), material: floorMaterial });
+      wall.quaternion.setFromVectors(new CANNON.Vec3(0, 0, 1), normal);
+      wall.position.copy(point);
       world.addBody(wall);
     }
 
-    const geometry = new THREE.BoxGeometry(1, 1, 1);
-    const materialsByValue = new Map<number, THREE.MeshStandardMaterial>();
+    // Скруглённый куб: рёбра ловят свет, силуэт читается как у настоящей кости.
+    const geometry = new RoundedBoxGeometry(1, 1, 1, 4, 0.07);
+    const materialsByValue = new Map<number, THREE.MeshPhysicalMaterial>();
+    const maxAniso = renderer.capabilities.getMaxAnisotropy();
     const materialFor = (value: number) => {
       let m = materialsByValue.get(value);
       if (!m) {
-        m = new THREE.MeshStandardMaterial({ map: dieFaceTexture(value, paper, tint), roughness: 0.38, metalness: 0.04 });
+        const map = dieFaceTexture(value, paper, tint);
+        map.anisotropy = Math.min(4, maxAniso);
+        m = new THREE.MeshPhysicalMaterial({
+          map,
+          // Лёгкий лак поверх краски: мягкий блик на фаске и верхней грани.
+          roughness: 0.42,
+          metalness: 0,
+          clearcoat: 0.3,
+          clearcoatRoughness: 0.55,
+        });
         materialsByValue.set(value, m);
       }
       return m;
     };
 
+    const rand = mulberry32(seedFrom(seed));
     const dice: Die[] = [];
-    const diceCount = Math.max(valuesRef.current.length, 1);
     for (let i = 0; i < diceCount; i++) {
       const materials = FACE_BY_MATERIAL.map((v) => materialFor(v));
       const mesh = new THREE.Mesh(geometry, materials);
@@ -306,34 +431,50 @@ export function Dice3D({
         material: diceMaterial,
         // Кубики засыпают охотно: без этого дрожат на полу и доводка граней
         // начинается только по таймауту — бросок «зависает».
-        sleepSpeedLimit: 0.6,
-        sleepTimeLimit: 0.25,
+        sleepSpeedLimit: 0.2,
+        sleepTimeLimit: 0.2,
       });
-      // Разбросанный спавн этажами над лотком — кубики прилетают не строем
-      // и не с большой высоты: бросок укладывается примерно за секунду.
-      body.position.set(
-        (Math.random() * 2 - 1) * Math.max(wallX - 0.4, 0.1),
-        1.3 + i * 0.6,
-        (Math.random() * 2 - 1) * 0.25,
-      );
-      body.quaternion.setFromEuler(
-        Math.random() * Math.PI * 2,
-        Math.random() * Math.PI * 2,
-        Math.random() * Math.PI * 2,
-      );
-      body.velocity.set((Math.random() * 2 - 1) * 2, -4 - Math.random() * 2, (Math.random() * 2 - 1) * 2);
-      body.angularVelocity.set(
-        (Math.random() * 2 - 1) * 8,
-        (Math.random() * 2 - 1) * 8,
-        (Math.random() * 2 - 1) * 8,
-      );
+      // Затухание гасит остаточное качение: после остановки кубик не ёрзает.
+      body.linearDamping = 0.15;
+      body.angularDamping = 0.25;
+      // Спокойный подброс: кубики падают с небольшой высоты почти плашмя и
+      // лишь слегка перекатываются. Из-за прежнего разгона кубики бились
+      // друг о друга, застревали в бортах и «выдавливались» из лотка.
+      // Дорожки разнесены (кубик не может лечь на соседа), высоты — лесенкой.
+      const tilt = () => (rand() * 2 - 1) * 0.18;
+      // Разворот вокруг вертикали кратен 90°: угол «на угол» (45°) раздувает
+      // пятно кубика до 0.71 полуширины, и угол застревает в борту — кубик
+      // зависает в воздухе, приклеенный трением к невидимой стене.
+      const yaw = Math.floor(rand() * 4) * (Math.PI / 2) + (rand() - 0.5) * 0.12;
+      const laneStep = diceCount === 1 ? 0 : Math.min(1.2, Math.max(wallX - 0.62, 0.5) * 2);
+      const lane = (i - (diceCount - 1) / 2) * laneStep;
+      body.position.set(lane + (rand() * 2 - 1) * 0.05, 0.72 + i * 0.42, (rand() * 2 - 1) * 0.15);
+      body.quaternion.setFromEuler(tilt(), yaw, tilt());
+      body.velocity.set((rand() * 2 - 1) * 0.2, -0.6 - rand() * 0.4, (rand() * 2 - 1) * 0.2);
+      body.angularVelocity.set((rand() * 2 - 1) * 1.2, (rand() * 2 - 1) * 1.2, (rand() * 2 - 1) * 1.2);
       world.addBody(body);
-      dice.push({ mesh, body, target: null });
+      dice.push({ mesh, body, target: null, restY: 0.5 });
     }
 
-    const targetOf = (value: number) => {
-      const e = FACE_EULER[value] ?? FACE_EULER[3]!;
-      return new THREE.Quaternion().setFromEuler(new THREE.Euler(e[0], e[1], e[2]));
+    /** Страховка: тело, вылетевшее из лотка (не должно случаться), возвращаем. */
+    const keepInside = (d: Die) => {
+      const p = d.body.position;
+      if (p.y > 3.2 || p.y < -1 || Math.abs(p.x) > wallX + 0.6 || Math.abs(p.z) > wallZ + 0.6) {
+        p.set(0, 1.3, 0);
+        d.body.quaternion.set(0, 0, 0, 1);
+        d.body.velocity.setZero();
+        d.body.angularVelocity.setZero();
+      }
+    };
+
+    const targetOf = (value: number, index: number) => {
+      const nrm = FACE_NORMAL[value] ?? FACE_NORMAL[3]!;
+      const align = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(nrm[0], nrm[1], nrm[2]), UP);
+      // Небольшой поворот вокруг вертикали: кубики лежат «по-живому», а
+      // значение всё равно смотрит вверх. Угол маленький: при наклонной камере
+      // сильный поворот читается как «кубик стоит криво».
+      const yaw = ((((value * 7 + index * 5) % 9) / 9) * 2 - 1) * 0.13;
+      return new THREE.Quaternion().setFromAxisAngle(UP, yaw).multiply(align);
     };
 
     let raf = 0;
@@ -342,7 +483,8 @@ export function Dice3D({
     let settleT = 0;
     let settled = false;
     let done = false;
-    let nudgeAt = 0;
+    /** Сколько секунд подряд кучка стоит почти неподвижно. */
+    let quiet = 0;
 
     const loop = (now: number) => {
       const dt = Math.min((now - last) / 1000, 0.05);
@@ -355,39 +497,32 @@ export function Dice3D({
       if (!settled) {
         world.step(1 / 60, dt, 3);
         for (const d of dice) {
+          keepInside(d);
           d.mesh.position.copy(d.body.position as unknown as THREE.Vector3);
           d.mesh.quaternion.copy(d.body.quaternion as unknown as THREE.Quaternion);
         }
-        // Порог спокойствия щедрый: мелкая дрожь кубиков на полу не мешает
-        // доводке. Жёсткий таймаут короткий — бросок не «зависает».
-        const calm =
-          elapsed > 0.3 &&
-          dice.every(
-            (d) =>
-              d.body.sleepState === CANNON.Body.SLEEPING ||
-              (d.body.velocity.lengthSquared() < 0.35 && d.body.angularVelocity.lengthSquared() < 1.2),
-          );
-        if (calm || elapsed > 1.5) {
-          const vals = valuesRef.current;
-          if (vals.length >= dice.length && vals.slice(0, dice.length).every((v) => v != null)) {
-            // Значения известны — переходим к доводке граней.
-            settled = true;
-            settleT = 0;
-            for (let i = 0; i < dice.length; i++) {
-              dice[i]!.target = targetOf(vals[i] ?? 3);
-            }
-          } else if (elapsed - nudgeAt > 0.9) {
-            // Бросок ещё идёт — подбрасываем снова.
-            nudgeAt = elapsed;
-            for (const d of dice) {
-              d.body.wakeUp();
-              d.body.velocity.set((Math.random() * 2 - 1) * 1.6, 3 + Math.random() * 2, (Math.random() * 2 - 1) * 1.6);
-              d.body.angularVelocity.set(
-                (Math.random() * 2 - 1) * 8,
-                (Math.random() * 2 - 1) * 8,
-                (Math.random() * 2 - 1) * 8,
-              );
-            }
+        const vals = valuesRef.current;
+        const valsReady = vals.length >= dice.length && vals.slice(0, dice.length).every((v) => v != null);
+        // «Спокойно» — не мгновенная тишина (на ребре кубик на миг
+        // останавливается и сразу заваливается), а 0.22 с непрерывного покоя:
+        // иначе доводка замораживала кубик стоящим на ребре.
+        const calmNow = dice.every(
+          (d) =>
+            d.body.sleepState === CANNON.Body.SLEEPING ||
+            (d.body.velocity.lengthSquared() < 0.2 && d.body.angularVelocity.lengthSquared() < 0.7),
+        );
+        quiet = calmNow ? quiet + dt : 0;
+        const calm = elapsed > 0.25 && quiet > 0.22;
+        if (valsReady && (calm || elapsed > 1.5)) {
+          settled = true;
+          settleT = 0;
+          for (let i = 0; i < dice.length; i++) {
+            dice[i]!.target = targetOf(vals[i] ?? 3, i);
+            // Если кубик замер чуть выше пола (остановился на ребре, не успев
+            // завалиться), доводка кладёт его плашмя на пол. Кубик, лежащий
+            // на другом кубике, остаётся на своей высоте.
+            const y = dice[i]!.mesh.position.y;
+            dice[i]!.restY = y > 0.5 && y < 0.8 ? 0.5 : y;
           }
         }
         renderer.render(scene, camera);
@@ -395,33 +530,31 @@ export function Dice3D({
         return;
       }
 
-      // Фаза 2 — доводка: кубик приподнимается и плавно перекатывается нужной
-      // гранью кверху, занимая место в кучке. Горизонтальные позиции — от
-      // физики, так что кучка сохраняется.
-      if (!done) {
-        settleT += dt;
-        const p = Math.min(settleT / 0.5, 1);
+      // Фаза 2 — доводка: кубик мягко приподнимается и доворачивается нужной
+      // гранью кверху, оставаясь на месте в кучке. Горизонтальные позиции и
+      // высота покоя — от физики, так что кучка сохраняется.
+      settleT += dt;
+      const p = Math.min(settleT / 0.32, 1);
+      const lift = 0.22 * Math.sin(Math.PI * p);
+      for (const d of dice) {
+        if (!d.target) continue;
+        d.mesh.quaternion.slerp(d.target, Math.min(1, dt * 13));
+        const targetY = d.restY + lift;
+        d.mesh.position.y += (targetY - d.mesh.position.y) * Math.min(1, dt * 16);
+      }
+      if (p >= 1) {
+        done = true;
         for (const d of dice) {
           if (!d.target) continue;
-          d.mesh.quaternion.slerp(d.target, Math.min(1, dt * 8));
-          const lift = 0.3 * Math.sin(Math.PI * p);
-          const targetY = 0.5 + lift;
-          d.mesh.position.y += (targetY - d.mesh.position.y) * Math.min(1, dt * 12);
-        }
-        if (p >= 1) {
-          done = true;
-          for (const d of dice) {
-            if (!d.target) continue;
-            d.mesh.quaternion.copy(d.target);
-            d.mesh.position.y = 0.5;
-          }
-          renderer.render(scene, camera);
-          raf = 0;
-          return;
+          d.mesh.quaternion.copy(d.target);
+          d.mesh.position.y = d.restY;
         }
         renderer.render(scene, camera);
-        raf = requestAnimationFrame(loop);
+        raf = 0;
+        return;
       }
+      renderer.render(scene, camera);
+      raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
 

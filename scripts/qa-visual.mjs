@@ -1,16 +1,17 @@
 /**
- * Визуальный QA: скриншоты ключевых экранов в artifacts/qa-shots/ плюс
- * программные проверки «на глаз»: горизонтальный overflow, кучка кубиков
+ * Визуальный QA: скриншоты ключевых экранов (в каталоге вне репозитория)
+ * плюс программные проверки «на глаз»: горизонтальный overflow, кучка кубиков
  * внутри канваса (периметр прозрачен), время укладки кубиков, старт полёта
  * фишки еды из центра стола (не из шапки). Запуск при живом dev-сервере:
  * node scripts/qa-visual.mjs
+ *
+ * Партия поднимается СЕТЕВЫМ столом (соло-режим удалён): see scripts/qa-lib.mjs.
  */
-import { mkdirSync } from "node:fs";
 import { chromium } from "playwright";
+import { SHOTS, advancePhase, endPhaseStep, menuReady, phaseOf, shotsDir, startNetGame, waitHumanTurn } from "./qa-lib.mjs";
 
 const base = process.env.EVO_URL ?? "http://127.0.0.1:8099";
-const SHOTS = "artifacts/qa-shots";
-mkdirSync(SHOTS, { recursive: true });
+shotsDir();
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -37,7 +38,7 @@ page.on("pageerror", (e) => fail("PAGEERROR: " + e.message));
 try {
   // ── 1. Главное меню ──
   await page.goto(base, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: "Начать год" }).waitFor({ timeout: 20000 });
+  if (!(await menuReady(page, 25_000))) fail("меню не дождалось гидратации (нет поля имени/«Создать стол»)");
   await page.screenshot({ path: `${SHOTS}/01-menu.png` });
   const nav = await page.evaluate(() => {
     const header = document.querySelector("header");
@@ -53,23 +54,35 @@ try {
   nav.overflowX <= 1 ? ok("нет горизонтального скролла в меню") : fail(`горизонтальный скролл в меню: ${nav.overflowX}px`);
   console.log("  кнопки полосы:", JSON.stringify(nav.buttons));
 
-  // ── 2. Партия: развитие ──
-  await page.getByRole("button", { name: "Начать год" }).click();
-  await page.getByText("Развитие").first().waitFor({ timeout: 20000 });
+  // ── 2. Партия: развитие (сетевой стол с ботом вместо удалённого соло) ──
+  await startNetGame(page, { name: "Визуал", players: 2, bots: 1 });
+  console.log("стол поднят, фаза:", await phaseOf(page));
+  await page.locator("text=Развитие >> visible=true").first().waitFor({ timeout: 30000 });
   await page.waitForTimeout(600);
   await page.screenshot({ path: `${SHOTS}/02-development.png` });
   ok("партия стартовала, скрин развития снят");
 
-  // ── 3. Кормовая база: кубики в границах и время укладки ──
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (((await evalSafe(() => document.body.innerText)) ?? "").includes("Кормовая база")) break;
-    const pass = page.getByRole("button", { name: "Пас", exact: true });
-    if ((await pass.isVisible().catch(() => false)) && (await pass.isEnabled().catch(() => false))) {
-      await pass.click();
+  // Разыграем одно животное в свой ход: без животного в питании «Взять еду»
+  // недоступна, и проверка полёта фишки уходила бы в SKIP.
+  if (await waitHumanTurn(page, 60_000)) {
+    const face = page.locator("[data-hand-row] button", { hasText: "Животное" }).first();
+    if (await face.count()) {
+      await face.click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(500);
+      console.log("животное разыграно для проверки полёта еды");
     }
-    await page.waitForTimeout(250);
   }
+
+  // ── 3. Кормовая база: кубики в границах и время укладки ──
+  // Фазу гонит общий advancePhase: «Закончить развитие»/«Закончить ход» с
+  // подтверждениями. Маркер — фаза по СТОРУ: подпись «Кормовая база» есть в
+  // панели-сукне и в развитии, по тексту страницы фазу не отличить.
+  const reachedBank = await advancePhase(
+    page,
+    () => phaseOf(page).then((p) => p === "foodBank" || p === "feeding"),
+    { timeout: 120_000 },
+  );
+  if (!reachedBank) fail(`фаза броска не достигнута; экран: ${await page.evaluate(() => document.body.innerText.slice(0, 160))}`);
   await page.screenshot({ path: `${SHOTS}/03-foodbank.png` });
 
   // Время укладки: строка пикселей должна перестать меняться на 3 замера
@@ -154,18 +167,17 @@ try {
       : fail(`кубики/тени касаются края канваса: ${JSON.stringify(edges.sides)}`);
   }
 
-  // ── 4. Питание: полёт фишки еды из центра стола ──
-  const feedDeadline = Date.now() + 90_000;
+  // ── 4. Питание: полёт фишки еды из центра стола (фаза по стору) ──
+  const feedDeadline = Date.now() + 120_000;
   while (Date.now() < feedDeadline) {
     const take = page.getByRole("button", { name: "Взять еду" });
     if ((await take.isVisible().catch(() => false)) && (await take.isEnabled().catch(() => false))) {
       await take.click();
       break;
     }
-    const pass = page.getByRole("button", { name: "Пас", exact: true });
-    if ((await pass.isVisible().catch(() => false)) && (await pass.isEnabled().catch(() => false))) {
-      await pass.click();
-    }
+    // Разгон фазы: сначала завершение хода, затем (когда ход за человеком
+    // не держится) «Закончить питание» с обязательным подтверждением.
+    await endPhaseStep(page);
     await page.waitForTimeout(250);
   }
   // Ловим летящую фишку: трек позиций каждые 80 мс.

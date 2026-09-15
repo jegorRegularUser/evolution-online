@@ -51,3 +51,13 @@ terminals/
 /playwright-report
 /test-results
 
+# QA-артефакты агентов (скриншоты в artifacts/qa-shots/ и пробы). Должны быть
+# вне git: иначе Tailwind v4 включает их в скан кандидатов классов, и каждая
+# запись PNG перегенерирует styles.css → hmr update / reload вкладок в dev
+# (см. server.watch.ignored в vite.config.ts). Уже tracked-файлы внутри
+# не разтрекаются, но новые сюда осознанно добавлять не нужно.
+artifacts/
+
+
+# Auto-generated context docs
+.repo-context/

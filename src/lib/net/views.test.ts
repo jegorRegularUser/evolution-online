@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createGame } from "../../game/engine.ts";
-import { viewFor } from "./views.ts";
+import { createGame, legalDevActions } from "../../game/engine.ts";
+import { redactEvents, viewFor } from "./views.ts";
 import type { GameState } from "../../game/types.ts";
 
 function seeded(): GameState {
@@ -10,6 +10,21 @@ function seeded(): GameState {
     { name: "B", isAI: false },
     { name: "Бот", isAI: true },
   ]);
+}
+
+/** Партия со «Случайными мутациями»: у каждого своя слепая колода. */
+function mutations(): GameState {
+  return createGame(
+    3,
+    "normal",
+    777,
+    [
+      { name: "A", isAI: false },
+      { name: "B", isAI: false },
+      { name: "Бот", isAI: true },
+    ],
+    { randomMutations: true },
+  );
 }
 
 /** Детерминированная заготовка: у игрока 1 животное со скрытым паразитом. */
@@ -69,5 +84,55 @@ describe("viewFor", () => {
     assert.ok(e.kind === "traitPlaced" && e.type !== "parasite");
     const own = viewFor(full, 1).lastEvents[0]!;
     assert.ok(own.kind === "traitPlaced" && own.type === "parasite");
+  });
+
+  it("скрытое событие без владельца тоже обезличивается (батчи событий)", () => {
+    const full = seeded();
+    const [e] = redactEvents(
+      [{ kind: "traitPlaced", animalId: "давно-погибшее", type: "parasite", hidden: true }],
+      1,
+      full,
+    );
+    assert.ok(e!.kind === "traitPlaced" && e!.type !== "parasite");
+  });
+
+  /**
+   * M15: личная колода мутаций слепа ДЛЯ ВСЕХ, включая владельца — в снимке
+   * остаётся только счётчик. Клиент читает именно blindDeckCount (порядок
+   * операндов `blindDeck?.length ?? blindDeckCount` давал 0 и глушил кнопки).
+   */
+  it("«Случайные мутации»: blindDeck пуст у всех, blindDeckCount — реальный", () => {
+    const full = mutations();
+    // Каноническое состояние: у каждого места своя колода из 7 карт.
+    assert.equal(full.players[0]!.blindDeck!.length, 7);
+    for (const seat of [0, 1, 2]) {
+      const v = viewFor(full, seat);
+      assert.equal(v.humanId, seat);
+      for (const p of v.players) {
+        assert.deepEqual(
+          p.blindDeck,
+          [],
+          "порядок личной колоды не должен попадать в снимок даже владельцу",
+        );
+        assert.equal(p.blindDeckCount, full.players[p.id]!.blindDeck!.length);
+      }
+      // Владелец по счётчику видит, что карты ещё есть, — док мутаций активен.
+      assert.ok((v.players[seat]!.blindDeckCount ?? 0) > 0);
+    }
+  });
+
+  it("«Случайные мутации»: в развитии легальные действия своего игрока непусты", () => {
+    const full = mutations();
+    const acts = legalDevActions(full, 0);
+    assert.ok(
+      acts.some((a) => a.type === "devMutate"),
+      "мутации должны быть в легальных ходах",
+    );
+    // Чужой ход списка не получает: сервер по нему отклоняет действия.
+    assert.deepEqual(legalDevActions(full, 1), []);
+    // Снимок тоже даёт непустой список (devPass) и честный счётчик колоды.
+    const v = viewFor(full, 0);
+    assert.ok(legalDevActions(v, 0).length > 0);
+    assert.ok((v.players[0]!.blindDeckCount ?? 0) > 0);
   });
 });
