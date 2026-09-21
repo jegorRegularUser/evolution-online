@@ -22,10 +22,12 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { DialogShell } from "@/components/ui/dialog-shell";
 import { ConfirmDialog } from "@/components/game/confirm-dialog";
 import { deckSizeFor } from "@/game/deck";
+import { moduleCompatibilityError } from "@/game/module-compatibility";
 import type { Difficulty } from "@/game/types";
 import { PLAYER_COLORS, type PlayerColor, type ReactionEmoji, type RoomSummary, type SeatInfo } from "@/lib/net/shared";
 import { EventFeed, reactionsByChatId, type FeedItem } from "./event-feed";
@@ -1118,6 +1120,7 @@ function seatOfItem(item: FeedItem): number | null {
  */
 export function LobbyScreen() {
   const tt = useT();
+  const lang = useLang();
   const net = useGameStore((s) => s.net);
   const netAddBots = useGameStore((s) => s.netAddBots);
   const netStart = useGameStore((s) => s.netStart);
@@ -1138,6 +1141,8 @@ export function LobbyScreen() {
   // Чат лобби — тот же компонент, что журнал в игре: чат плюс системные
   // события стола (кто вошёл, вышел, сдался).
   const [chatOpen, setChatOpen] = useState(false);
+  const chatTitleId = useId();
+  const chatButtonRef = useRef<HTMLButtonElement>(null);
   const lastSeenChatRef = useRef(0);
   const chatItems = useTableFeedItems(net);
   const typingNames = useTypingNames(net);
@@ -1179,6 +1184,9 @@ export function LobbyScreen() {
   const deckNow = Math.min(net.settings.deckSize ?? deckFull, deckFull);
   // Чего не хватает для старта: у хоста — полного стола, у остальных — прав.
   const freeSeats = Math.max(0, net.capacity - net.seats.length);
+  // Несовместимые дополнения блокируют старт: сервер тоже отклонит, но кнопку
+  // лучше показать неактивной сразу (флаги при этом никто не снимает молча).
+  const incompatibility = isHost ? moduleCompatibilityError(modules, lang) : null;
   const startHint = !isHost
     ? tt("lobby.startHint.host")
     : freeSeats > 0
@@ -1232,7 +1240,11 @@ export function LobbyScreen() {
 
   function toggleModule(key: ModuleKey) {
     if (!isHost) return;
-    void netSetSettings({ modules: { ...modules, [key]: !modules[key] } });
+    // Включение несовместимого дополнения блокируется (с пояснением), но
+    // существующие флаги не трогаем: ничего не снимаем молча.
+    const candidate = { ...modules, [key]: !modules[key] };
+    if (moduleCompatibilityError(candidate, lang)) return;
+    void netSetSettings({ modules: candidate });
   }
 
   function pickDifficulty(id: Difficulty) {
@@ -1508,16 +1520,21 @@ export function LobbyScreen() {
 
           <div className="mb-3">
             <p className="mb-1.5 text-xs text-muted">{tt("lobby.modules")}</p>
+            <p id="module-compatibility-hint" className="mb-2 text-xs text-muted">
+              {moduleCompatibilityError({ fungi: true, plants: true }, lang)}
+            </p>
             <div className="grid grid-cols-2 gap-2">
               {MODULE_OPTIONS.map(([key, labelKey, hintKey]) => {
                 const on = Boolean(modules[key]);
+                const blocked = moduleCompatibilityError({ ...modules, [key]: !on }, lang);
                 return (
                   <button
                     key={key}
                     type="button"
-                    disabled={!isHost}
+                    disabled={!isHost || Boolean(blocked)}
                     aria-pressed={on}
-                    title={isHost ? tt(hintKey) : tt("lobby.hostOnly")}
+                    title={isHost ? blocked ?? tt(hintKey) : tt("lobby.hostOnly")}
+                    aria-describedby={blocked ? "module-compatibility-hint" : undefined}
                     onClick={() => toggleModule(key)}
                     className={cn(
                       "flex items-center justify-between gap-2 rounded-[var(--radius-md)] border px-3 py-2 text-left text-xs leading-tight disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:text-sm",
@@ -1665,8 +1682,10 @@ export function LobbyScreen() {
           <Button
             className="flex-1 max-lg:h-14 max-sm:flex-none"
             size="md"
-            disabled={!isHost || !full || humans.length < 1}
-            title={!isHost ? tt("lobby.startHostTitle") : !full ? tt("lobby.startFullTitle") : undefined}
+            disabled={!isHost || !full || humans.length < 1 || incompatibility !== null}
+            title={
+              incompatibility ?? (!isHost ? tt("lobby.startHostTitle") : !full ? tt("lobby.startFullTitle") : undefined)
+            }
             // data-start-game: стабильный селектор для QA (кнопка меняет
             // подпись при смене языка — «Начать год» / «Start year»).
             data-start-game=""
@@ -1714,7 +1733,10 @@ export function LobbyScreen() {
           pb-safe: на телефонах с жестовой полосой кнопка не прилипает к краю. */}
       <button
         type="button"
+        ref={chatButtonRef}
         onClick={() => setChatOpen(true)}
+        aria-haspopup="dialog"
+        aria-expanded={chatOpen}
         aria-label={tt("chat.open")}
         className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-30 flex h-12 items-center gap-2 rounded-full border border-border bg-surface px-4 text-sm font-medium text-fg shadow-[var(--shadow-card)] lg:hidden"
       >
@@ -1727,8 +1749,13 @@ export function LobbyScreen() {
         ) : null}
       </button>
       {chatOpen ? (
-        <div className="fixed inset-0 z-50 flex flex-col bg-bg/80 p-3 lg:hidden" onClick={() => setChatOpen(false)}>
-          <div className="flex min-h-0 flex-1 flex-col" onClick={(e) => e.stopPropagation()}>
+        <DialogShell
+          titleId={chatTitleId}
+          returnFocus={chatButtonRef}
+          overlayClassName="fixed inset-0 z-50 flex flex-col bg-bg/80 p-3 lg:hidden"
+          panelClassName="flex min-h-0 flex-1 flex-col"
+          onBackdropClick={() => setChatOpen(false)}
+        >
             <div className="mb-2 flex justify-end">
               <Button variant="secondary" size="md" onClick={() => setChatOpen(false)}>
                 <X className="size-4" />
@@ -1741,14 +1768,14 @@ export function LobbyScreen() {
               open
               onToggle={() => {}}
               title={tt("chat.title")}
+              titleId={chatTitleId}
               onSend={(text) => void sendChat(text)}
               quickPhrases={chatPhrases(tt)}
               onReact={(item, emoji) => reactToItem(sendReaction, item, emoji)}
               onTyping={sendTyping}
               typingNames={typingNames}
             />
-          </div>
-        </div>
+        </DialogShell>
       ) : null}
 
       {kick ? (

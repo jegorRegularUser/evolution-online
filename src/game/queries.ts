@@ -14,7 +14,7 @@ import type {
 
 /** Свойство активно: раскрыто и не отключено (шов под неоплазию/мутации). */
 export function isActive(t: TraitInstance): boolean {
-  return !t.hidden && !t.disabled;
+  return !t.hidden && !t.disabled && !t.paralyzed;
 }
 
 /**
@@ -85,12 +85,12 @@ export function isSedated(animal: Animal): boolean {
  */
 export function hasTrait(animal: Animal, type: TraitId, includeHidden = false): boolean {
   if (animal.sedated || isAsleep(animal)) return false;
-  return animal.traits.some((t) => t.type === type && !t.disabled && (includeHidden || !t.hidden));
+  return animal.traits.some((t) => t.type === type && !t.disabled && !t.paralyzed && (includeHidden || !t.hidden));
 }
 
 export function traitsOf(animal: Animal, type: TraitId, includeHidden = false) {
   if (animal.sedated || isAsleep(animal)) return [];
-  return animal.traits.filter((t) => t.type === type && !t.disabled && (includeHidden || !t.hidden));
+  return animal.traits.filter((t) => t.type === type && !t.disabled && !t.paralyzed && (includeHidden || !t.hidden));
 }
 
 export function foodNeeded(animal: Animal, includeHidden = false): number {
@@ -99,7 +99,7 @@ export function foodNeeded(animal: Animal, includeHidden = false): number {
   let n = 1;
   for (const t of animal.traits) {
     if (!includeHidden && t.hidden) continue;
-    if (t.disabled) continue;
+    if (t.disabled || t.paralyzed) continue;
     n += TRAITS[t.type].extraFood;
   }
   return n;
@@ -171,16 +171,18 @@ export function herdingBalance(
   return { herding, carnivores };
 }
 
-/** Защищено ли стадное животное в своей локации: стадных строго больше хищников. */
+/** Защищено ли стадное животное в своей локации: стадных не меньше хищников (C-card стр.1: «равно или больше»). */
 export function herdingProtects(state: GameState, prey: Animal): boolean {
   if (!state.modules.continents) return false;
+  if (isAsleep(prey)) return false;
   if (!prey.traits.some((t) => t.type === "herding" && isActive(t))) return false;
   const bal = herdingBalance(state, prey.zoneId ?? "laurasia");
-  return bal.herding > bal.carnivores;
+  return bal.herding >= bal.carnivores;
 }
 
 export function isFed(animal: Animal, includeHidden = false): boolean {
-  if (animal.hibernating) return true;
+  if (animal.hibernating || animal.sedated) return true;
+  if (hasTrait(animal, "obligateCarnivore", includeHidden) && animal.blueFood > 0) return true;
   return animal.food >= speciesNeed(animal, includeHidden);
 }
 
@@ -192,10 +194,11 @@ export function emptyFatSlots(animal: Animal, includeHidden = false): number {
 export function canReceiveFood(state: GameState, animal: Animal): boolean {
   if (animal.hibernating) return false;
   const symbionts = animal.traits.filter(
-    (t) => t.type === "symbiosis" && t.pairRole === "b" && !t.hidden && !t.disabled && t.pairWith,
+    (t) => hasTrait(animal, "symbiosis") && t.type === "symbiosis" && t.pairRole === "b" && isActive(t) && t.pairWith,
   );
   for (const s of symbionts) {
     const host = findAnimal(state, s.pairWith!);
+    if (host && isAsleep(host)) continue;
     if (!host || !isFed(host)) return false;
   }
   if (isFed(animal)) return emptyFatSlots(animal) > 0;
@@ -203,10 +206,11 @@ export function canReceiveFood(state: GameState, animal: Animal): boolean {
 }
 
 export function livingSymbiontProtects(state: GameState, prey: Animal): boolean {
-  if (prey.sedated) return false;
+  if (!hasTrait(prey, "symbiosis")) return false;
   return prey.traits.some((t) => {
-    if (t.hidden || t.disabled || t.type !== "symbiosis" || t.pairRole !== "b" || !t.pairWith) return false;
-    return Boolean(findAnimal(state, t.pairWith));
+    if (!isActive(t) || t.type !== "symbiosis" || t.pairRole !== "b" || !t.pairWith) return false;
+    const host = findAnimal(state, t.pairWith);
+    return Boolean(host) && !isAsleep(host!);
   });
 }
 
@@ -238,7 +242,8 @@ export function canAttack(state: GameState, carnivore: Animal, prey: Animal): bo
     if (carnivore.zoneId !== prey.zoneId) return false;
     // Стадность: одно стадное уязвимо даже против одного хищника; защита
     // включается, только когда стадных в локации строго больше, чем хищников.
-    if (herdingProtects(state, prey)) return false;
+    const ignored = hazeIgnoreTraitId(state, carnivore, prey);
+    if (herdingProtects(state, prey) && !prey.traits.some(t => t.type === "herding" && t.id === ignored)) return false;
   }
 
   if (livingSymbiontProtects(state, prey)) return false;
@@ -284,6 +289,7 @@ export function hazeIgnoreTraitId(state: GameState, carnivore: Animal, prey: Ani
   if (!ignoring || prey.sedated || isAsleep(prey)) return undefined;
   for (const t of prey.traits) {
     if (!isActive(t)) continue;
+    if (t.type === "herding" && hasTrait(prey, "developmentDefects") && herdingProtects(state, prey)) return t.id;
     const rule = TRAITS[t.type].protection;
     if (!rule) continue;
     const blocks =
@@ -354,7 +360,7 @@ export function animalValue(animal: Animal): number {
 /** Животное мигрирует само (свойство «миграция» активно, раз за фазу питания). */
 export function canMigrate(state: GameState, a: Animal): boolean {
   return (
-    a.traits.some((t) => t.type === "migration" && isActive(t)) &&
+    hasTrait(a, "migration") &&
     !a.hibernating &&
     !isParalyzed(state, a.id) &&
     !(state.migratedThisPhase ?? []).includes(a.id)
@@ -468,6 +474,13 @@ export function liveScore(state: GameState, playerId: number): number {
   for (const a of p.animals) {
     total += 2 * (a.population ?? 1);
     for (const t of a.traits) {
+      if (t.disabled) continue;
+      total += 1 + TRAITS[t.type].scoreBonus;
+    }
+  }
+  for (const pending of state.pendingRegeneration ?? []) {
+    if (pending.ownerId !== playerId) continue;
+    for (const t of pending.traits ?? []) {
       if (t.disabled) continue;
       total += 1 + TRAITS[t.type].scoreBonus;
     }

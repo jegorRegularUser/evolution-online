@@ -16186,6 +16186,452 @@ var MeshStandardMaterial = class extends Material {
 	}
 };
 /**
+* An extension of the {@link MeshStandardMaterial}, providing more advanced
+* physically-based rendering properties:
+*
+* - Anisotropy: Ability to represent the anisotropic property of materials
+* as observable with brushed metals.
+* - Clearcoat: Some materials — like car paints, carbon fiber, and wet surfaces — require
+* a clear, reflective layer on top of another layer that may be irregular or rough.
+* Clearcoat approximates this effect, without the need for a separate transparent surface.
+* - Iridescence: Allows to render the effect where hue varies  depending on the viewing
+* angle and illumination angle. This can be seen on soap bubbles, oil films, or on the
+* wings of many insects.
+* - Physically-based transparency: One limitation of {@link Material#opacity} is that highly
+* transparent materials are less reflective. Physically-based transmission provides a more
+* realistic option for thin, transparent surfaces like glass.
+* - Advanced reflectivity: More flexible reflectivity for non-metallic materials.
+* - Sheen: Can be used for representing cloth and fabric materials.
+*
+* As a result of these complex shading features, `MeshPhysicalMaterial` has a
+* higher performance cost, per pixel, than other three.js materials. Most
+* effects are disabled by default, and add cost as they are enabled. For
+* best results, always specify an environment map when using this material.
+*
+* @augments MeshStandardMaterial
+* @demo scenes/material-browser.html#MeshPhysicalMaterial
+*/
+var MeshPhysicalMaterial = class extends MeshStandardMaterial {
+	/**
+	* Constructs a new mesh physical material.
+	*
+	* @param {Object} [parameters] - An object with one or more properties
+	* defining the material's appearance. Any property of the material
+	* (including any property from inherited materials) can be passed
+	* in here. Color values can be passed any type of value accepted
+	* by {@link Color#set}.
+	*/
+	constructor(parameters) {
+		super();
+		/**
+		* This flag can be used for type testing.
+		*
+		* @type {boolean}
+		* @readonly
+		* @default true
+		*/
+		this.isMeshPhysicalMaterial = true;
+		this.defines = {
+			"STANDARD": "",
+			"PHYSICAL": ""
+		};
+		this.type = "MeshPhysicalMaterial";
+		/**
+		* The rotation of the anisotropy in tangent, bitangent space, measured in radians
+		* counter-clockwise from the tangent. When `anisotropyMap` is present, this
+		* property provides additional rotation to the vectors in the texture.
+		*
+		* @type {number}
+		* @default 1
+		*/
+		this.anisotropyRotation = 0;
+		/**
+		* Red and green channels represent the anisotropy direction in `[-1, 1]` tangent,
+		* bitangent space, to be rotated by `anisotropyRotation`. The blue channel
+		* contains strength as `[0, 1]` to be multiplied by `anisotropy`.
+		*
+		* `anisotropyMap` represents non-color data. Any texture assigned must have
+		* `texture.colorSpace = NoColorSpace` (default).
+		*
+		* @type {?Texture}
+		* @default null
+		*/
+		this.anisotropyMap = null;
+		/**
+		* The red channel of this texture is multiplied against `clearcoat`,
+		* for per-pixel control over a coating's intensity.
+		*
+		* `clearcoatMap` represents non-color data. Any texture assigned must have
+		* `texture.colorSpace = NoColorSpace` (default).
+		*
+		* @type {?Texture}
+		* @default null
+		*/
+		this.clearcoatMap = null;
+		/**
+		* Roughness of the clear coat layer, from `0.0` to `1.0`.
+		*
+		* @type {number}
+		* @default 0
+		*/
+		this.clearcoatRoughness = 0;
+		/**
+		* The green channel of this texture is multiplied against
+		* `clearcoatRoughness`, for per-pixel control over a coating's roughness.
+		*
+		* `clearcoatRoughnessMap` represents non-color data. Any texture assigned must have
+		* `texture.colorSpace = NoColorSpace` (default).
+		*
+		* @type {?Texture}
+		* @default null
+		*/
+		this.clearcoatRoughnessMap = null;
+		/**
+		* How much `clearcoatNormalMap` affects the clear coat layer, from
+		* `(0,0)` to `(1,1)`.
+		*
+		* @type {Vector2}
+		* @default (1,1)
+		*/
+		this.clearcoatNormalScale = new Vector2(1, 1);
+		/**
+		* Can be used to enable independent normals for the clear coat layer.
+		*
+		* `clearcoatNormalMap` represents non-color data. Any texture assigned must have
+		* `texture.colorSpace = NoColorSpace` (default).
+		*
+		* @type {?Texture}
+		* @default null
+		*/
+		this.clearcoatNormalMap = null;
+		/**
+		* Index-of-refraction for non-metallic materials, from `1.0` to `2.333`.
+		*
+		* @type {number}
+		* @default 1.5
+		*/
+		this.ior = 1.5;
+		/**
+		* Degree of reflectivity, from `0.0` to `1.0`. Default is `0.5`, which
+		* corresponds to an index-of-refraction of `1.5`.
+		*
+		* This models the reflectivity of non-metallic materials. It has no effect
+		* when `metalness` is `1.0`
+		*
+		* @name MeshPhysicalMaterial#reflectivity
+		* @type {number}
+		* @default 0.5
+		*/
+		Object.defineProperty(this, "reflectivity", {
+			get: function() {
+				return clamp(2.5 * (this.ior - 1) / (this.ior + 1), 0, 1);
+			},
+			set: function(reflectivity) {
+				this.ior = (1 + .4 * reflectivity) / (1 - .4 * reflectivity);
+			}
+		});
+		/**
+		* The red channel of this texture is multiplied against `iridescence`, for per-pixel
+		* control over iridescence.
+		*
+		* `iridescenceMap` represents non-color data. Any texture assigned must have
+		* `texture.colorSpace = NoColorSpace` (default).
+		*
+		* @type {?Texture}
+		* @default null
+		*/
+		this.iridescenceMap = null;
+		/**
+		* Strength of the iridescence RGB color shift effect, represented by an index-of-refraction.
+		* Between `1.0` to `2.333`.
+		*
+		* @type {number}
+		* @default 1.3
+		*/
+		this.iridescenceIOR = 1.3;
+		/**
+		*Array of exactly 2 elements, specifying minimum and maximum thickness of the iridescence layer.
+		Thickness of iridescence layer has an equivalent effect of the one `thickness` has on `ior`.
+		*
+		* @type {Array<number,number>}
+		* @default [100,400]
+		*/
+		this.iridescenceThicknessRange = [100, 400];
+		/**
+		* A texture that defines the thickness of the iridescence layer, stored in the green channel.
+		* Minimum and maximum values of thickness are defined by `iridescenceThicknessRange` array:
+		* - `0.0` in the green channel will result in thickness equal to first element of the array.
+		* - `1.0` in the green channel will result in thickness equal to second element of the array.
+		* - Values in-between will linearly interpolate between the elements of the array.
+		*
+		* `iridescenceThicknessMap` represents non-color data. Any texture assigned must have
+		* `texture.colorSpace = NoColorSpace` (default).
+		*
+		* @type {?Texture}
+		* @default null
+		*/
+		this.iridescenceThicknessMap = null;
+		/**
+		* The sheen tint.
+		*
+		* @type {Color}
+		* @default (0,0,0)
+		*/
+		this.sheenColor = new Color(0);
+		/**
+		* The RGB channels of this texture are multiplied against  `sheenColor`, for per-pixel control
+		* over sheen tint.
+		*
+		* `sheenColorMap` represents color data, and the texture must be assigned a
+		* {@link Texture#colorSpace}. Most `sheenColorMap` textures set
+		* `texture.colorSpace = SRGBColorSpace`.
+		*
+		* @type {?Texture}
+		* @default null
+		*/
+		this.sheenColorMap = null;
+		/**
+		* Roughness of the sheen layer, from `0.0` to `1.0`.
+		*
+		* @type {number}
+		* @default 1
+		*/
+		this.sheenRoughness = 1;
+		/**
+		* The alpha channel of this texture is multiplied against `sheenRoughness`, for per-pixel control
+		* over sheen roughness.
+		*
+		* `sheenRoughnessMap` represents non-color data. Any texture assigned must have
+		* `texture.colorSpace = NoColorSpace` (default).
+		*
+		* @type {?Texture}
+		* @default null
+		*/
+		this.sheenRoughnessMap = null;
+		/**
+		* The red channel of this texture is multiplied against `transmission`, for per-pixel control over
+		* optical transparency.
+		*
+		* `transmissionMap` represents non-color data. Any texture assigned must have
+		* `texture.colorSpace = NoColorSpace` (default).
+		*
+		* @type {?Texture}
+		* @default null
+		*/
+		this.transmissionMap = null;
+		/**
+		* The thickness of the volume beneath the surface. The value is given in the
+		* coordinate space of the mesh. If the value is `0` the material is
+		* thin-walled. Otherwise the material is a volume boundary.
+		*
+		* @type {number}
+		* @default 0
+		*/
+		this.thickness = 0;
+		/**
+		* A texture that defines the thickness, stored in the green channel. This will
+		* be multiplied by `thickness`.
+		*
+		* `thicknessMap` represents non-color data. Any texture assigned must have
+		* `texture.colorSpace = NoColorSpace` (default).
+		*
+		* @type {?Texture}
+		* @default null
+		*/
+		this.thicknessMap = null;
+		/**
+		* Density of the medium given as the average distance that light travels in
+		* the medium before interacting with a particle. The value is given in world
+		* space units, and must be greater than zero.
+		*
+		* @type {number}
+		* @default Infinity
+		*/
+		this.attenuationDistance = Infinity;
+		/**
+		* The color that white light turns into due to absorption when reaching the
+		* attenuation distance.
+		*
+		* @type {Color}
+		* @default (1,1,1)
+		*/
+		this.attenuationColor = new Color(1, 1, 1);
+		/**
+		* A float that scales the amount of specular reflection for non-metals only.
+		* When set to zero, the model is effectively Lambertian. From `0.0` to `1.0`.
+		*
+		* @type {number}
+		* @default 1
+		*/
+		this.specularIntensity = 1;
+		/**
+		* The alpha channel of this texture is multiplied against `specularIntensity`,
+		* for per-pixel control over specular intensity.
+		*
+		* `specularIntensityMap` represents non-color data. Any texture assigned must have
+		* `texture.colorSpace = NoColorSpace` (default).
+		*
+		* @type {?Texture}
+		* @default null
+		*/
+		this.specularIntensityMap = null;
+		/**
+		* Tints the specular reflection at normal incidence for non-metals only.
+		*
+		* @type {Color}
+		* @default (1,1,1)
+		*/
+		this.specularColor = new Color(1, 1, 1);
+		/**
+		* The RGB channels of this texture are multiplied against `specularColor`,
+		* for per-pixel control over specular color.
+		*
+		* `specularColorMap` represents color data, and the texture must be assigned a
+		* {@link Texture#colorSpace}. Most `specularColorMap` textures set
+		* `texture.colorSpace = SRGBColorSpace`.
+		*
+		* @type {?Texture}
+		* @default null
+		*/
+		this.specularColorMap = null;
+		this._anisotropy = 0;
+		this._clearcoat = 0;
+		this._dispersion = 0;
+		this._iridescence = 0;
+		this._sheen = 0;
+		this._transmission = 0;
+		this.setValues(parameters);
+	}
+	/**
+	* The anisotropy strength, from `0.0` to `1.0`.
+	*
+	* @type {number}
+	* @default 0
+	*/
+	get anisotropy() {
+		return this._anisotropy;
+	}
+	set anisotropy(value) {
+		if (this._anisotropy > 0 !== value > 0) this.version++;
+		this._anisotropy = value;
+	}
+	/**
+	* Represents the intensity of the clear coat layer, from `0.0` to `1.0`. Use
+	* clear coat related properties to enable multilayer materials that have a
+	* thin translucent layer over the base layer.
+	*
+	* @type {number}
+	* @default 0
+	*/
+	get clearcoat() {
+		return this._clearcoat;
+	}
+	set clearcoat(value) {
+		if (this._clearcoat > 0 !== value > 0) this.version++;
+		this._clearcoat = value;
+	}
+	/**
+	* The intensity of the iridescence layer, simulating RGB color shift based on the angle between
+	* the surface and the viewer, from `0.0` to `1.0`.
+	*
+	* @type {number}
+	* @default 0
+	*/
+	get iridescence() {
+		return this._iridescence;
+	}
+	set iridescence(value) {
+		if (this._iridescence > 0 !== value > 0) this.version++;
+		this._iridescence = value;
+	}
+	/**
+	* Defines the strength of the angular separation of colors (chromatic aberration) transmitting
+	* through a relatively clear volume. Any value zero or larger is valid, the typical range of
+	* realistic values is `[0, 1]`. This property can be only be used with transmissive objects.
+	*
+	* @type {number}
+	* @default 0
+	*/
+	get dispersion() {
+		return this._dispersion;
+	}
+	set dispersion(value) {
+		if (this._dispersion > 0 !== value > 0) this.version++;
+		this._dispersion = value;
+	}
+	/**
+	* The intensity of the sheen layer, from `0.0` to `1.0`.
+	*
+	* @type {number}
+	* @default 0
+	*/
+	get sheen() {
+		return this._sheen;
+	}
+	set sheen(value) {
+		if (this._sheen > 0 !== value > 0) this.version++;
+		this._sheen = value;
+	}
+	/**
+	* Degree of transmission (or optical transparency), from `0.0` to `1.0`.
+	*
+	* Thin, transparent or semitransparent, plastic or glass materials remain
+	* largely reflective even if they are fully transmissive. The transmission
+	* property can be used to model these materials.
+	*
+	* When transmission is non-zero, `opacity` should be  set to `1`.
+	*
+	* @type {number}
+	* @default 0
+	*/
+	get transmission() {
+		return this._transmission;
+	}
+	set transmission(value) {
+		if (this._transmission > 0 !== value > 0) this.version++;
+		this._transmission = value;
+	}
+	copy(source) {
+		super.copy(source);
+		this.defines = {
+			"STANDARD": "",
+			"PHYSICAL": ""
+		};
+		this.anisotropy = source.anisotropy;
+		this.anisotropyRotation = source.anisotropyRotation;
+		this.anisotropyMap = source.anisotropyMap;
+		this.clearcoat = source.clearcoat;
+		this.clearcoatMap = source.clearcoatMap;
+		this.clearcoatRoughness = source.clearcoatRoughness;
+		this.clearcoatRoughnessMap = source.clearcoatRoughnessMap;
+		this.clearcoatNormalMap = source.clearcoatNormalMap;
+		this.clearcoatNormalScale.copy(source.clearcoatNormalScale);
+		this.dispersion = source.dispersion;
+		this.ior = source.ior;
+		this.iridescence = source.iridescence;
+		this.iridescenceMap = source.iridescenceMap;
+		this.iridescenceIOR = source.iridescenceIOR;
+		this.iridescenceThicknessRange = [...source.iridescenceThicknessRange];
+		this.iridescenceThicknessMap = source.iridescenceThicknessMap;
+		this.sheen = source.sheen;
+		this.sheenColor.copy(source.sheenColor);
+		this.sheenColorMap = source.sheenColorMap;
+		this.sheenRoughness = source.sheenRoughness;
+		this.sheenRoughnessMap = source.sheenRoughnessMap;
+		this.transmission = source.transmission;
+		this.transmissionMap = source.transmissionMap;
+		this.thickness = source.thickness;
+		this.thicknessMap = source.thicknessMap;
+		this.attenuationDistance = source.attenuationDistance;
+		this.attenuationColor.copy(source.attenuationColor);
+		this.specularIntensity = source.specularIntensity;
+		this.specularIntensityMap = source.specularIntensityMap;
+		this.specularColor.copy(source.specularColor);
+		this.specularColorMap = source.specularColorMap;
+		return this;
+	}
+};
+/**
 * A material for drawing geometry by depth. Depth is based off of the camera
 * near and far plane. White is nearest, black is farthest.
 *
@@ -17834,6 +18280,58 @@ var Light = class extends Object3D {
 		const data = super.toJSON(meta);
 		data.object.color = this.color.getHex();
 		data.object.intensity = this.intensity;
+		return data;
+	}
+};
+/**
+* A light source positioned directly above the scene, with color fading from
+* the sky color to the ground color.
+*
+* This light cannot be used to cast shadows.
+*
+* ```js
+* const light = new THREE.HemisphereLight( 0xffffbb, 0x080820, 1 );
+* scene.add( light );
+* ```
+*
+* @augments Light
+*/
+var HemisphereLight = class extends Light {
+	/**
+	* Constructs a new hemisphere light.
+	*
+	* @param {(number|Color|string)} [skyColor=0xffffff] - The light's sky color.
+	* @param {(number|Color|string)} [groundColor=0xffffff] - The light's ground color.
+	* @param {number} [intensity=1] - The light's strength/intensity.
+	*/
+	constructor(skyColor, groundColor, intensity) {
+		super(skyColor, intensity);
+		/**
+		* This flag can be used for type testing.
+		*
+		* @type {boolean}
+		* @readonly
+		* @default true
+		*/
+		this.isHemisphereLight = true;
+		this.type = "HemisphereLight";
+		this.position.copy(Object3D.DEFAULT_UP);
+		this.updateMatrix();
+		/**
+		* The light's ground color.
+		*
+		* @type {Color}
+		*/
+		this.groundColor = new Color(groundColor);
+	}
+	copy(source, recursive) {
+		super.copy(source, recursive);
+		this.groundColor.copy(source.groundColor);
+		return this;
+	}
+	toJSON(meta) {
+		const data = super.toJSON(meta);
+		data.object.groundColor = this.groundColor.getHex();
 		return data;
 	}
 };
@@ -30457,4 +30955,133 @@ var WebGLRenderer = class {
 	}
 };
 //#endregion
-export { DirectionalLight as a, MeshStandardMaterial as c, Quaternion as d, SRGBColorSpace as f, CanvasTexture as i, OrthographicCamera as l, ShadowMaterial as m, AmbientLight as n, Euler as o, Scene as p, BoxGeometry as r, Mesh as s, WebGLRenderer as t, PlaneGeometry as u };
+//#region node_modules/three/examples/jsm/geometries/RoundedBoxGeometry.js
+var _tempNormal = new Vector3();
+function getUv(faceDirVector, normal, uvAxis, projectionAxis, radius, sideLength) {
+	const totArcLength = 2 * Math.PI * radius / 4;
+	const centerLength = Math.max(sideLength - 2 * radius, 0);
+	const halfArc = Math.PI / 4;
+	_tempNormal.copy(normal);
+	_tempNormal[projectionAxis] = 0;
+	_tempNormal.normalize();
+	const arcUvRatio = .5 * totArcLength / (totArcLength + centerLength);
+	const arcAngleRatio = 1 - _tempNormal.angleTo(faceDirVector) / halfArc;
+	if (Math.sign(_tempNormal[uvAxis]) === 1) return arcAngleRatio * arcUvRatio;
+	else return centerLength / (totArcLength + centerLength) + arcUvRatio + arcUvRatio * (1 - arcAngleRatio);
+}
+/**
+* A special type of box geometry with rounded corners and edges.
+*
+* ```js
+* const geometry = new THREE.RoundedBoxGeometry();
+* const material = new THREE.MeshStandardMaterial( { color: 0x00ff00 } );
+* const cube = new THREE.Mesh( geometry, material );
+* scene.add( cube );
+* ```
+*
+* @augments BoxGeometry
+* @three_import import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+*/
+var RoundedBoxGeometry = class RoundedBoxGeometry extends BoxGeometry {
+	/**
+	* Constructs a new rounded box geometry.
+	*
+	* @param {number} [width=1] - The width. That is, the length of the edges parallel to the X axis.
+	* @param {number} [height=1] - The height. That is, the length of the edges parallel to the Y axis.
+	* @param {number} [depth=1] - The depth. That is, the length of the edges parallel to the Z axis.
+	* @param {number} [segments=2] - Number of segments that form the rounded corners.
+	* @param {number} [radius=0.1] - The radius of the rounded corners.
+	*/
+	constructor(width = 1, height = 1, depth = 1, segments = 2, radius = .1) {
+		const totalSegments = segments * 2 + 1;
+		radius = Math.min(width / 2, height / 2, depth / 2, radius);
+		super(1, 1, 1, totalSegments, totalSegments, totalSegments);
+		this.type = "RoundedBoxGeometry";
+		/**
+		* Holds the constructor parameters that have been
+		* used to generate the geometry. Any modification
+		* after instantiation does not change the geometry.
+		*
+		* @type {Object}
+		*/
+		this.parameters = {
+			width,
+			height,
+			depth,
+			segments,
+			radius
+		};
+		if (totalSegments === 1) return;
+		const geometry2 = this.toNonIndexed();
+		this.index = null;
+		this.attributes.position = geometry2.attributes.position;
+		this.attributes.normal = geometry2.attributes.normal;
+		this.attributes.uv = geometry2.attributes.uv;
+		const position = new Vector3();
+		const normal = new Vector3();
+		const box = new Vector3(width, height, depth).divideScalar(2).subScalar(radius);
+		const positions = this.attributes.position.array;
+		const normals = this.attributes.normal.array;
+		const uvs = this.attributes.uv.array;
+		const faceTris = positions.length / 6;
+		const faceDirVector = new Vector3();
+		const halfSegmentSize = .5 / totalSegments;
+		for (let i = 0, j = 0; i < positions.length; i += 3, j += 2) {
+			position.fromArray(positions, i);
+			normal.copy(position);
+			normal.x -= Math.sign(normal.x) * halfSegmentSize;
+			normal.y -= Math.sign(normal.y) * halfSegmentSize;
+			normal.z -= Math.sign(normal.z) * halfSegmentSize;
+			normal.normalize();
+			positions[i + 0] = box.x * Math.sign(position.x) + normal.x * radius;
+			positions[i + 1] = box.y * Math.sign(position.y) + normal.y * radius;
+			positions[i + 2] = box.z * Math.sign(position.z) + normal.z * radius;
+			normals[i + 0] = normal.x;
+			normals[i + 1] = normal.y;
+			normals[i + 2] = normal.z;
+			switch (Math.floor(i / faceTris)) {
+				case 0:
+					faceDirVector.set(1, 0, 0);
+					uvs[j + 0] = getUv(faceDirVector, normal, "z", "y", radius, depth);
+					uvs[j + 1] = 1 - getUv(faceDirVector, normal, "y", "z", radius, height);
+					break;
+				case 1:
+					faceDirVector.set(-1, 0, 0);
+					uvs[j + 0] = 1 - getUv(faceDirVector, normal, "z", "y", radius, depth);
+					uvs[j + 1] = 1 - getUv(faceDirVector, normal, "y", "z", radius, height);
+					break;
+				case 2:
+					faceDirVector.set(0, 1, 0);
+					uvs[j + 0] = 1 - getUv(faceDirVector, normal, "x", "z", radius, width);
+					uvs[j + 1] = getUv(faceDirVector, normal, "z", "x", radius, depth);
+					break;
+				case 3:
+					faceDirVector.set(0, -1, 0);
+					uvs[j + 0] = 1 - getUv(faceDirVector, normal, "x", "z", radius, width);
+					uvs[j + 1] = 1 - getUv(faceDirVector, normal, "z", "x", radius, depth);
+					break;
+				case 4:
+					faceDirVector.set(0, 0, 1);
+					uvs[j + 0] = 1 - getUv(faceDirVector, normal, "x", "y", radius, width);
+					uvs[j + 1] = 1 - getUv(faceDirVector, normal, "y", "x", radius, height);
+					break;
+				case 5:
+					faceDirVector.set(0, 0, -1);
+					uvs[j + 0] = getUv(faceDirVector, normal, "x", "y", radius, width);
+					uvs[j + 1] = 1 - getUv(faceDirVector, normal, "y", "x", radius, height);
+			}
+		}
+	}
+	/**
+	* Factory method for creating an instance of this class from the given
+	* JSON object.
+	*
+	* @param {Object} data - A JSON object representing the serialized geometry.
+	* @returns {RoundedBoxGeometry} A new instance.
+	*/
+	static fromJSON(data) {
+		return new RoundedBoxGeometry(data.width, data.height, data.depth, data.segments, data.radius);
+	}
+};
+//#endregion
+export { DirectionalLight as a, MeshPhysicalMaterial as c, Quaternion as d, SRGBColorSpace as f, Vector3 as h, CanvasTexture as i, OrthographicCamera as l, ShadowMaterial as m, WebGLRenderer as n, HemisphereLight as o, Scene as p, AmbientLight as r, Mesh as s, RoundedBoxGeometry as t, PlaneGeometry as u };

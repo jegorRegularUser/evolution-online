@@ -1,4 +1,4 @@
-import { o as __toESM, t as __commonJSMin } from "../../_runtime.mjs";
+import { o as __toESM, t as __commonJSMin } from "../_runtime.mjs";
 //#region node_modules/react/cjs/react.production.js
 /**
 * @license React
@@ -380,39 +380,47 @@ var require_react = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_production();
 }));
 //#endregion
-//#region node_modules/@radix-ui/react-compose-refs/dist/index.mjs
-var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
-var __defProp = Object.defineProperty;
-var __name = (target, value) => __defProp(target, "name", {
-	value,
-	configurable: true
-});
-function setRef(ref, value) {
-	if (typeof ref === "function") return ref(value);
-	else if (ref !== null && ref !== void 0) ref.current = value;
+//#region node_modules/@dnd-kit/accessibility/dist/accessibility.esm.js
+var import_react = /* @__PURE__ */ __toESM(require_react());
+var hiddenStyles = { display: "none" };
+function HiddenText(_ref) {
+	let { id, value } = _ref;
+	return import_react.createElement("div", {
+		id,
+		style: hiddenStyles
+	}, value);
 }
-__name(setRef, "setRef");
-function composeRefs(...refs) {
-	return (node) => {
-		let hasCleanup = false;
-		const cleanups = refs.map((ref) => {
-			const cleanup = setRef(ref, node);
-			if (!hasCleanup && typeof cleanup == "function") hasCleanup = true;
-			return cleanup;
-		});
-		if (hasCleanup) return () => {
-			for (let i = 0; i < cleanups.length; i++) {
-				const cleanup = cleanups[i];
-				if (typeof cleanup == "function") cleanup();
-				else setRef(refs[i], null);
-			}
-		};
+function LiveRegion(_ref) {
+	let { id, announcement, ariaLiveType = "assertive" } = _ref;
+	return import_react.createElement("div", {
+		id,
+		style: {
+			position: "fixed",
+			top: 0,
+			left: 0,
+			width: 1,
+			height: 1,
+			margin: -1,
+			border: 0,
+			padding: 0,
+			overflow: "hidden",
+			clip: "rect(0 0 0 0)",
+			clipPath: "inset(100%)",
+			whiteSpace: "nowrap"
+		},
+		role: "status",
+		"aria-live": ariaLiveType,
+		"aria-atomic": true
+	}, announcement);
+}
+function useAnnouncement() {
+	const [announcement, setAnnouncement] = (0, import_react.useState)("");
+	return {
+		announce: (0, import_react.useCallback)((value) => {
+			if (value != null) setAnnouncement(value);
+		}, []),
+		announcement
 	};
 }
-__name(composeRefs, "composeRefs");
-function useComposedRefs(...refs) {
-	return import_react.useCallback(composeRefs(...refs), refs);
-}
-__name(useComposedRefs, "useComposedRefs");
 //#endregion
-export { require_react as n, useComposedRefs as t };
+export { require_react as i, LiveRegion as n, useAnnouncement as r, HiddenText as t };

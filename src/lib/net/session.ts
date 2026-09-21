@@ -577,7 +577,8 @@ export class NetSession {
       if (isFatalCode(r.code)) this.fatal(r.code!);
       return { error: r.error, code: r.code };
     }
-    this.trackChat([r.message]);
+    this.trackChat([r.message], false);
+    this.schedule(0);
     return null;
   }
 
@@ -649,11 +650,14 @@ export class NetSession {
     this.hooks.onStatus(this.seenStatus);
   }
 
-  private trackReactions(messages: ReactionMessage[]): void {
+  /** Точечный ACK отображаем, но курсор двигает только кадр с историей. */
+  private trackReactions(messages: ReactionMessage[], advanceCursor = true): void {
     if (this.stopped) return;
     if (!messages.length) return;
-    for (const m of messages) {
-      this.lastReactionId = Math.max(this.lastReactionId ?? 0, m.id);
+    if (advanceCursor) {
+      for (const m of messages) {
+        this.lastReactionId = Math.max(this.lastReactionId ?? 0, m.id);
+      }
     }
     this.hooks.onReactions(messages);
   }
@@ -673,11 +677,13 @@ export class NetSession {
     this.schedule(0);
   }
 
-  private trackChat(messages: ChatMessage[]): void {
+  private trackChat(messages: ChatMessage[], advanceCursor = true): void {
     if (this.stopped) return;
     if (!messages.length) return;
-    for (const m of messages) {
-      this.lastChatId = Math.max(this.lastChatId ?? 0, m.id);
+    if (advanceCursor) {
+      for (const m of messages) {
+        this.lastChatId = Math.max(this.lastChatId ?? 0, m.id);
+      }
     }
     this.hooks.onChat(messages);
   }
@@ -840,7 +846,8 @@ export class NetSession {
       if (isFatalCode(r.code)) this.fatal(r.code!);
       return { error: r.error, code: r.code };
     }
-    this.trackReactions([r.reaction]);
+    this.trackReactions([r.reaction], false);
+    this.schedule(0);
     return null;
   }
 

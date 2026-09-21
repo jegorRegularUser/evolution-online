@@ -113,12 +113,14 @@ export const TraitChip = memo(function TraitChip({
   pair,
   mark,
   disabled,
+  paralyzed,
   fresh,
 }: {
   type: TraitId;
   pair?: boolean;
   mark?: PairMark;
   disabled?: boolean;
+  paralyzed?: boolean;
   fresh?: boolean;
 }) {
   const lang = useLang();
@@ -161,6 +163,7 @@ export const TraitChip = memo(function TraitChip({
                   ? "bg-food-yellow/20 text-ink"
                   : "bg-ink/8 text-ink",
         fresh && !disabled && "chip-fresh",
+        paralyzed && "opacity-50 grayscale",
       )}
     >
       {mark && !disabled ? (
@@ -415,6 +418,11 @@ export const AnimalCard = memo(function AnimalCard({
               {t("card.sedated")}
             </span>
           ) : null}
+          {animal.traits.some((tr) => tr.paralyzed) ? (
+            <span className="rounded-full bg-ink/10 px-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-soft">
+              {t("card.paralyzed")}
+            </span>
+          ) : null}
           {animal.hibernating ? (
             <span className="rounded-full bg-ink/10 px-1.5 text-[10px] font-medium uppercase tracking-wide">{t("card.hibernating")}</span>
           ) : fed ? (
@@ -448,6 +456,7 @@ export const AnimalCard = memo(function AnimalCard({
               pair={Boolean(tr.pairWith)}
               mark={pairMarks?.[tr.id]}
               disabled={tr.disabled}
+              paralyzed={tr.paralyzed}
               fresh={freshSince !== undefined && tr.playSeq > freshSince ? true : undefined}
             />
           ))

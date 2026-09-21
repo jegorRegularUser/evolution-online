@@ -8,7 +8,8 @@ import {
   Lock,
   RotateCcw,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
+import { DialogShell } from "@/components/ui/dialog-shell";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
 import { NetMenuScreen } from "@/components/game/net-screens";
@@ -395,6 +396,7 @@ function RuleCard({ src, label }: { src: string; label?: string }) {
 export function RulesPanel({ onClose }: { onClose: () => void }) {
   const tt = useT();
   const [tab, setTab] = useState<RulesTab>("base");
+  const titleId = useId();
   // Правила закрываются и Esc, и кликом по затемнению вокруг карточки.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -404,15 +406,14 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-0 sm:items-center sm:p-6"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <DialogShell
+      titleId={titleId}
+      overlayClassName="fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-0 sm:items-center sm:p-6"
+      panelClassName="max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-t-[var(--radius-xl)] border border-border bg-surface p-5 sm:rounded-[var(--radius-xl)] sm:p-8"
+      onBackdropClick={onClose}
     >
-      <div className="max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-t-[var(--radius-xl)] border border-border bg-surface p-5 sm:rounded-[var(--radius-xl)] sm:p-8">
         <div className="mb-4 flex items-start justify-between gap-4">
-          <h2 className="text-2xl">{tt("rules.title")}</h2>
+          <h2 id={titleId} tabIndex={-1} className="text-2xl">{tt("rules.title")}</h2>
           <Button variant="ghost" size="sm" onClick={onClose}>
             {tt("common.close")}
           </Button>
@@ -423,6 +424,8 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
               key={id}
               type="button"
               role="tab"
+              id={`${titleId}-tab-${id}`}
+              aria-controls={`${titleId}-panel`}
               aria-selected={tab === id}
               onClick={() => setTab(id)}
               className={cn(
@@ -437,6 +440,7 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
             </button>
           ))}
         </div>
+        <div role="tabpanel" id={`${titleId}-panel`} aria-labelledby={`${titleId}-tab-${tab}`} tabIndex={0}>
         {tab === "base" && (
           <div className="space-y-4 text-sm text-muted">
             <p>{tt("rules.base.intro")}</p>
@@ -595,8 +599,8 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
             <p className="text-xs">{tt("rules.mut.footnote")}</p>
           </div>
         )}
-      </div>
-    </div>
+        </div>
+    </DialogShell>
   );
 }
 

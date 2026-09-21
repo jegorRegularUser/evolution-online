@@ -1,17 +1,32 @@
-import { r as __exportAll } from "../_runtime.mjs";
-import { n as require_react } from "../_libs/@radix-ui/react-compose-refs+[...].mjs";
-import { A as invariant, D as resolveManifestCssLink, E as resolveManifestAssetLink, F as isResolvedRedirect, I as parseRedirect, L as rootRouteId, O as _getRenderedMatches, P as isRedirect, R as isNotFound, T as getStylesheetHref, a as isSsrResponse, c as stripSsrResponseBody, f as RouterProvider, i as disposeSsrResponseDetached, k as executeRewriteInput, n as bindSsrResponseToRequest, o as normalizeSsrResponse, r as defineHandlerCallback, s as replaceSsrResponse, t as renderRouterToStream, w as getScriptPreloadAttrs, y as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
+import { r as __exportAll$1 } from "../_runtime.mjs";
+import { i as require_react } from "../_libs/dnd-kit__accessibility+react.mjs";
+import { C as getScriptPreloadAttrs, D as _getRenderedMatches, E as resolveManifestCssLink, F as parseRedirect, I as rootRouteId, L as isNotFound, N as isRedirect, O as executeRewriteInput, P as isResolvedRedirect, T as resolveManifestAssetLink, a as isSsrResponse, c as stripSsrResponseBody, d as RouterProvider, i as disposeSsrResponseDetached, k as invariant, n as bindSsrResponseToRequest, o as normalizeSsrResponse, r as defineHandlerCallback, s as replaceSsrResponse, t as renderRouterToStream, v as require_jsx_runtime, w as getStylesheetHref } from "../_libs/@tanstack/react-router+[...].mjs";
 import { n as createMemoryHistory } from "../_libs/tanstack__history.mjs";
 import { a as getOrigin, c as createSerializationAdapter, d as toCrossJSONAsync, f as toCrossJSONStream, i as getNormalizedURL, l as makeSerovalPlugin, n as mergeHeaders, o as defaultSerovalPlugins, r as attachRouterServerSsrUtils, s as createRawStreamRPCPlugin, t as waitForRequest, u as fromJSON } from "../_libs/@tanstack/router-core+[...].mjs";
-import { n as toResponse, t as H3Event } from "../_libs/h3-v2+rou3.mjs";
+import { n as getRequestIP, r as toResponse, t as H3Event } from "../_libs/h3-v2+rou3.mjs";
 import { AsyncLocalStorage } from "node:async_hooks";
+//#region node_modules/.nitro/vite/services/ssr/assets/rolldown-runtime-D7D4PA-g.js
+var __defProp = Object.defineProperty;
+var __exportAll = (all, no_symbols) => {
+	let target = {};
+	for (var name in all) __defProp(target, name, {
+		get: all[name],
+		enumerable: true
+	});
+	if (!no_symbols) __defProp(target, Symbol.toStringTag, { value: "Module" });
+	return target;
+};
+//#endregion
 //#region node_modules/.nitro/vite/services/ssr/index.js
-var ssr_exports = /* @__PURE__ */ __exportAll({
+var ssr_exports = /* @__PURE__ */ __exportAll$1({
+	a: () => getServerFnById,
 	createServerEntry: () => createServerEntry,
 	default: () => server_default,
-	n: () => TSS_SERVER_FUNCTION,
-	r: () => getServerFnById,
-	t: () => createServerFn
+	i: () => TSS_SERVER_FUNCTION,
+	n: () => createMiddleware,
+	o: () => getRequest,
+	r: () => createServerFn,
+	t: () => server_exports
 });
 require_react();
 var import_jsx_runtime = require_jsx_runtime();
@@ -74,6 +89,12 @@ function getH3Event() {
 	if (!event) throw new Error(`No StartEvent found in AsyncLocalStorage. Make sure you are using the function within the server runtime.`);
 	return event.h3Event;
 }
+function getRequest() {
+	return getH3Event().req;
+}
+function getRequestIP$1(opts) {
+	return getRequestIP(getH3Event(), opts);
+}
 function getResponse() {
 	return getH3Event().res;
 }
@@ -88,7 +109,7 @@ var HEADERS = { TSS_SHELL: "X-TSS_SHELL" };
 * the dev styles URL for route-scoped CSS collection.
 */
 async function getStartManifest(matchedRoutes) {
-	const { tsrStartManifest } = await import("../_tanstack-start-manifest_v-Cv_xwZcs.mjs");
+	const { tsrStartManifest } = await import("../_tanstack-start-manifest_v-Cjhw51A9.mjs");
 	const startManifest = tsrStartManifest();
 	let routes = startManifest.routes;
 	routes[rootRouteId];
@@ -110,83 +131,111 @@ async function getStartManifest(matchedRoutes) {
 var manifest = {
 	"052ff9dfc236bd0e1ff1a962b0659ec3f2343e685982ac4ea46dbc2a5c6c93dd": {
 		functionName: "netSetSettings_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"0ae6763f4a9392d1dc978022ba9a80b0b3aa8d50b84dfd2903b7639f24bfb552": {
 		functionName: "netSetBots_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"13eed1a17da62dcb9e70eec71b4e8a976934b02a5dcff01613a937167cd6f9b3": {
 		functionName: "netChat_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"14d6256128aa0959545fb4a848837599d1e846ecdbdb8a1d74a6f7011a2ce4fd": {
 		functionName: "netSetCapacity_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"18b6efd10626f6282f46662236a9f4efa95081d933b3c79a203a2bf43f221fa0": {
 		functionName: "netAction_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"20bb5f392b3e05a16098d48523e3b73255d44092301929c9ed9a4bed4959d3d0": {
 		functionName: "netJoinRoom_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
+	},
+	"27a4b90edc64ff02fa08cbd9c71d9d3885e8fb62d40fde2cef584cfc8b9435e0": {
+		functionName: "netTyping_createServerFn_handler",
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"28b67066d7856a0b8f76eba41be987486847193af04d0f5db299eaffecb7430c": {
 		functionName: "netReaction_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"5d10ae946134fb6b27bc7c68ea783639ad617431c539331dc58524d97407b4bb": {
 		functionName: "netCreateRoom_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
+	},
+	"669f968e8b8cfa947490123e1df1da0b1333979859dd5d0f62b5c473d073d67f": {
+		functionName: "netSetPassword_createServerFn_handler",
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"7027acf2c9da3ca327d58640cca56e593fd6d897f85525ed64c21cabee308f2c": {
 		functionName: "netSpectatorPoll_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
+	},
+	"723174505869380ccb9a315ddd7f31ce9313f703d526f5762b058000a5a79797": {
+		functionName: "netListRooms_createServerFn_handler",
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"77458ceff388f54d00051c41e26ba9da5450ff9a0991ee4e0f03c3612cfd48e3": {
 		functionName: "netKickWaiter_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
+	},
+	"7b3cccee6165dc1938d98f77f4e24b8489eac37c333a004d48f16c3436c6277c": {
+		functionName: "netSetRoomPrivacy_createServerFn_handler",
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"817dba9d018a54d9d1f8db2118a3e88ee47f87c735e346de37f37247b0b7db75": {
 		functionName: "netClaimSeat_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
+	},
+	"8b1166f17dfc1cc931ef213f6242cdeca1f2fc42df72e7b0f3ab94c08c119a3a": {
+		functionName: "netSetColor_createServerFn_handler",
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"97c6cf3f2776e31a2770acfbc62d86143077f49705e3043649873d49707919d1": {
 		functionName: "netPoll_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"9be6f8dbb902e4d7a86ed61a5ec451298b7693cb95cd353b30302c3968525e24": {
 		functionName: "netRejoin_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
+	},
+	"9f0f87a6fe21a90a7c6720b8ff446276995846ac5832a6896edee121975f53f9": {
+		functionName: "netResign_createServerFn_handler",
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"b6e16925f8dea3e55e70b929ead0135b8dbf491c796f2bc20222a71969975540": {
 		functionName: "netTransferHost_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
+	},
+	"c63ced99d6aefc18ccc38a895efb96127d86bc431212f7dfd5ba603a726bbcb5": {
+		functionName: "netSetName_createServerFn_handler",
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"c863eef5e87854022b362f26f321d98a7752563244b6bf8043f48c6e5e79acfc": {
 		functionName: "netAgain_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"d4f11d2f35652a14c7006852467cb5ddf47674736c584cc4fd1a035dafd457c4": {
 		functionName: "netSpectate_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"e93383b5647ec0a72ceef449d96876a16800ef6dad33d4e3233c9a64f988fa5b": {
 		functionName: "netLeaveQueue_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"e9edd1f6cab243b2b1387028a5e185e4c9d038d81c4079de8752e760bfb05745": {
 		functionName: "netRoomInfo_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"fafa464b4c4488361c51f863768135107e02c148e255f23da160ffa440fc3f99": {
 		functionName: "netStart_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
 	},
 	"fc1d0b35176a800d8b3842e8acc96a7ac0c86234a693afc1c829068eea6c2d17": {
 		functionName: "netKick_createServerFn_handler",
-		importer: () => import("./api-DcBzcFHw.mjs")
+		importer: () => import("./api-_SkZrsym.mjs")
 	}
 };
 async function getServerFnById(id, access) {
@@ -1456,7 +1505,7 @@ var getBaseManifest = getProdBaseManifest;
 var createEarlyHintsForRequest = createEarlyHintsCollector;
 async function loadEntries() {
 	const [routerEntry, startEntry, pluginAdapters] = await Promise.all([
-		import("./router-CL2bWTHk.mjs").then((n) => n.t),
+		import("./router-CDzmDvQX.mjs").then((n) => n.t),
 		import("./start-5Z2QO8AU.mjs"),
 		import("./empty-plugin-adapters-D9UWiqvJ.mjs")
 	]);
@@ -1894,6 +1943,7 @@ async function handleServerRoutes({ getRouter, request, url, executeRouter, cont
 	}
 	return normalizeSsrResponse(response);
 }
+var server_exports = /* @__PURE__ */ __exportAll({ getRequestIP: () => getRequestIP$1 });
 var fetch = createStartHandler(defaultStreamHandler);
 function createServerEntry(entry) {
 	return { async fetch(...args) {
@@ -1902,4 +1952,4 @@ function createServerEntry(entry) {
 }
 var server_default = createServerEntry({ fetch });
 //#endregion
-export { createServerEntry, server_default as default, ssr_exports as i, TSS_SERVER_FUNCTION as n, getServerFnById as r, createServerFn as t };
+export { getServerFnById as a, __exportAll as c, createServerEntry, server_default as default, TSS_SERVER_FUNCTION as i, createMiddleware as n, getRequest as o, createServerFn as r, ssr_exports as s, server_exports as t };

@@ -265,10 +265,10 @@ export const en: Record<keyof RuDict, string> = {
     "Placed between two animals of the same territory. If the pair parts ways, the card goes to the discard.",
   "rules.cont.migration": "Migration.",
   "rules.cont.migration.text":
-    "Declare a migration instead of a normal turn: no food, no hunting, only travel. Any number of your animals may migrate: from the Ocean to any continent, from a continent to the Ocean (swimmers only). There's no direct route between continents — a land animal on a continent has nowhere to go. Your remoras from the same area travel along with the migrant.",
+    "Declare a migration instead of a normal turn: no food, no hunting, only travel. Any number of your animals may migrate: from the Ocean to any continent, from a continent to the Ocean (swimmers only). There's no direct route between continents — a land animal on a continent has nowhere to go. After the move, each remora of the same area may follow the migrant at its owner's choice, resolved in turn order (in the Ocean, only swimmers).",
   "rules.cont.newTraits": "New traits.",
   "rules.cont.newTraits.text":
-    "Herding: while herding animals in a territory outnumber carnivores, they cannot be eaten. Nematocysts: the attacking carnivore cannot hunt, steal or migrate until the end of the feeding phase, and in the Ocean it's also washed ashore onto a continent. Regeneration: the animal eaten by a carnivore returns — in extinction its owner plays a card from their hand as a new animal, with no draw for it. Recombination (pair): by the board game rules partners exchange one trait each; the online version doesn't perform the exchange yet. Neoplasia is a virus: played on any animal, yours or an opponent's, it rises every year at the start of food supply determination, disabling another unpaired trait (a disabled one doesn't work and gives no points); when there's nothing left to disable, the animal dies immediately. Viral traits (parasite, neoplasia) are marked purple.",
+    "Herding: while herding animals in a territory equal or outnumber carnivores, they cannot be eaten. Nematocysts: the attacking carnivore cannot hunt, steal or migrate until the end of the feeding phase, and in the Ocean it's also washed ashore onto a continent. Regeneration: the animal eaten by a carnivore returns — in extinction its owner plays a card from their hand as a new animal, with no draw for it. Recombination (pair): once per year, during its owner's feeding turn, each partner gives the other one unpaired trait (a duplicate goes to the discard; a swimmer that loses “Swimming” in the Ocean moves to a continent). Neoplasia is a virus: played only on an opponent's animal, it rises every year at the start of food supply determination, disabling another unpaired trait (a disabled one doesn't work and gives no points); when there's nothing left to disable, the animal dies immediately. Viral traits (parasite, neoplasia) are marked purple.",
   "rules.cont.rescue": "Rescue.",
   "rules.cont.rescue.text":
     "A player with no cards and no animals takes 10 cards; two of them are immediately played as animals, one on each continent.",
@@ -321,7 +321,7 @@ export const en: Record<keyof RuDict, string> = {
   "rules.fungi.animalTraits": "Animal traits",
 
   "rules.mutations.intro":
-    "The “Random Mutations” expansion (after the game of the same name by Pravilnye Igry, 2013): the hand of cards is gone — each player has a personal blind deck. In the development phase you first declare how you'll play the top card, and only then reveal it. Traits come at random, including harmful mutations (dark cards). Compatible with all expansions.",
+    "The “Random Mutations” expansion (after the game of the same name by Pravilnye Igry, 2013): the hand of cards is gone — each player has a personal blind deck. In the development phase you first declare how you'll play the top card, and only then reveal it. Traits come at random, including harmful mutations (dark cards). Not compatible with “Grass and Mushrooms”: that expansion cannot be combined with “Random Mutations”.",
   "rules.mut.deck": "Personal deck.",
   "rules.mut.deck.text":
     "7 cards at the start, no peeking. On your development turn, declare one way to play it: (1) a new species — the card is played as an animal; (2) a trait — onto your species of one animal; (3) +1 animal to the species. With “Plants” you may also declare a plant trait — the card is revealed on the chosen plant.",
@@ -502,6 +502,7 @@ export const en: Record<keyof RuDict, string> = {
   "card.noTraits": "no traits",
   "card.shelter": "shelter",
   "card.sedated": "sedated",
+  "card.paralyzed": "Paralyzed",
   "card.hibernating": "asleep",
   "card.fed": "fed",
   "card.hungry": "hungry",
@@ -558,7 +559,7 @@ export const en: Record<keyof RuDict, string> = {
   "game.yearLast": "final",
   "game.turnYour": "Your turn",
   "game.turnCardSub": "Year {year} · {phase}",
-  "game.madBanner": "Madness: this round your neighbor on the right plays for you — your animals act on their own",
+  "game.madBanner": "Madness: a bot controls your animals this round — the neighbor does not participate (neighbor control is not yet implemented in the online version)",
   "game.lastYearBanner": "The final year — the game ends after this round",
   "game.openingFinal": "Opening the final table…",
   "game.reconnecting": "Reconnecting…",
@@ -579,7 +580,7 @@ export const en: Record<keyof RuDict, string> = {
   "game.wait.roll": "Rolling the food bank…",
   "game.wait.extinction": "Extinction: unfed animals die…",
   "game.wait.growth": "Growth: plants spread and new ones appear…",
-  "game.wait.madness": "Madness: {name}'s round is played by their right-hand neighbor…",
+  "game.wait.madness": "Madness: {name}'s round is played by a bot (neighbor control is not yet implemented in the online version)…",
   "game.wait.actor": "{name} is playing…",
   "game.wait.waiting": "Waiting",
 
@@ -695,6 +696,7 @@ export const en: Record<keyof RuDict, string> = {
   "dock.dev.trait": "Choose an animal for the trait",
   "dock.dev.pairFirst": "Paired trait: choose the first animal",
   "dock.dev.pairSecond": "The second animal of the pair",
+  "dock.dev.pairProgress": "Selected {no} → eligible partners: {n}",
   "dock.dev.cardOrTrait": "The card as an animal or a trait",
   "dock.dev.cardOrTraitCont": "The card as an animal (then click a continent) or a trait",
   "dock.dev.needAnimalFirst": "Place an animal first — traits go on it",
@@ -764,12 +766,17 @@ export const en: Record<keyof RuDict, string> = {
   "hint.target": "Choose a victim — targets are marked red",
 
   // ── game: defense dialog ─────────────────────────────────────────────────
-  "defense.title": "Predator attack",
+  "defense.title": "{attacker} attacks {prey}",
   "defense.need": "Needs {need} food, has {food}. Choose a defense.",
   "defense.running": "Running — a dice roll",
-  "defense.mimicry": "Mimicry to another animal",
+  "defense.mimicry": "Redirect to {target}",
+  "defense.mimicryHint": "Mimicry: the current victim escapes this attack; the selected animal becomes the new target and may die.",
   "defense.tailLoss": "Drop the tail",
+  "defense.tailDiscard": "Sacrifice the tail: discard “{trait}”",
   "defense.none": "Don't defend",
+  "defense.plantIgnore": "Counterattack: choose one defense to ignore",
+  "defense.ignore": "Ignore: {trait}",
+  "log.plantIgnoreDefense": "The counterattack ignores {trait}.",
 
   // ── game: leaving the table ──────────────────────────────────────────────
   "leave.title": "Leave the table?",
@@ -946,7 +953,7 @@ export const en: Record<keyof RuDict, string> = {
   "log.bases": "Food banks: Laurasia {l}, Gondwana {g}, Ocean {o}.",
   "log.bank": "Food bank: {bank}.",
   "log.rage": "Rage: {name}'s animal must attack this round!",
-  "log.madness": "Madness: {name}'s round is played by their right-hand neighbor.",
+  "log.madness": "Madness: {name}'s round is played by a bot (neighbor control is not yet implemented in the online version).",
   "log.takeBank": "{name} takes food from the bank ({left} left).",
   "log.medicinal": "{name}: medicinal plant — the animal is fed, its traits don't work until the end of the phase.",
   "log.takePlant": "{name}: a token from the {plant} ({left} left).",
@@ -992,6 +999,11 @@ export const en: Record<keyof RuDict, string> = {
   "log.diedPoison": "Carnivore {name} dies of poison.",
   "log.diedPoisonMark": "{name}'s animal dies from the “Poison” mark.",
   "log.diedStarved": "{name}'s animal goes extinct — unfed.",
+  "dock.feed.follow": "Your {follower} → follow {migrant}",
+  "dock.feed.finishMigration": "Leave remaining remoras",
+  "dock.feed.finishMigrationHint": "Finishing the selection declines the remaining follows. Your remaining remoras stay where they are; those already selected have moved.",
+  "dock.feed.recombine": "Recombination: choose an exchange",
+  "log.recombine": "Recombination: the animals exchange traits.",
   "log.neoplasiaDeath": "Neoplasia consumes {name}'s animal entirely.",
   "log.neoplasiaDisable": "Neoplasia disables the “{trait}” trait.",
   "log.floraDiscarded": "The {flora} card with no tokens goes to the discard.",
@@ -1033,6 +1045,9 @@ export const en: Record<keyof RuDict, string> = {
   "feedBlock.afterFoodNoPiracy": "After taking food, the pirate doesn't steal.",
   "feedBlock.shelterBlocksPiracy": "The shelter takes up the turn — piracy is unavailable.",
   "feedBlock.migrated": "The turn was spent on migration.",
+  "feedBlock.continentsOff": "The Continents module is not enabled.",
+  "feedBlock.noRecombination": "No recombination pair with an available exchange.",
+  "feedBlock.recombined": "The exchange was already made this year.",
   "feedBlock.noPirate": "No animal with Piracy that can take food.",
   "feedBlock.piratesFed": "The pirates are fed — nothing to steal.",
   "feedBlock.piracyUsed": "Piracy has already been used this turn.",

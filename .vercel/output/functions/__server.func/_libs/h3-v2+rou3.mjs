@@ -287,5 +287,15 @@ function errorResponse(error, debug, errHeaders) {
 		headers
 	});
 }
+function getRequestIP(event, opts = {}) {
+	if (opts.xForwardedFor) {
+		const _header = event.req.headers.get("x-forwarded-for");
+		if (_header) {
+			const xForwardedFor = _header.split(",")[0].trim();
+			if (xForwardedFor) return xForwardedFor;
+		}
+	}
+	return event.req.context?.clientAddress || event.req.ip || void 0;
+}
 //#endregion
-export { toResponse as n, H3Event as t };
+export { getRequestIP as n, toResponse as r, H3Event as t };

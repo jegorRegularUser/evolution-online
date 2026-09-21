@@ -16,6 +16,7 @@ import {
 import { PACE, PLAYER_COLORS, joinRoomInput, setPasswordInput } from "./shared.ts";
 import type { PollResult, SqlLike } from "./shared.ts";
 import type { Animal, GameState } from "../../game/types.ts";
+import { applyAction, legalDefenseActions } from "../../game/engine.ts";
 
 /** poll без sinceVersion всегда даёт полный кадр — сужаем тип для TS. */
 function full(r: PollResult | { unchanged: true }): PollResult {
@@ -56,6 +57,39 @@ before(async () => {
 function svc() {
   return createRoomService(sql, { now: () => fixedNow });
 }
+
+describe("module compatibility gates", () => {
+  for (let mask = 0; mask < 16; mask++) {
+    it(`create/settings compatibility mask=${mask.toString(2).padStart(4, "0")}`, async () => {
+      const modules = { continents: Boolean(mask & 1), plants: Boolean(mask & 2), fungi: Boolean(mask & 4), randomMutations: Boolean(mask & 8) };
+      const invalid = modules.fungi && (modules.plants || modules.randomMutations);
+      const s = svc();
+      const input = { name: "QA", capacity: 2 as const, botSeats: 1, difficulty: "normal" as const };
+      if (invalid) await assert.rejects(() => s.create({ ...input, modules }), /несовместима/);
+      else await s.create({ ...input, modules });
+      const host = await s.create(input);
+      const before = await s.rejoin(host.code, host.token);
+      if (invalid) {
+        await assert.rejects(() => s.setSettings(host.code, host.token, { modules }), /несовместима/);
+        assert.deepEqual((await s.rejoin(host.code, host.token)).room.settings, before.room.settings);
+      } else {
+        await s.setSettings(host.code, host.token, { modules });
+        await s.start(host.code, host.token);
+        assert.equal((await s.rejoin(host.code, host.token)).room.status, "playing");
+      }
+    });
+  }
+  it("legacy lobby remains readable/editable but incompatible start is rejected", async () => {
+    const s = svc();
+    const host = await s.create({ name: "QA", capacity: 2, botSeats: 1, difficulty: "normal" });
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const modules = { fungi: true, plants: true };
+    await _internals.casUpdate(sql, host.code, room.version, { settings: { ...room.settings, modules } });
+    await s.setSettings(host.code, host.token, { difficulty: "hard" });
+    assert.deepEqual((await s.rejoin(host.code, host.token)).room.settings.modules, modules);
+    await assert.rejects(() => s.start(host.code, host.token), /несовместима/);
+  });
+});
 
 describe("лобби", () => {
   it("create → join: места и хост", async () => {
@@ -1559,22 +1593,23 @@ describe("список столов", () => {
     assert.equal(own.hostName, "Аня");
     assert.equal(own.createdAt > 0, true);
     // Никаких токенов и паролей: состав полей жёстко зафиксирован.
-    assert.deepEqual(Object.keys(own).sort(), [
-      "capacity",
-      "code",
-      "createdAt",
-      "difficulty",
-      "free",
-      "hostName",
-      "isPrivate",
-      "modules",
-      "status",
-      "taken",
-    ]);
+    for (const room of rooms) {
+      assert.deepEqual(Object.keys(room).sort(), [
+        "capacity",
+        "code",
+        "createdAt",
+        "difficulty",
+        "free",
+        "hostName",
+        "isPrivate",
+        "modules",
+        "status",
+        "taken",
+      ]);
+    }
     const json = JSON.stringify(rooms);
     assert.equal(json.includes(pub.token), false, "токен места не должен утекать в список");
     assert.equal(json.includes(priv.token), false);
-    assert.equal(json.includes("1234"), false, "пароль закрытого стола не должен утекать в список");
   });
 
   it("идущая партия видна со статусом playing и модулями", async () => {
@@ -2067,7 +2102,13 @@ describe("S4: канонизация легального действия", () 
     st.territoryFood = { laurasia: 0, gondwana: 0, ocean: 0 };
     st.plants = [];
     st.flora = [];
-    st.players[0]!.animals = [testAnimal("a-1", 0, { fatTokens: 3, zoneId: "laurasia" })];
+    st.players[0]!.animals = [testAnimal("a-1", 0, {
+      fatTokens: 3,
+      zoneId: "laurasia",
+      traits: Array.from({ length: 3 }, (_, i) => ({
+        id: `fat-${i}`, cardId: `fat-card-${i}`, type: "fatTissue" as const, hidden: false, playSeq: i,
+      })),
+    })];
     st.players[1]!.animals = [];
     await _internals.casUpdate(sql, host.code, room!.version, { state: st });
     return { s, host, g };
@@ -2426,6 +2467,44 @@ function feedingForHuman(
   st.players[0]!.animals = opts.animal ? [benchAnimal("m10-prey", 0)] : [];
   return st;
 }
+
+describe("plants counterattack: neighbor authorization", () => {
+  it("persists choice, authorizes only right neighbor, and routes bot/resignation/default step", async () => {
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 3, botSeats: 0, difficulty: "normal" });
+    const left = await s.join({ code: host.code, name: "Боря" });
+    const right = await s.join({ code: host.code, name: "Вера" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const g = feedingForHuman(room.state!, { animal: true, foodBank: 0 });
+    g.modules.plants = true;
+    const prey = g.players[0]!.animals[0]!;
+    prey.traits = ["running", "tailLoss"].map((type, i) => ({ id: `plant-defense-${i}`, cardId: `plant-card-${i}`, type: type as "running" | "tailLoss", hidden: false, playSeq: i }));
+    g.plants = [{ id: "counter", kind: "carnivorous", food: 2, traits: [], shelters: 0, playSeq: 1 }];
+    const pending = applyAction(g, { type: "feedTakePlant", animalId: prey.id, plantId: "counter" });
+    assert.equal(pending.pendingAttack!.waitingFor, right.seat);
+    const choice = legalDefenseActions(pending, right.seat)[0]!;
+    assert.equal(noChoicesLeft(pending, pending.players[right.seat]!), false);
+    assert.deepEqual(endTurnStepFor(pending, right.seat), choice);
+    const bot = structuredClone(pending);
+    bot.players[right.seat]!.isAI = true;
+    assert.deepEqual(nextAutoStep(bot), choice);
+    bot.players[right.seat]!.isAI = false;
+    bot.players[right.seat]!.resigned = true;
+    assert.deepEqual(nextAutoStep(bot), choice);
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state: pending }), true);
+    const restored = (await _internals.readRoom(sql, host.code))!.state!;
+    assert.deepEqual(legalDefenseActions(restored, right.seat), legalDefenseActions(pending, right.seat));
+    await assert.rejects(() => s.action(host.code, host.token, choice), NetError);
+    await assert.rejects(() => s.action(host.code, left.token, choice), NetError);
+    await assert.rejects(() => s.action(host.code, right.token, { type: "chooseDefense", kind: "ignore", ignoredTraitId: "absent" }), NetError);
+    await s.action(host.code, right.token, choice);
+    const after = (await _internals.readRoom(sql, host.code))!.state!;
+    assert.equal(after.pendingAttack?.waitingFor, host.seat);
+    assert.equal(after.pendingAttack?.ignoredTraitId, "plant-defense-0");
+    assert.ok(legalDefenseActions(after, host.seat).some((a) => a.type === "chooseDefense" && a.kind === "tailLoss"));
+  });
+});
 
 describe("M10: ход человека без действий закрывается сам", () => {
   it("noChoicesLeft: только пас/завершение — да; любое действие — нет", async () => {

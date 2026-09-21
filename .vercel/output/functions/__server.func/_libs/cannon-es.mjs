@@ -6354,4 +6354,4 @@ var endShapeContactEvent = {
 	shapeB: null
 };
 //#endregion
-export { Plane as a, World as c, Material as i, Box as n, SAPBroadphase as o, ContactMaterial as r, Vec3 as s, Body as t };
+export { Material as a, Vec3 as c, GSSolver as i, World as l, Box as n, Plane as o, ContactMaterial as r, SAPBroadphase as s, Body as t };

@@ -85,6 +85,12 @@ export interface TraitInstance {
   fatFilled?: boolean;
   /** Свойство отключено (шов под неоплазию и мутации): не действует и не даёт очков. */
   disabled?: boolean;
+  /** Temporary suppression by nematocysts; restored after feeding. */
+  paralyzed?: boolean;
+  /** Recombination pair: last year in which its exchange was used. */
+  recombinedYear?: number;
+  /** Hibernation use follows the card through recombination. */
+  hibernationUsedYear?: number;
   /** Шов под неоплазию: растущие по годам счётчики вируса. */
   virus?: number;
 }
@@ -120,6 +126,8 @@ export interface Animal {
    * Вне модуля всегда 1; еда засчитывается накормленным животным.
    */
   population?: number;
+  /** Последний год успешного почкования; отсутствует в старых сохранениях. */
+  buddedYear?: number;
   /** Шов под «Континенты»: зона размещения (по умолчанию единое поле). */
   zoneId?: TerritoryId;
   /** «Растения»: жетон убежища с растения — защита от хищников до конца фазы питания. */
@@ -193,6 +201,12 @@ export interface PendingAttack {
    * жертвы (выбирается автоматически; защиты жертвы с ним не работают).
    */
   ignoredTraitId?: string;
+  /**
+   * «Растения»: контратака хищного растения — сосед справа выбирает ровно
+   * одно свойство жертвы, которое атака проигнорирует (p.9). Шаг живёт в
+   * pendingAttack, поэтому сетевое сохранение/возобновление и бот-сдача работают.
+   */
+  choosingPlantDefense?: boolean;
 }
 
 /** Шов под «Континенты»: зоны размещения животных. */
@@ -305,7 +319,7 @@ export type GameEvent =
     }
   | { kind: "foodFromBank"; animalId: string; playerId: number; via: "take" | "communication" }
   | { kind: "foodToFat"; animalId: string }
-  | { kind: "blueFood"; animalId: string; reason: "hunt" | "cooperation" | "scavenger" | "tailLoss" | "piracy" | "fat" | "soaring" | "beetle" }
+  | { kind: "blueFood"; animalId: string; reason: "hunt" | "cooperation" | "scavenger" | "tailLoss" | "piracy" | "fat" | "soaring" | "beetle" | "nutritious" }
   | { kind: "traitPlaced"; animalId: string; type: TraitId; hidden: boolean }
   | { kind: "animalPlaced"; animalId: string; ownerId: number; zoneId?: TerritoryId }
   | { kind: "huntDeclared"; carnivoreId: string; preyId: string }
@@ -387,6 +401,16 @@ export interface ScoreBreakdown {
   discard: number;
 }
 
+/** Съеденное «регенерировавшее» животное: свойства и владелец ждут восстановления. */
+export interface RegenPending {
+  ownerId: number;
+  animalId?: string;
+  zoneId?: TerritoryId;
+  traits?: TraitInstance[];
+  /** Старые снимки не содержали типов свойств; сохраняем их без угадывания. */
+  cardIds?: string[];
+}
+
 /** Что уже использовано в текущем ходе питания (ход = пока не «Закончить ход»). */
 export interface FeedTurnUse {
   /** Хищники, атаковавшие в этот ход. */
@@ -430,13 +454,26 @@ export interface GameState {
   foodRoll: number[] | null;
   /** Территория, к которой привязан текущий ход питания («Континенты»). */
   turnTerritory?: TerritoryId;
-  /** Территория, выбранная для будущей миграции (ход «миграция» ещё не завершён). */
-  pendingMigration?: Array<{ animalId: string; to: TerritoryId }>;
+  /** Optional remora responses, starting with the migrant's owner, then clockwise. */
+  pendingMigration?: {
+    ownerId: number;
+    responders: number[];
+    routes: Array<{ animalId: string; from?: TerritoryId; to: TerritoryId }>;
+    followed: string[];
+  };
   /**
    * Съеденные животные со «регенерацией»: их свойства ждут восстановления —
    * в вымирание владелец кладёт на них карту из руки как новое животное.
+   * Каждая запись хранит полные экземпляры свойств: при восстановлении они
+   * возвращаются животному как были (порядок, пары, скрытость, id карт).
    */
-  pendingRegeneration?: Array<{ ownerId: number; cardIds: string[] }> | null;
+  pendingRegeneration?: RegenPending[] | null;
+  /**
+   * Сколько животных каждый игрок вернул регенерацией в текущем вымирании:
+   * добор «выжившие + 1» их не учитывает. Часть состояния (а не глобальная
+   * переменная), чтобы партии не влияли друг на друга.
+   */
+  regeneratedThisYear?: Record<number, number>;
   currentPlayerId: number;
   firstPlayerId: number;
   phase: Phase;
@@ -572,6 +609,18 @@ export type GameAction =
   | { type: "feedSkip" }
   /** «Континенты»: объявить ход миграции (свойства «миграция»/«прилипала»). */
   | { type: "feedMigrate"; moves: Array<{ animalId: string; to: TerritoryId }> }
+  | { type: "feedRemora"; animalId: string; migrantId: string }
+  | { type: "feedFinishMigration" }
+  | {
+      /** «Континенты»: рекомбинация — обмен одним непарным свойством внутри пары (раз за год). */
+      type: "feedRecombine";
+      giverId: string;
+      takerId: string;
+      traitId: string;
+      otherTraitId: string;
+      /** Continent chosen for the partner losing swimming in the ocean. */
+      to?: Exclude<TerritoryId, "ocean">;
+    }
   | {
       /** Переставить своё животное (косметика; шов под «Континенты» — поле toZoneId). */
       type: "reorderAnimal";
@@ -591,7 +640,9 @@ export type GameAction =
     }
   | {
       type: "chooseDefense";
-      kind: "running" | "mimicry" | "tailLoss" | "none";
+      kind: "running" | "mimicry" | "tailLoss" | "none" | "ignore";
       mimicryTargetId?: string;
       discardTraitId?: string;
+      /** Только kind:"ignore" — свойство жертвы, которое контратака игнорирует. */
+      ignoredTraitId?: string;
     };

@@ -136,10 +136,14 @@ function deckEntries(
   for (const [trait, n] of SINGLES) entries.push([[trait], n]);
   for (const [a, b, n] of DUALS) entries.push([[a, b], n]);
   if (modules?.continents) {
-    for (const [trait, n] of CONTINENTS_SINGLES) entries.push([[trait], n]);
-    // Карты с гранью «водоплавающее»: игрок выбирает одну из двух граней.
-    for (const [a, b, n] of CONTINENTS_DUALS) entries.push([[a, b], n]);
-    for (const [trait, n] of CONTINENTS_PAIRS) entries.push([[trait], n]);
+    for (const [trait, n] of CONTINENTS_SINGLES) {
+      if (!modules.randomMutations || trait === "herding" || trait === "edificator") entries.push([[trait], n]);
+    }
+    // С мутациями из «Континентов» используются только стадность и эдификатор.
+    if (!modules.randomMutations) {
+      for (const [a, b, n] of CONTINENTS_DUALS) entries.push([[a, b], n]);
+      for (const [trait, n] of CONTINENTS_PAIRS) entries.push([[trait], n]);
+    }
   }
   if (modules?.plants) {
     // Двусторонние карты: свойство растения либо свойство животного.

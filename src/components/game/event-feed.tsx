@@ -61,6 +61,7 @@ export interface EventFeedProps {
   /** Быстрые фразы кнопками-чипами над полем ввода. */
   quickPhrases?: string[];
   title?: string;
+  titleId?: string;
   /** dock — док с рельсом и мобильной шторкой (игра); panel — встроенная
    *  панель на всю высоту родителя (колонка чата в лобби и ожидающем столе). */
   variant?: "dock" | "panel";
@@ -480,6 +481,7 @@ export function EventFeed({
   typingNames,
   quickPhrases,
   title,
+  titleId,
   className,
   variant = "dock",
 }: EventFeedProps) {
@@ -792,7 +794,7 @@ export function EventFeed({
         )}
       >
         <header className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border px-2.5 py-2">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-muted">{titleText}</span>
+          <span id={titleId} tabIndex={titleId ? -1 : undefined} className="min-w-0 flex-1 truncate text-sm font-medium text-muted">{titleText}</span>
           {filters}
         </header>
         {list("text-sm")}

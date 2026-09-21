@@ -17,9 +17,10 @@ import {
   type Over,
 } from "@dnd-kit/core";
 import { BookOpen, Eye, LayoutGrid, List, Minimize2 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { DialogShell } from "@/components/ui/dialog-shell";
 import { TRAITS } from "@/game/traits";
 import type { Animal, Card, FloraCard, GameAction, GameEvent, GameState, LogEntry, Plant, Player, TerritoryId, TraitId } from "@/game/types";
 import { TERRITORIES } from "@/game/types";
@@ -288,6 +289,31 @@ type DevCardAction = Extract<
   GameAction,
   { type: "devPlayTrait" | "devPlayPair" | "devPlayPlantTrait" | "devPlayPlantPair" }
 >;
+
+/** Подпись совпадает с номером на столе; кличка не скрывает номер животного. */
+function animalChoiceLabel(state: GameState, id: string, lang: Lang, withOwner = true): string {
+  const animal = findAnimal(state, id);
+  if (!animal) return translate(lang, "spot.animal");
+  const owner = state.players.find((p) => p.id === animal.ownerId);
+  const no = animal.no ?? (owner ? owner.animals.findIndex((a) => a.id === id) + 1 : 1);
+  const label = `${translate(lang, "game.pairNo", { n: no })}${animal.name ? ` «${animal.name}»` : ""}`;
+  return withOwner && owner ? `${owner.name}: ${label}` : label;
+}
+
+/** Роли пары направлены: первый участник должен иметь легальное действие в роли a. */
+function legalPairTargets(
+  actions: GameAction[],
+  intent: Extract<UiIntent, { kind: "playPair" | "playPlantPair" }>,
+): Set<string> {
+  const type = intent.kind === "playPair" ? "devPlayPair" : "devPlayPlantPair";
+  const targets = new Set<string>();
+  for (const action of actions) {
+    if (action.type !== type || action.cardId !== intent.cardId || action.face !== intent.face) continue;
+    if (!intent.first) targets.add(action.a);
+    else if (action.a === intent.first) targets.add(action.b);
+  }
+  return targets;
+}
 
 /** Набор id растений, на которые карта ляжет свойством (для подсветки при драге). */
 function legalPlantTargets(actions: GameAction[], cardId: string, face: number | null): Set<string> {
@@ -794,7 +820,7 @@ function useFoodFly(state: GameState | null): { flies: FlyingFood[]; remove: (id
           push(felt(), centerOf(animalEl(e.animalId)), "blue");
           break;
         case "foodToFat":
-          push(felt(), centerOf(animalEl(e.animalId)), "yellow");
+          push(centerOf(animalEl(e.animalId)), centerOf(animalEl(e.animalId)), "yellow");
           break;
         default:
           break;
@@ -1359,6 +1385,7 @@ function Table() {
   const [dndActive, setDndActive] = useState<DndData | null>(null);
   const [dndOver, setDndOver] = useState<{ id: string; data: DndData; side: "before" | "after" | null } | null>(null);
   const dndPointRef = useRef<{ x: number; y: number } | null>(null);
+  const [defensePreviewId, setDefensePreviewId] = useState<string | null>(null);
 
   // Точка пальца/курсора во время броска: по ней считаем сторону вставки
   // и находим растение под картой (карточки растений — чужой компонент).
@@ -1392,18 +1419,18 @@ function Table() {
   const cardDragTargets = useMemo(() => {
     if (dndActive?.kind !== "card" || !dndActive.cardId) return null;
     const face = selectedFaceOf(dndActive.cardId);
+    if (intent.kind === "playPair" && intent.cardId === dndActive.cardId) {
+      return legalPairTargets(devActs, intent);
+    }
     const set = new Set<string>();
     for (const a of devActs) {
       if (a.type !== "devPlayTrait" && a.type !== "devPlayPair") continue;
       if (a.cardId !== dndActive.cardId || (face != null && a.face !== face)) continue;
       if (a.type === "devPlayTrait") set.add(a.animalId);
-      else {
-        set.add(a.a);
-        set.add(a.b);
-      }
+      else set.add(a.a);
     }
     return set;
-  }, [dndActive, devActs, selectedFaceOf]);
+  }, [dndActive, devActs, selectedFaceOf, intent]);
 
   /**
    * Растения-цели для тащи́мой карты. Пустой набор PlantStrip не приглушает,
@@ -1425,9 +1452,10 @@ function Table() {
         const hl = animalHighlight(state, a, intent, isHumanTurn, feedActs, devActs, mutateGuess);
         const cardTarget = cardDragTargets?.has(a.id) ?? false;
         const underPointer = dndOver?.data.animalId === a.id;
+        const defenseTarget = Boolean(state.pendingAttack && defensePreviewId === a.id);
         map.set(a.id, {
-          highlight: hl || cardTarget,
-          dimmed: (intent.kind !== "none" && !hl) || (cardDrag && !cardTarget),
+          highlight: hl || cardTarget || defenseTarget,
+          dimmed: !defenseTarget && ((intent.kind !== "none" && !hl) || (cardDrag && !cardTarget)),
           selected:
             (intent.kind === "playPair" && intent.first === a.id) ||
             (intent.kind === "hunt" && intent.carnivoreId === a.id) ||
@@ -1442,12 +1470,12 @@ function Table() {
               intent.kind === "parasitize"),
           // Подсвечиваем кольцом только допустимую цель под указателем.
           dropTarget:
-            underPointer && (cardDrag ? cardTarget : dndActive?.kind === "animal" && a.id !== dndActive.animalId),
+            defenseTarget || (underPointer && (cardDrag ? cardTarget : dndActive?.kind === "animal" && a.id !== dndActive.animalId)),
         });
       }
     }
     return map;
-  }, [state, intent, isHumanTurn, feedActs, devActs, mutateGuess, cardDragTargets, dndOver, dndActive]);
+  }, [state, intent, isHumanTurn, feedActs, devActs, mutateGuess, cardDragTargets, dndOver, dndActive, defensePreviewId]);
   const getInteraction = useCallback((a: Animal) => interactions.get(a.id) ?? NO_INTERACTION, [interactions]);
   // Новые цели под прицелом звучат очень тихим треском «слома» — почти порог слышимости.
   const dangerKey = useMemo(
@@ -1478,10 +1506,7 @@ function Table() {
           if (a.type === "devPlayPlantTrait" && a.cardId === intent.cardId && a.face === intent.face) set.add(a.plantId);
         }
       } else if (intent.kind === "playPlantPair") {
-        for (const a of devActs) {
-          if (a.type !== "devPlayPlantPair" || a.cardId !== intent.cardId || a.face !== intent.face) continue;
-          if (intent.first ? a.a === intent.first : true) set.add(intent.first ? a.b : a.a);
-        }
+        for (const id of legalPairTargets(devActs, intent)) set.add(id);
       } else if (intent.kind === "mutatePlant") {
         // «Случайные мутации»: карта может лечь свойством на любое растение.
         for (const a of devActs) {
@@ -1545,14 +1570,12 @@ function Table() {
         return;
       }
       if (intent.kind === "playPlantPair") {
+        if (!legalPairTargets(devActs, intent).has(plant.id)) return;
         if (!intent.first) {
           setIntent({ ...intent, first: plant.id });
           return;
         }
-        const ok = devActs.some(
-          (a) => a.type === "devPlayPlantPair" && a.cardId === intent.cardId && a.face === intent.face && a.a === intent.first && a.b === plant.id,
-        );
-        if (ok) dispatchAct({ type: "devPlayPlantPair", cardId: intent.cardId!, face: intent.face!, a: intent.first, b: plant.id });
+        dispatchAct({ type: "devPlayPlantPair", cardId: intent.cardId!, face: intent.face!, a: intent.first, b: plant.id });
         return;
       }
       // «Случайные мутации»: объявлено свойство растения — карта вскроется на нём.
@@ -1641,7 +1664,12 @@ function Table() {
    * движка (devPlayAnimal / devPlayTrait / devPlayPair / devPlayPlantTrait /
    * devPlayPlantPair), а свои правила только выбираем подходящее действие.
    */
-  function performDndDrop(active: DndData, target: DndData, side: "before" | "after" | null) {
+  function performDndDrop(
+    active: DndData,
+    target: DndData,
+    side: "before" | "after" | null,
+    point: { x: number; y: number } | null,
+  ) {
     // ── Животное: перестановка в ряду или перенос между территориями ──
     if (active.kind === "animal") {
       const moved = active.animalId ? human.animals.find((a) => a.id === active.animalId) : undefined;
@@ -1702,7 +1730,7 @@ function Table() {
       const simple = acts.find((a) => a.type === "devPlayTrait" && a.animalId === animalId);
       if (simple) return dispatch(simple);
       // Парная грань без первого зверя: бросок выбирает первого, второй — дальше.
-      const pair = acts.find((a) => a.type === "devPlayPair" && (a.a === animalId || a.b === animalId));
+      const pair = acts.find((a) => a.type === "devPlayPair" && a.a === animalId);
       if (pair) {
         setIntent({ kind: "playPair", cardId, face: pair.face, first: animalId });
         sfx.play("click");
@@ -1726,7 +1754,7 @@ function Table() {
     if (target.kind === "plants") {
       // Карточки растений рисует чужой компонент, поэтому ищем растение под
       // точкой броска по DOM (data-plant-id).
-      const plantId = plantIdAtPoint(dndPointRef.current);
+      const plantId = plantIdAtPoint(point);
       if (!plantId) return rejectDrop();
       if (intent.kind === "playPlantPair" && intent.cardId === cardId && intent.first && intent.first !== plantId) {
         const act = acts.find((a) => a.type === "devPlayPlantPair" && a.a === intent.first && a.b === plantId);
@@ -1773,9 +1801,12 @@ function Table() {
     const info = dndOverInfo(e.over);
     setDndActive(null);
     setDndOver(null);
+    // Точка указателя нужна в performDndDrop (растение под броском), поэтому
+    // захватываем её до сброса — сам ref обнуляем сразу, как раньше.
+    const point = dndPointRef.current;
     dndPointRef.current = null;
     if (!active || !info || !dndTargetAllowed(active, info.data)) return;
-    performDndDrop(active, info.data, info.side);
+    performDndDrop(active, info.data, info.side, point);
   }
 
   function handleDndCancel() {
@@ -2390,6 +2421,8 @@ function Table() {
             />
           ) : (
             <DevDock
+              state={state}
+              devActs={devActs}
               human={human}
               intent={intent}
               disabled={!isHumanTurn || Boolean(state.pendingAttack)}
@@ -2480,7 +2513,7 @@ function Table() {
       <EventSpotlight replayEvents={netReplay} onActiveChange={setSpotlightActive} />
 
       {state.pendingAttack && state.pendingAttack.waitingFor === human.id ? (
-        <DefenseDock acts={defActs} onPick={(a) => dispatch(a)} />
+        <DefenseDock acts={defActs} onPick={(a) => dispatch(a)} onPreview={setDefensePreviewId} />
       ) : null}
 
       {confirmLeave ? (
@@ -2510,7 +2543,14 @@ function Table() {
       {/* «Призрак» тащимого: карточка животного или карта руки едет под
           курсором. Источник остаётся на месте приглушённым, а индикатор
           показывает, куда именно встанет животное. */}
-      <DragOverlay zIndex={80} dropAnimation={{ duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" }}>
+      <DragOverlay
+        zIndex={80}
+        dropAnimation={
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            ? null
+            : { duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" }
+        }
+      >
         {dragGhost ? (
           <div data-dnd-ghost className="rotate-2 opacity-95 drop-shadow-[0_10px_18px_rgba(0,0,0,0.35)]">
             {dragGhost}
@@ -2563,15 +2603,12 @@ function handleAnimalClick(
       return;
     }
     if (intent.kind === "playPair") {
+      if (!legalPairTargets(devActs, intent).has(animal.id)) return;
       if (!intent.first) {
-        if (animal.ownerId !== human.id) return;
         setIntent({ ...intent, first: animal.id });
         return;
       }
-      const ok = devActs.some(
-        (a) => a.type === "devPlayPair" && a.cardId === intent.cardId && a.a === intent.first && a.b === animal.id,
-      );
-      if (ok) dispatch({ type: "devPlayPair", cardId: intent.cardId!, face: intent.face!, a: intent.first, b: animal.id });
+      dispatch({ type: "devPlayPair", cardId: intent.cardId!, face: intent.face!, a: intent.first, b: animal.id });
       return;
     }
     return;
@@ -2690,8 +2727,10 @@ function animalHighlight(
     );
   }
   if (intent.kind === "playPair") {
-    if (!intent.first) return animal.ownerId === state.humanId;
-    return devActs.some((a) => a.type === "devPlayPair" && a.a === intent.first && a.b === animal.id);
+    // Роли пары направлены: первый шаг — только свои первые участники
+    // легальных действий, второй шаг — только допустимые партнёры.
+    const legal = legalPairTargets(devActs, intent);
+    return intent.first ? legal.has(animal.id) : legal.has(animal.id) && animal.ownerId === state.humanId;
   }
   if (state.phase !== "feeding") return false;
   if (intent.kind === "hunt" && intent.carnivoreId) {
@@ -2962,6 +3001,7 @@ const PlayerSection = memo(function PlayerSection({
   const gameState = useGameStore((s) => s.state);
   const score = gameState && gameState.phase !== "gameOver" ? liveScore(gameState, p.id) : null;
   const active = actorId === p.id;
+  const currentTurn = gameState?.phase !== "gameOver" && gameState?.currentPlayerId === p.id;
   // M10: отсчёт авто-конца хода — только у того, чей сейчас ход (сервер
   // ставит метку лишь человеку, у которого не осталось действий).
   const turnDeadlineAt = useGameStore((s) => s.net?.turnDeadlineAt ?? null);
@@ -3112,6 +3152,7 @@ const PlayerSection = memo(function PlayerSection({
         // территорий, и лишние отступы складываются в сотни пикселей высоты.
         "paper-sheet mb-3 rounded-[var(--radius-lg)] border bg-surface p-3 transition-[border-color,box-shadow] duration-[var(--motion-quick)] lg:mb-0 lg:p-2",
         active ? "border-accent/70 shadow-[0_0_0_1px_var(--color-accent),var(--shadow-card)]" : "border-border",
+        currentTurn && "outline outline-1 outline-accent",
       )}
     >
       <div className="mb-2 flex items-center justify-between text-sm lg:mb-1">
@@ -3123,6 +3164,7 @@ const PlayerSection = memo(function PlayerSection({
             style={{ background: seatTintColor }}
           />
           {isHuman ? t("game.yourPopulation") : scientistName(p.name, lang)}
+          {currentTurn ? <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-accent" /> : null}
           <TurnTimer
             deadlineAt={active ? turnDeadlineAt : null}
             offsetMs={serverOffsetMs}
@@ -3131,7 +3173,6 @@ const PlayerSection = memo(function PlayerSection({
           />
           {active ? (
             <span className="flex items-center gap-1 text-xs text-accent">
-              <span className="size-1.5 rounded-full bg-accent" />
               {t("game.acting")}
             </span>
           ) : null}
@@ -3625,7 +3666,10 @@ function DiceTray({ roll, bank }: { roll: number[] | null; bank: number }) {
   if (!roll) {
     return (
       <div className="relative flex items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-bg/50 px-4 py-2">
-        <Dice3D values={[null, null]} rolling dieSize={44} />
+        <div aria-hidden className="flex h-[70px] w-[102px] shrink-0 items-center justify-center gap-[14px]">
+          <span className="size-11 shrink-0 rounded-[var(--radius-md)] border border-border bg-muted/20" />
+          <span className="size-11 shrink-0 rounded-[var(--radius-md)] border border-border bg-muted/20" />
+        </div>
         <span className="text-xs uppercase tracking-[0.18em] text-muted">{t("game.diceRolling")}</span>
       </div>
     );
@@ -4020,6 +4064,8 @@ const DndHandCard = memo(function DndHandCard({
 });
 
 function DevDock({
+  state,
+  devActs,
   human,
   intent,
   disabled,
@@ -4032,6 +4078,8 @@ function DevDock({
   onPass,
   onCancel,
 }: {
+  state: GameState;
+  devActs: GameAction[];
   human: Player;
   intent: UiIntent;
   disabled?: boolean;
@@ -4053,6 +4101,7 @@ function DevDock({
   const [blockedHint, setBlockedHint] = useState<{ text: string; seq: number } | null>(null);
   const seqRef = useRef(0);
   const t = useT();
+  const lang = useLang();
   const rejectFace = useCallback(() => {
     sfx.play("crack");
     seqRef.current += 1;
@@ -4073,6 +4122,13 @@ function DevDock({
   useEffect(() => {
     setBlockedHint(null);
   }, [intent]);
+  const pairStatus = useMemo(() => {
+    if (intent.kind !== "playPair" || !intent.first) return null;
+    return {
+      count: legalPairTargets(devActs, intent).size,
+      label: animalChoiceLabel(state, intent.first, lang, false),
+    };
+  }, [intent, devActs, state, lang]);
   return (
     <div className="space-y-2" onClick={dockClickSfx}>
       <div className="flex items-center justify-between gap-2">
@@ -4124,6 +4180,11 @@ function DevDock({
           </Button>
         </div>
       </div>
+      {pairStatus && pairStatus.label ? (
+        <p className="text-xs text-muted">
+          {t("dock.dev.pairProgress", { no: pairStatus.label, n: pairStatus.count })}
+        </p>
+      ) : null}
       <div data-hand-row className="flex gap-2 overflow-x-auto pb-1">
         {human.hand.map((card, i) => {
           const fresh = freshIds?.has(card.id);
@@ -4171,10 +4232,11 @@ function DevDock({
  */
 function BlockedButton({ label, reason, cracked }: { label: string; reason: string; cracked?: boolean }) {
   return (
-    <span title={reason} className="inline-flex">
+    <span title={reason} className="inline-flex max-w-60 flex-col items-start gap-1">
       <Button variant="secondary" size="default" disabled className={cracked ? "dock-cracked" : undefined} aria-label={`${label}: ${reason}`}>
         {label}
       </Button>
+      <span className="text-xs leading-snug text-muted">{reason}</span>
     </span>
   );
 }
@@ -4235,6 +4297,7 @@ function FeedDock({
   onSkip: () => void;
 }) {
   const dispatch = useGameStore((s) => s.dispatch);
+  const state = useGameStore((s) => s.state)!;
   const t = useT();
   const lang = useLang();
   // «Закончить питание» всегда спрашивает подтверждение: при голодных — об их
@@ -4265,6 +4328,9 @@ function FeedDock({
   const fats = acts.filter((a): a is Extract<GameAction, { type: "feedConvertFat" }> => a.type === "feedConvertFat");
   const grazes = acts.filter((a): a is Extract<GameAction, { type: "feedGraze" }> => a.type === "feedGraze");
   const migrations = acts.filter((a): a is Extract<GameAction, { type: "feedMigrate" }> => a.type === "feedMigrate");
+  const recombinations = acts.filter((a): a is Extract<GameAction, { type: "feedRecombine" }> => a.type === "feedRecombine");
+  const [exchangeChoice, setExchangeChoice] = useState("");
+  const chosenExchange = recombinations.find(a => JSON.stringify(a) === exchangeChoice);
   const canSkip = acts.some((a) => a.type === "feedSkip");
   const canSkipHint = !canSkip && (shelters.length > 0 || plantTakes.length > 0 || floraTakes.length > 0);
   // Взаимоисключающие группы по правилам (движок: used.foodTaken/combatUsed):
@@ -4293,6 +4359,24 @@ function FeedDock({
             ? t(INTENT_HINT[intentKind])
             : null
         : (INTENT_HINT[intentKind] ? t(INTENT_HINT[intentKind]) : null);
+  if (acts.some(a => a.type === "feedFinishMigration")) {
+    return <div className="flex flex-wrap items-center gap-2">
+      {acts.filter((a): a is Extract<GameAction, { type: "feedRemora" }> => a.type === "feedRemora").map(action => {
+        const route = state.pendingMigration?.routes.find((r) => r.animalId === action.migrantId);
+        return <Button key={`${action.animalId}-${action.migrantId}`} variant="secondary" className="h-auto flex-col items-start whitespace-normal text-left" onClick={() => dispatch(action)}>
+          <span>{t("dock.feed.follow", {
+            follower: animalChoiceLabel(state, action.animalId, lang, false),
+            migrant: animalChoiceLabel(state, action.migrantId, lang),
+          })}</span>
+          {route && <span className="text-xs font-normal text-muted">
+            {territoryName(route.from ?? "laurasia", lang)} → {territoryName(route.to, lang)}
+          </span>}
+        </Button>;
+      })}
+      <Button variant="secondary" onClick={() => dispatch({ type: "feedFinishMigration" })}>{t("dock.feed.finishMigration")}</Button>
+      <p className="w-full text-xs text-muted">{t("dock.feed.finishMigrationHint")}</p>
+    </div>;
+  }
   if (rageTurn) {
     return (
       <div className="flex flex-wrap items-center gap-2" onClick={dockClickSfx}>
@@ -4328,6 +4412,33 @@ function FeedDock({
           {continents ? t("dock.feed.oceanChip") : t("phase.foodBank")}:{" "}
           <span className="font-display text-sm text-fg">{bank}</span>
         </span>
+      ) : null}
+      {recombinations.length > 0 ? (
+        <div className="flex max-w-full flex-wrap items-center gap-2">
+          <select
+            aria-label={t("dock.feed.recombine")}
+            className="max-w-full rounded border border-border bg-surface p-2 text-sm text-fg"
+            value={chosenExchange ? exchangeChoice : ""}
+            onChange={e => setExchangeChoice(e.target.value)}
+          >
+            <option value="">{t("dock.feed.recombine")}</option>
+            {recombinations.map(action => {
+              const giver = human.animals.find(a => a.id === action.giverId)!;
+              const taker = human.animals.find(a => a.id === action.takerId)!;
+              const sent = giver.traits.find(t => t.id === action.traitId)!;
+              const received = taker.traits.find(t => t.id === action.otherTraitId)!;
+              const label = (a: Animal) => a.name || `#${a.no ?? human.animals.indexOf(a) + 1}`;
+              return <option key={JSON.stringify(action)} value={JSON.stringify(action)}>
+                {label(giver)}: {traitName(sent.type, lang)} ↔ {label(taker)}: {traitName(received.type, lang)}
+                {action.to ? ` → ${territoryName(action.to, lang)}` : ""}
+              </option>;
+            })}
+          </select>
+          <Button variant="secondary" disabled={!chosenExchange} onClick={() => {
+            if (chosenExchange) dispatch(chosenExchange);
+            setExchangeChoice("");
+          }}>{traitName("recombination", lang)}</Button>
+        </div>
       ) : null}
       {foodActs.length ? (
         <Button
@@ -4548,14 +4659,23 @@ function FeedDock({
 function DefenseDock({
   acts,
   onPick,
+  onPreview,
 }: {
   acts: GameAction[];
   onPick: (a: GameAction) => void;
+  onPreview: (id: string | null) => void;
 }) {
   const state = useGameStore((s) => s.state)!;
   const t = useT();
+  const lang = useLang();
+  const titleId = useId();
   const atk = state.pendingAttack!;
   const prey = findAnimal(state, atk.preyId);
+  const plant = state.plants?.find((p) => p.id === atk.plantId);
+  const attackerLabel = plant
+    ? `${plantName(plant.kind, lang)} · ${t("game.pairNo", { n: (state.plants?.indexOf(plant) ?? 0) + 1 })}`
+    : animalChoiceLabel(state, atk.carnivoreId, lang);
+  useEffect(() => () => onPreview(null), [onPreview, atk.preyId]);
   const running = acts.find((a) => a.type === "chooseDefense" && a.kind === "running");
   const none = acts.find((a) => a.type === "chooseDefense" && a.kind === "none");
   const mimics = acts.filter((a) => a.type === "chooseDefense" && a.kind === "mimicry");
@@ -4564,26 +4684,55 @@ function DefenseDock({
   );
 
   return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center bg-bg/70 p-3 sm:items-center">
-      <div className="w-full max-w-md rounded-[var(--radius-xl)] border border-border bg-surface p-5">
-        <h2 className="text-xl">{t("defense.title")}</h2>
-        <p className="mt-1 text-sm text-muted">
+    <DialogShell
+      titleId={titleId}
+      overlayClassName="fixed inset-0 z-40 flex items-end justify-center bg-bg/70 p-3 sm:items-center"
+      panelClassName="w-full max-w-md rounded-[var(--radius-xl)] border border-border bg-surface p-5"
+      onEscape={(event) => {
+        // Обязательный выбор: Escape не закрывает диалог и не сбрасывает фоновые намерения.
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+    >
+        <h2 id={titleId} tabIndex={-1} className="text-xl">
+          {t("defense.title", { attacker: attackerLabel, prey: animalChoiceLabel(state, atk.preyId, lang) })}
+        </h2>
+        {atk.choosingPlantDefense && <p className="mt-1 text-sm text-muted">{t("defense.plantIgnore")}</p>}
+        {!atk.choosingPlantDefense && <p className="mt-1 text-sm text-muted">
           {t("defense.need", { need: prey ? foodNeeded(prey) : "—", food: prey?.food ?? 0 })}
-        </p>
+        </p>}
         <div className="mt-4 flex flex-col gap-2">
+          {acts.map((action) => {
+            if (action.type !== "chooseDefense" || action.kind !== "ignore") return null;
+            const trait = prey?.traits.find((x) => x.id === action.ignoredTraitId);
+            return trait ? <Button key={trait.id} onClick={() => onPick(action)}>
+              {t("defense.ignore", { trait: traitName(trait.type) })}
+            </Button> : null;
+          })}
           {running ? (
             <Button onClick={() => onPick(running)}>{t("defense.running")}</Button>
           ) : null}
-          {mimics.map((a) =>
-            a.type === "chooseDefense" ? (
-              <Button key={a.mimicryTargetId} variant="secondary" onClick={() => onPick(a)}>
-                {t("defense.mimicry")}
+          {mimics.map((action) => {
+            if (action.type !== "chooseDefense" || !action.mimicryTargetId) return null;
+            return (
+              <Button
+                key={action.mimicryTargetId}
+                variant="secondary"
+                className="h-auto flex-col items-start whitespace-normal text-left"
+                onMouseEnter={() => onPreview(action.mimicryTargetId!)}
+                onMouseLeave={() => onPreview(null)}
+                onFocus={() => onPreview(action.mimicryTargetId!)}
+                onBlur={() => onPreview(null)}
+                onClick={() => onPick(action)}
+              >
+                <span>{t("defense.mimicry", { target: animalChoiceLabel(state, action.mimicryTargetId, lang) })}</span>
+                <span className="text-xs font-normal text-muted">{t("defense.mimicryHint")}</span>
               </Button>
-            ) : null,
-          )}
+            );
+          })}
           {tails.map((a) => (
             <Button key={a.discardTraitId} variant="secondary" onClick={() => onPick(a)}>
-              {t("defense.tailLoss")}
+              {t("defense.tailDiscard", { trait: traitName(prey?.traits.find((trait) => trait.id === a.discardTraitId)?.type ?? "tailLoss", lang) })}
             </Button>
           ))}
           {none ? (
@@ -4592,7 +4741,6 @@ function DefenseDock({
             </Button>
           ) : null}
         </div>
-      </div>
-    </div>
+    </DialogShell>
   );
 }

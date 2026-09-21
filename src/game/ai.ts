@@ -35,6 +35,7 @@ export function chooseAIAction(state: GameState): GameAction | null {
   if (state.pendingAttack) {
     const acts = legalDefenseActions(state, state.pendingAttack.waitingFor);
     if (!acts.length) return { type: "chooseDefense", kind: "none" };
+    if (state.pendingAttack.choosingPlantDefense) return acts[0]!;
     return pickDefense(state, acts);
   }
   if (state.phase === "development") {
@@ -323,7 +324,13 @@ function pickFeed(state: GameState, acts: GameAction[]): GameAction {
     }
     if (a.type === "feedPirate") {
       const pirate = findAnimal(state, a.pirateId)!;
+      const target = findAnimal(state, a.targetId)!;
       s = 6 + hunger(pirate);
+      // Own piracy creates no food. Only consolidate it when this feeds the
+      // recipient; otherwise two hungry species can steal back forever.
+      if (target.ownerId === pirate.ownerId && !isFed({ ...pirate, food: pirate.food + 1, blueFood: pirate.blueFood + 1 })) {
+        s = -20;
+      }
     }
     if (a.type === "feedHibernate") {
       s = 5;
@@ -338,6 +345,12 @@ function pickFeed(state: GameState, acts: GameAction[]): GameAction {
       s = oppHungry > myHungry ? 2.5 : -1;
       if (state.foodBank <= 1) s -= 1;
     }
+    if (a.type === "feedFinishMigration") s = 0;
+    if (a.type === "feedRemora") {
+      const follower = findAnimal(state, a.animalId)!;
+      const route = state.pendingMigration!.routes.find(r => r.animalId === a.migrantId)!;
+      s = hunger(follower) > 0 ? (state.territoryFood?.[route.to] ?? 0) - (state.territoryFood?.[route.from ?? "laurasia"] ?? 0) - 1 : -2;
+    }
     if (a.type === "feedMigrate") {
       // Миграция — запасной ход: полезна при переезде к еде, иначе избегаем.
       const mv = findAnimal(state, a.moves[0]!.animalId);
@@ -347,6 +360,28 @@ function pickFeed(state: GameState, acts: GameAction[]): GameAction {
         s -= hunger(mv);
       }
       if (myHungry > 0 && !usedAllFood(state)) s -= 6;
+    }
+    if (a.type === "feedRecombine") {
+      const giver = findAnimal(state, a.giverId)!;
+      const taker = findAnimal(state, a.takerId)!;
+      const sent = giver.traits.find(t => t.id === a.traitId)!;
+      const received = taker.traits.find(t => t.id === a.otherTraitId)!;
+      // Evaluate both partners, not merely the benefit of giving away a parasite.
+      const project = (host: Animal, outgoing: typeof sent, incoming: typeof sent): Animal => {
+        const traits = host.traits.filter(t => t.id !== outgoing.id);
+        if (TRAITS[incoming.type].stackable || !traits.some(t => t.type === incoming.type)) {
+          traits.push({ ...incoming, disabled: false });
+        }
+        return { ...host, traits };
+      };
+      const after = [project(giver, sent, received), project(taker, received, sent)];
+      const before = [giver, taker];
+      s = -4;
+      for (let i = 0; i < before.length; i++) {
+        s += (Number(isFed(after[i]!)) - Number(isFed(before[i]!))) * 12;
+        s += hunger(before[i]!) - hunger(after[i]!);
+      }
+      if (a.to !== undefined) s -= 2;
     }
     if (a.type === "feedEndTurn") {
       // Завершать ход есть смысл, только если он уже чем-то занят.

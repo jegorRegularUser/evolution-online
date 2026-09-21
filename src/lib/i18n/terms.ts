@@ -128,15 +128,15 @@ export const TRAIT_EN: Record<string, TermEn> = {
   },
   remora: {
     name: "Remora",
-    desc: "Doesn't travel on its own. But when you declare a migration, all your remoras from the area the migrant leaves travel with it. Sleeping remoras stay behind.",
+    desc: "Doesn't travel on its own. When a migration is declared, each remora of the same area may follow the migrant at its owner's choice, resolved in turn order. In the Ocean only swimmers follow. Sleeping remoras stay behind.",
   },
   herding: {
     name: "Herding",
-    desc: "Herding animals cannot be attacked while there are more of them than carnivores in the same territory. The count is shared: all herding animals, even other players', against all carnivores and carnivorous plants of that territory.",
+    desc: "Herding animals cannot be attacked while their number is equal to or greater than the number of carnivores in the same territory. The count is shared: all herding animals, even other players', against all carnivores and carnivorous plants of that territory.",
   },
   nematocysts: {
     name: "Nematocysts",
-    desc: "A carnivore that attacks this animal is paralyzed until the end of the feeding phase: it cannot hunt, steal food or migrate. If the attack happened in the Ocean, the paralyzed carnivore is also washed ashore onto a continent.",
+    desc: "Even after an unsuccessful attack, all the attacking carnivore's traits stop working until feeding ends and its food requirement becomes 1. Cards remain and traits recover after starvation is determined. If the attack happened in the Ocean, the paralyzed carnivore is also washed ashore onto a continent.",
   },
   regeneration: {
     name: "Regeneration",
@@ -144,7 +144,7 @@ export const TRAIT_EN: Record<string, TermEn> = {
   },
   recombination: {
     name: "Recombination",
-    desc: "A pair card between two animals of the same territory. By the board game rules the partners exchange one trait each, but the online version doesn't perform the exchange yet: the card only links the pair.",
+    desc: "A pair card between two animals of the same territory. Once per year, during its owner's feeding turn, each partner gives the other one unpaired trait. A duplicate goes to the discard; a one-shot trait already used by its previous owner (hibernation this year, piracy/grazing this turn) stays spent. A swimmer that loses “Swimming” in the Ocean moves to a continent.",
   },
   edificator: {
     name: "Edificator",
@@ -152,7 +152,7 @@ export const TRAIT_EN: Record<string, TermEn> = {
   },
   neoplasia: {
     name: "Neoplasia",
-    desc: "A virus: placed under all traits of any animal, yours or an opponent's. Every year at food supply determination it rises and disables another unpaired trait (paired ones are untouched). A disabled trait doesn't work and gives no points; when there's nothing left to disable, the animal dies. “Swimming” in the Ocean is untouched by the virus.",
+    desc: "A virus: placed under all traits of an opponent's animal. Every year at food supply determination it rises and disables another unpaired trait (paired ones are untouched). A disabled trait doesn't work and gives no points; when there's nothing left to disable, the animal dies immediately. “Swimming” in the Ocean is untouched by the virus.",
   },
 
   // ── «Растения»: свойства растений ────────────────────────────────────────
@@ -248,7 +248,7 @@ export const FLORA_EN: Record<string, TermEn> = {
   },
   madCap: {
     name: "Mad Cap",
-    desc: "The animal that takes a token gets the “Madness” mark: at the start of the next round of the feeding phase its owner removes the mark, and the neighbor to the right plays the round instead (commanding its animals, but not looking at its hand).",
+    desc: "The animal that takes a token gets the “Madness” mark: at the start of the next round of the feeding phase its owner removes the mark. A bot controls their animals for that round; the neighbor does not participate — control by the right-hand neighbor is not yet implemented in the online version.",
   },
   flyAgaric: {
     name: "Fly Agaric",
@@ -256,7 +256,7 @@ export const FLORA_EN: Record<string, TermEn> = {
   },
   insight: {
     name: "Mushroom of Insight",
-    desc: "Having taken a token, the animal's owner discards their whole hand (in the board game they then look at other players' cards — in the online version this peek is simplified).",
+    desc: "Having taken a token, the animal's owner discards their whole hand to the discard pile. Looking at other players' cards (as the board game rule allows) is not yet implemented in the online version.",
   },
   soaring: {
     name: "Soaring Mushroom",
@@ -302,7 +302,7 @@ export const MARK_EN: Record<string, TermEn> = {
   },
   madness: {
     name: "Madness",
-    desc: "At the start of the next round of the feeding phase the owner removes the mark from one of their animals, and the neighbor to the right plays that round instead (they can't look at the cards in hand).",
+    desc: "At the start of the next round of the feeding phase the owner removes the mark from one of their animals. A bot controls their animals for that round; the neighbor does not participate — control by the right-hand neighbor is not yet implemented in the online version.",
   },
   rage: {
     name: "Rage",

@@ -18,6 +18,7 @@ import {
   legalFeedActions,
 } from "../../game/engine.ts";
 import { chooseAIAction } from "../../game/ai.ts";
+import { moduleCompatibilityError } from "../../game/module-compatibility.ts";
 import type {
   Difficulty,
   GameAction,
@@ -762,7 +763,10 @@ async function janitor(sql: SqlLike): Promise<void> {
  */
 export function endTurnStepFor(state: GameState, _actorId: number): GameAction {
   if (state.phase === "development") return { type: "devPass" };
-  if (state.pendingAttack) return { type: "chooseDefense", kind: "none" };
+  if (state.pendingAttack) {
+    if (state.pendingAttack.choosingPlantDefense) return legalDefenseActions(state, state.pendingAttack.waitingFor)[0]!;
+    return { type: "chooseDefense", kind: "none" };
+  }
   return { type: "feedEndTurn" };
 }
 
@@ -772,7 +776,10 @@ export function endTurnStepFor(state: GameState, _actorId: number): GameAction {
  */
 function resignedStepFor(state: GameState): GameAction {
   if (state.phase === "development") return { type: "devPass" };
-  if (state.pendingAttack) return { type: "chooseDefense", kind: "none" };
+  if (state.pendingAttack) {
+    if (state.pendingAttack.choosingPlantDefense) return legalDefenseActions(state, state.pendingAttack.waitingFor)[0]!;
+    return { type: "chooseDefense", kind: "none" };
+  }
   return { type: "feedSkip" };
 }
 
@@ -1397,6 +1404,8 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
 
   const service: RoomService = {
     async create(input, source) {
+      const incompatibility = moduleCompatibilityError(input.modules ?? {});
+      if (incompatibility) throw new NetError(incompatibility);
       // S7: мягкая квота на источнике — спам комнатами раздувает БД.
       // Порог настраивается EVO_CREATE_PER_HOUR (QA-прогоны создают десятки
       // столов); без переменной окружения действует прежний лимит.
@@ -1678,7 +1687,11 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       const { room } = await requireHost(code, token, "Менять настройки может только хост", "host-only");
       if (room.status !== "lobby") throw new NetError("Настройки меняют до начала партии", "lobby-only");
       const next: RoomSettings = { ...effectiveSettings(room) };
-      if (patch.modules !== undefined) next.modules = { ...patch.modules };
+      if (patch.modules !== undefined) {
+        const incompatibility = moduleCompatibilityError(patch.modules);
+        if (incompatibility) throw new NetError(incompatibility);
+        next.modules = { ...patch.modules };
+      }
       if (patch.difficulty !== undefined) next.difficulty = patch.difficulty;
       if (patch.deckSize !== undefined) next.deckSize = patch.deckSize;
       await casUpdateStrict(sql, code, room.version, {
@@ -2044,6 +2057,8 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         throw new NetError("Заполните все места — людьми или ботами", "seats-unfinished");
       }
       const cfg = effectiveSettings(room);
+      const incompatibility = moduleCompatibilityError(cfg.modules ?? room.modules ?? {});
+      if (incompatibility) throw new NetError(incompatibility);
       const defs = seats.map((s) => ({ name: s.name, isAI: s.is_ai }));
       const state = createGame(
         room.capacity,
