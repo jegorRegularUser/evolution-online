@@ -7,9 +7,18 @@ name: CI
 
 on: [push, pull_request, workflow_dispatch]
 
+# У раннера один слот (capacity 1). Без этого два пуша подряд встают в очередь,
+# и вторая сборка ждёт первую впустую — отменяем устаревший прогон той же ветки.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     runs-on: ubuntu-latest
+
+    # Зависшая сборка держит единственный слот до таймаута Gitea (3 часа).
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
