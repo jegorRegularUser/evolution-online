@@ -1,0 +1,30 @@
+# CI на своём Gitea.
+#
+# Раннер: gitea-runner (образ gitea/runner:3.5.0), лейбл ubuntu-latest —
+# задача идёт в контейнере node:22-bookworm. Подробности и грабли установки:
+# docs/changelog.md в репозитории заметок (homeserver).
+name: CI
+
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # npm ci намеренно не используется: package-lock.json разошёлся с
+      # package.json, и npm ci падает на "Missing: lru-cache@… from lock file".
+      # Пока лок не пересобран, npm install — то, чем проект реально ставится.
+      - name: Установка зависимостей
+        run: npm install --no-audit --no-fund
+
+      - name: Типы
+        run: npm run typecheck
+
+      # npm run build — это `vite build && npm run db:migrate`. Миграции без
+      # DATABASE_URL печатают «skipping» и выходят с нулём (scripts/migrate.mjs),
+      # поэтому база в CI не нужна и поднимать её здесь не за чем.
+      - name: Сборка
+        run: npm run build
