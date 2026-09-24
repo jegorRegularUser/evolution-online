@@ -335,6 +335,7 @@ export function NetMenuScreen() {
   // оставляло кнопку «Создать стол» навсегда disabled — React такие
   // расхождения атрибутов не патчит («won't be patched up»).
   const [name, setName] = useState("");
+  const nameRef = useRef<HTMLInputElement>(null);
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [needPassword, setNeedPassword] = useState(false);
@@ -404,6 +405,12 @@ export function NetMenuScreen() {
   const canJoin = named && code.length === 4;
 
   function createNow() {
+    if (!named) {
+      setError(tt("menu.err.name"));
+      setTab("create");
+      nameRef.current?.focus();
+      return;
+    }
     // Последние настройки запущенной партии (см. netStart в сторе):
     // новое открывается с ними же, всё правится в лобби.
     const last = loadLastNetConfig();
@@ -540,6 +547,7 @@ export function NetMenuScreen() {
         <label className="block">
           <span className="mb-1 block text-xs text-muted">{tt("menu.name")}</span>
           <input
+            ref={nameRef}
             value={name}
             onChange={(e) => setName(e.target.value)}
             maxLength={16}
@@ -550,7 +558,14 @@ export function NetMenuScreen() {
         </label>
 
         <div className="grid gap-2">
-          <Button size="lg" disabled={busy || !named} onClick={createNow}>
+          <Button
+            size="lg"
+            disabled={busy}
+            aria-disabled={!named}
+            aria-describedby={!named ? "create-name-hint" : undefined}
+            className={!named ? "opacity-60" : undefined}
+            onClick={createNow}
+          >
             <Play className="size-4" />
             {tt("menu.create")}
           </Button>
@@ -565,6 +580,11 @@ export function NetMenuScreen() {
             {tt("menu.join")}
           </Button>
         </div>
+        {!named ? (
+          <p id="create-name-hint" role="status" className="text-xs leading-snug text-muted">
+            {tt("menu.err.name")}
+          </p>
+        ) : null}
 
         {/* min-h-11: чекбокс — тап-таргет 44px на телефоне, а не полоса в одну строку текста. */}
         <label className="flex min-h-11 items-center gap-2 text-xs text-muted">
@@ -1187,11 +1207,14 @@ export function LobbyScreen() {
   // Несовместимые дополнения блокируют старт: сервер тоже отклонит, но кнопку
   // лучше показать неактивной сразу (флаги при этом никто не снимает молча).
   const incompatibility = isHost ? moduleCompatibilityError(modules, lang) : null;
-  const startHint = !isHost
-    ? tt("lobby.startHint.host")
-    : freeSeats > 0
-      ? tt("lobby.startHint.free", { free: freeSeats, capacity: net.capacity })
-      : null;
+  const startHint = incompatibility
+    ?? (!isHost
+      ? tt("lobby.startHint.host")
+      : freeSeats > 0
+        ? tt("lobby.startHint.free", { free: freeSeats, capacity: net.capacity })
+        : humans.length < 1
+          ? tt("lobby.startFullTitle")
+          : null);
 
   /** Приглашение: ссылка с кодом; у приватного стола хост копирует и пароль. */
   const inviteText =
@@ -1520,9 +1543,11 @@ export function LobbyScreen() {
 
           <div className="mb-3">
             <p className="mb-1.5 text-xs text-muted">{tt("lobby.modules")}</p>
-            <p id="module-compatibility-hint" className="mb-2 text-xs text-muted">
-              {moduleCompatibilityError({ fungi: true, plants: true }, lang)}
-            </p>
+            {incompatibility ? (
+              <p id="module-compatibility-hint" className="mb-2 text-xs text-muted">
+                {incompatibility}
+              </p>
+            ) : null}
             <div className="grid grid-cols-2 gap-2">
               {MODULE_OPTIONS.map(([key, labelKey, hintKey]) => {
                 const on = Boolean(modules[key]);
@@ -1686,6 +1711,7 @@ export function LobbyScreen() {
             title={
               incompatibility ?? (!isHost ? tt("lobby.startHostTitle") : !full ? tt("lobby.startFullTitle") : undefined)
             }
+            aria-describedby={startHint ? "lobby-start-hint" : undefined}
             // data-start-game: стабильный селектор для QA (кнопка меняет
             // подпись при смене языка — «Начать год» / «Start year»).
             data-start-game=""
@@ -1705,7 +1731,7 @@ export function LobbyScreen() {
           </Button>
         </div>
         {startHint ? (
-          <p className="mt-2 text-center text-xs text-subtle" role="status">
+          <p id="lobby-start-hint" className="mt-2 text-center text-xs text-subtle" role="status">
             {startHint}
           </p>
         ) : null}

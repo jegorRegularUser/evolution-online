@@ -17,7 +17,7 @@ import {
   type Over,
 } from "@dnd-kit/core";
 import { BookOpen, Eye, LayoutGrid, List, Minimize2 } from "lucide-react";
-import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DialogShell } from "@/components/ui/dialog-shell";
@@ -52,9 +52,10 @@ import { AnimalCard, CardPreview, HandCard, PAIR_COLORS, PairPlate, type PairMar
 import { FloraStrip } from "./cards-flora";
 import { PlantStrip } from "./cards-plants";
 import { ConfirmDialog } from "./confirm-dialog";
-import { Dice3D } from "./dice-3d";
 import { EventFeed, reactionsByChatId, type FeedItem } from "./event-feed";
-import { colorForSeat, PACE, REACTION_EMOJI } from "@/lib/net/shared";
+import { netKick, netReplaceWithBot, netSetBots } from "@/lib/net/api";
+import { colorForSeat, PACE, REACTION_EMOJI, type SeatInfo } from "@/lib/net/shared";
+import type { PendingNetItem } from "@/lib/net/session";
 import { HintNote } from "./hint-note";
 import { FoodCube } from "./icons";
 import { LobbyScreen } from "./net-screens";
@@ -62,6 +63,12 @@ import { GameOverScreen, MenuScreen, RulesPanel } from "./screens";
 import { EventSpotlight } from "./spotlight";
 import { SoundToggle } from "./sound-toggle";
 import { TopBar } from "./top-bar";
+import { TutorialScreen } from "./tutorial";
+
+const LazyDice3D = lazy(async () => {
+  const module = await import("./dice-3d");
+  return { default: module.Dice3D };
+});
 
 /**
  * Вёрстка стола: «cozy» — компактное сукно по центру, «wide» — во всю ширину
@@ -157,6 +164,61 @@ interface Interaction {
 }
 
 const NO_INTERACTION: Interaction = { highlight: false, dimmed: false, selected: false, danger: false, dropTarget: false };
+
+type RejectReason = "opponent" | "trait" | "target" | "drop" | "phase" | "hand";
+
+interface RejectHintState {
+  text: string;
+  x: number;
+  y: number;
+}
+
+const REJECT_COPY: Record<Lang, Record<RejectReason, string>> = {
+  ru: {
+    opponent: "Это животное соперника",
+    trait: "Для этого свойства нужен другой вид",
+    target: "Здесь это действие не применимо",
+    drop: "Бросок сюда не подходит",
+    phase: "Сейчас это действие недоступно",
+    hand: "В руке нет свободного слота",
+  },
+  en: {
+    opponent: "This animal belongs to an opponent",
+    trait: "This trait needs a different species",
+    target: "This action cannot be used here",
+    drop: "This card cannot be dropped here",
+    phase: "This action is not available now",
+    hand: "There is no free slot in your hand",
+  },
+};
+
+function RejectHint({ hint }: { hint: RejectHintState }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="pointer-events-none fixed z-[70]"
+      style={{ left: hint.x, top: hint.y, transform: "translateX(-50%)" }}
+    >
+      <HintNote
+        compact
+        tone="warning"
+        className="max-w-[min(22rem,calc(100vw-1.5rem))] shadow-[var(--shadow-card)]"
+      >
+        {hint.text}
+      </HintNote>
+    </div>
+  );
+}
+
+function readSeatToken(code: string): string | null {
+  if (!code || typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(`evo-seat-${code.toUpperCase()}`);
+  } catch {
+    return null;
+  }
+}
 
 // ── Перетаскивание (@dnd-kit): животные и карты руки ─────────────────────────
 
@@ -985,6 +1047,196 @@ function TableBanners({ state }: { state: GameState }) {
   );
 }
 
+/** Понятный текст для сетевого отказа замены игрока ботом. */
+function replaceBotErrorText(lang: Lang, error: string, code?: string): string {
+  if (code === "player-online") {
+    return lang === "en"
+      ? "The player is still online. Try again after the connection has been offline for 30 seconds."
+      : "Игрок ещё в сети. Попробуйте снова, когда связь пропадёт на 30 секунд.";
+  }
+  if (code === "host-only") {
+    return lang === "en" ? "Only the host can replace a player with a bot." : "Заменять игрока ботом может только хост.";
+  }
+  if (code === "game-finished") {
+    return lang === "en" ? "The game has already finished." : "Партия уже закончена.";
+  }
+  if (code === "player-online" || code === "kick-self" || code === "kick-bot") return error;
+  if (/failed to fetch|network|load failed/i.test(error)) {
+    return lang === "en" ? "No connection — the replacement was not sent." : "Нет связи — замена не отправлена.";
+  }
+  return error;
+}
+
+/** Вызов реального server-метода замены; токен места лежит в localStorage. */
+async function requestOfflineBotReplacement(
+  net: NetUiState,
+  seat: SeatInfo,
+  lang: Lang,
+): Promise<string | null> {
+  const token = readSeatToken(net.code);
+  if (!token) {
+    return lang === "en"
+      ? "This browser no longer has the host seat token."
+      : "В этом браузере больше нет токена места хоста.";
+  }
+  try {
+    // В лобби replaceWithBot намеренно отвергает статус playing. Поэтому
+    // там используем поддержанную сервером пару «убрать человека + добавить
+    // бота»; в партии вызываем точный специализированный метод.
+    if (net.status === "lobby") {
+      const kicked = await netKick({ data: { code: net.code, token, seat: seat.seat } });
+      if (!kicked.ok) {
+        const failed = kicked as { error: string; code?: string };
+        return replaceBotErrorText(lang, failed.error, failed.code);
+      }
+      const botCount = net.seats.filter((item) => item.isAI).length + 1;
+      const bots = await netSetBots({ data: { code: net.code, token, count: botCount } });
+      if (!bots.ok) {
+        const failed = bots as { error: string; code?: string };
+        return replaceBotErrorText(lang, failed.error, failed.code);
+      }
+      return null;
+    }
+    const response = await netReplaceWithBot({ data: { code: net.code, token, seat: seat.seat } });
+    if (response.ok) return null;
+    const failed = response as { error: string; code?: string };
+    return replaceBotErrorText(lang, failed.error, failed.code);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return replaceBotErrorText(lang, message);
+  }
+}
+
+/** Общий обработчик кнопок «Заменить ботом» в лобби и партии. */
+function useOfflineBotReplacement(net: NetUiState | null) {
+  const lang = useLang();
+  const [busySeat, setBusySeat] = useState<number | null>(null);
+  const replace = useCallback(
+    async (seat: SeatInfo) => {
+      if (!net || busySeat !== null) return;
+      setBusySeat(seat.seat);
+      try {
+        const error = await requestOfflineBotReplacement(net, seat, lang);
+        if (error) {
+          toast.error(error);
+        } else {
+          toast.success(
+            lang === "en" ? `${seat.name} is now played by a bot.` : `${seat.name} теперь играет бот.`,
+          );
+          // Старый текст отказа старта относился к уже исправленному составу.
+          useGameStore.getState().clearNetError();
+        }
+      } finally {
+        setBusySeat(null);
+      }
+    },
+    [busySeat, lang, net],
+  );
+  return { replace, busySeat };
+}
+
+/** Предстартовое объяснение без технического кода ошибки сервера. */
+function OfflineStartNotice({
+  net,
+  busySeat,
+  onReplace,
+  error,
+}: {
+  net: NetUiState;
+  busySeat: number | null;
+  onReplace: (seat: SeatInfo) => void;
+  error?: string | null;
+}) {
+  const lang = useLang();
+  const offline = net.seats.filter((seat) => !seat.isAI && !seat.resigned && !seat.online);
+  const hasOfflineError = Boolean(
+    error && (/не в сети|offline|игрок.*сети/i.test(error)),
+  );
+  if (!offline.length && !hasOfflineError) return null;
+  const replaceable = offline.filter((seat) => seat.disconnected);
+  return (
+    <div
+      data-offline-start-notice
+      role="region"
+      aria-label={lang === "en" ? "Offline players" : "Игроки не в сети"}
+      className="fixed inset-x-3 top-20 z-50 mx-auto flex max-w-xl flex-col gap-2 rounded-[var(--radius-lg)] border border-clay/40 bg-surface/95 p-3 text-sm shadow-[var(--shadow-card)] backdrop-blur-sm"
+    >
+      <p className="text-muted">
+        {lang === "en"
+          ? "Someone is currently offline. Wait for them to return or replace the player with a bot before starting the year."
+          : "Кто-то сейчас не в сети. Дождитесь возвращения или замените игрока ботом, чтобы начать год."}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {offline.map((seat) => (
+          <Button
+            key={seat.seat}
+            type="button"
+            size="sm"
+            className="max-sm:min-h-11"
+            data-replace-bot-lobby={seat.seat}
+            disabled={!seat.disconnected || busySeat !== null}
+            title={
+              seat.disconnected
+                ? undefined
+                : lang === "en"
+                  ? "Available after 30 seconds without a heartbeat"
+                  : "Доступно после 30 секунд без связи"
+            }
+            onClick={() => onReplace(seat)}
+          >
+            {lang === "en" ? `Replace ${seat.name} with a bot` : `Заменить ${seat.name} ботом`}
+          </Button>
+        ))}
+      </div>
+      {replaceable.length === 0 ? (
+        <p className="text-xs text-subtle">
+          {lang === "en"
+            ? "The replacement button will be available after the offline threshold."
+            : "Кнопка замены станет доступна после порога отсутствия связи."}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Тихая плашка ожидания ходящего игрока без намёка на его вину. */
+function WaitingPlayerNotice({ actor, net }: { actor: Player | null; net: NetUiState | null }) {
+  const lang = useLang();
+  const [, setTick] = useState(0);
+  const seat = actor && net ? net.seats.find((item) => item.seat === actor.id) : undefined;
+  const waiting = Boolean(actor && !actor.isAI && seat && !seat.resigned && !seat.online);
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = window.setInterval(() => setTick((value) => value + 1), 250);
+    return () => window.clearInterval(timer);
+  }, [waiting]);
+  if (!waiting || !actor || !seat || !net) return null;
+  const remaining = net.turnDeadlineAt
+    ? Math.max(0, Math.ceil((net.turnDeadlineAt - (Date.now() + net.serverOffsetMs)) / 1000))
+    : null;
+  const name = scientistName(actor.name, lang);
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-waiting-player={actor.id}
+      className="pointer-events-none mx-auto mt-2 flex w-fit max-w-[calc(100%_-_1.5rem)] items-center gap-2 rounded-full border border-border bg-surface/90 px-3 py-1.5 text-xs text-muted shadow-[var(--shadow-card)]"
+    >
+      <span className="size-1.5 shrink-0 rounded-full bg-muted/70" aria-hidden />
+      <span>
+        {lang === "en" ? `Waiting for ${name}` : `Ждём игрока ${name}`}
+        {remaining !== null
+          ? lang === "en"
+            ? ` · turn ends in ${remaining}s`
+            : ` · ход завершится через ${remaining} с`
+          : lang === "en"
+            ? " · the table is reconnecting"
+            : " · стол ждёт возвращения"}
+      </span>
+    </div>
+  );
+}
+
 export function GameApp() {
   const state = useGameStore((s) => s.state);
   const rulesOpen = useGameStore((s) => s.rulesOpen);
@@ -993,6 +1245,28 @@ export function GameApp() {
   const netAgain = useGameStore((s) => s.netAgain);
   const leaveNet = useGameStore((s) => s.leaveNet);
   const t = useT();
+  const lang = useLang();
+  const [confirmAgain, setConfirmAgain] = useState(false);
+  const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [lobbyReplaceTarget, setLobbyReplaceTarget] = useState<SeatInfo | null>(null);
+  const { replace: replaceLobbyBot, busySeat: lobbyBusySeat } = useOfflineBotReplacement(net);
+  const spectator = Boolean(net && (net.spectating || net.seat === -2));
+  const isHost = Boolean(net && !spectator && net.seat === net.hostSeat);
+  useEffect(() => {
+    if (state?.phase !== "gameOver") setConfirmAgain(false);
+  }, [state?.phase]);
+  useEffect(() => {
+    // Модалки не должны переезжать вместе с новым столом после ухода/возврата.
+    setTutorialOpen(false);
+    setLobbyReplaceTarget(null);
+  }, [net?.code]);
+  const againBody = lang === "en"
+    ? "The final score will close for everyone and the table will return to the lobby."
+    : "Финальный счёт закроется для всех, а стол вернётся в лобби.";
+  const againConfirm = lang === "en" ? "Return to lobby" : "Вернуться в лобби";
+  const waitingForHost = lang === "en"
+    ? "Waiting for the host to return the table to the lobby."
+    : "Ждём, пока хост вернёт стол в лобби.";
 
   // Модалки (правила, статистика, обучение) звучат тихим свушем на вход и выход.
   const openRules = useCallback(() => {
@@ -1003,6 +1277,14 @@ export function GameApp() {
     sfx.play("modal");
     setRulesOpen(false);
   }, [setRulesOpen]);
+  const openTutorial = useCallback(() => {
+    sfx.play("modal");
+    setTutorialOpen(true);
+  }, []);
+  const closeTutorial = useCallback(() => {
+    sfx.play("modal");
+    setTutorialOpen(false);
+  }, []);
 
   // AudioContext живёт только после пользовательского жеста — будим по первому
   // клику/тапу/клавише. Слушатели висят на уровне всего приложения (а не стола),
@@ -1035,6 +1317,33 @@ export function GameApp() {
     return (
       <>
         <LobbyScreen />
+        {isHost ? (
+          <OfflineStartNotice
+            net={net}
+            busySeat={lobbyBusySeat}
+            error={net.error}
+            onReplace={(seat) => setLobbyReplaceTarget(seat)}
+          />
+        ) : null}
+        {lobbyReplaceTarget ? (
+          <ConfirmDialog
+            title={lang === "en" ? "Replace player with a bot?" : "Заменить игрока ботом?"}
+            body={
+              lang === "en"
+                ? `${lobbyReplaceTarget.name} is currently offline. The bot will continue this seat.`
+                : `${lobbyReplaceTarget.name} сейчас не в сети. За это место будет играть бот.`
+            }
+            confirmLabel={lang === "en" ? "Replace with bot" : "Заменить ботом"}
+            cancelLabel={t("common.cancel")}
+            tone="danger"
+            onConfirm={() => {
+              const target = lobbyReplaceTarget;
+              setLobbyReplaceTarget(null);
+              if (target) void replaceLobbyBot(target);
+            }}
+            onClose={() => setLobbyReplaceTarget(null)}
+          />
+        ) : null}
         {rulesOpen ? <RulesPanel onClose={closeRules} /> : null}
         <Toaster {...TOASTER_OPTS} />
       </>
@@ -1068,19 +1377,87 @@ export function GameApp() {
           {t("game.reconnecting")}
         </div>
       ) : null}
-      <Table />
+      <Table onTutorial={openTutorial} tutorialLabel={lang === "en" ? "Tutorial" : "Обучение"} />
       {state.phase === "gameOver" && state.scores ? (
-        <GameOverScreen
-          scores={state.scores}
-          winnerIds={state.winnerIds ?? []}
-          humanId={state.humanId}
-          // Зрителю повтор недоступен: у него нет места, сервер отклонит.
-          {...(net.spectating ? {} : { onAgain: () => void netAgain() })}
-          onMenu={leaveNet}
+        spectator ? (
+          <SpectatorGameOver state={state} onMenu={leaveNet} />
+        ) : (
+          <GameOverScreen
+            scores={state.scores}
+            winnerIds={state.winnerIds ?? []}
+            humanId={state.humanId}
+            // Повтор доступен только хосту: сервер сбрасывает финал для всех.
+            {...(isHost ? { onAgain: () => setConfirmAgain(true) } : {})}
+            onMenu={leaveNet}
+          />
+        )
+      ) : null}
+      {!spectator && state.phase === "gameOver" && state.scores && !isHost ? (
+        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-50 flex justify-center px-4">
+          <HintNote compact className="max-w-sm shadow-[var(--shadow-card)]">
+            {waitingForHost}
+          </HintNote>
+        </div>
+      ) : null}
+      {confirmAgain ? (
+        <ConfirmDialog
+          title={t("final.again")}
+          body={againBody}
+          confirmLabel={againConfirm}
+          cancelLabel={t("common.cancel")}
+          tone="danger"
+          onConfirm={() => {
+            setConfirmAgain(false);
+            void netAgain();
+          }}
+          onClose={() => setConfirmAgain(false)}
         />
       ) : null}
       {rulesOpen ? <RulesPanel onClose={closeRules} /> : null}
+      {tutorialOpen ? <TutorialScreen onClose={closeTutorial} phase={state.phase} /> : null}
       <Toaster {...TOASTER_OPTS} />
+    </div>
+  );
+}
+
+/**
+ * Финал для зрителя: в сетевом снимке его humanId служебный, поэтому обычный
+ * экран нельзя отдавать с персональной победой/поражением и местом №1.
+ * Показываем только нейтральный заголовок и общий счёт стола.
+ */
+function SpectatorGameOver({ state, onMenu }: { state: GameState; onMenu: () => void }) {
+  const t = useT();
+  const lang = useLang();
+  const rows = [...(state.scores ?? [])].sort((a, b) => b.total - a.total || b.discard - a.discard);
+  const winners = new Set(state.winnerIds ?? []);
+  const title = lang === "en" ? "Game result" : "Итог партии";
+  const subtitle = lang === "en" ? "You are watching this game." : "Вы смотрите эту партию.";
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-3 sm:p-4">
+      <div className="relative flex max-h-[94dvh] w-full max-w-lg flex-col overflow-hidden rounded-[var(--radius-xl)] border border-border bg-surface shadow-[var(--shadow-card)]">
+        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-7">
+          <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-muted">{t("final.kicker")}</p>
+          <h2 className="mt-2 text-3xl">{title}</h2>
+          <p className="mt-2 text-sm text-muted">{subtitle}</p>
+          <ul aria-label={t("final.scoreAria")} className="mt-5 space-y-2">
+            {rows.map((row, index) => (
+              <li key={row.playerId} className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-border bg-surface-2/50 px-3 py-2 text-sm">
+                <span className="font-medium text-fg">
+                  {index + 1}. {row.name}
+                  {winners.has(row.playerId) ? <span className="ml-2 text-xs text-accent">★</span> : null}
+                </span>
+                <span className="font-display tabular-nums text-fg">{row.total}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="border-t border-border bg-surface p-4 sm:px-7">
+          <Button variant="secondary" className="w-full" size="md" onClick={onMenu}>
+            {t("final.menu")}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1192,21 +1569,138 @@ function useFeedItems(state: GameState, net: NetUiState | null): FeedItem[] {
   }, [state.log, state.players, chat, system, seats, reactions, myName, lang]);
 }
 
-function Table() {
+/**
+ * UI-обёртка над сетевым dispatch: стор уже защищает повторную отправку, а
+ * здесь держим короткое состояние «отправляется» до ACK/смены кадра. Так
+ * индикатор работает и при fetch-отказе, который session оставляет pending.
+ */
+function usePendingAction(
+  state: GameState,
+  net: NetUiState | null,
+  storeDispatch: (action: GameAction) => void,
+): { dispatch: (action: GameAction) => void; pending: PendingNetItem | null } {
+  const lang = useLang();
+  const [pending, setPending] = useState<PendingNetItem | null>(null);
+  const pendingRef = useRef<PendingNetItem | null>(null);
+  const stateAtSubmitRef = useRef<GameState | null>(null);
+  const timerRef = useRef<number | null>(null);
+
+  const clear = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    pendingRef.current = null;
+    stateAtSubmitRef.current = null;
+    setPending(null);
+  }, []);
+
+  const fail = useCallback(() => {
+    if (!pendingRef.current) return;
+    clear();
+    toast.error(
+      lang === "en"
+        ? "The action was not sent — check your connection and try again."
+        : "Действие не отправлено — проверьте связь и попробуйте ещё раз.",
+    );
+  }, [clear, lang]);
+
+  useEffect(() => {
+    if (!pending) return;
+    // Свежий state означает ACK/следующий кадр: действие больше не pending.
+    if (stateAtSubmitRef.current && stateAtSubmitRef.current !== state) {
+      clear();
+      return;
+    }
+    timerRef.current = window.setTimeout(fail, 8000);
+    return () => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [clear, fail, pending, state]);
+
+  useEffect(() => {
+    if (!pending || !net?.error) return;
+    // Серверный отказ уже превратится в тост существующим эффектом Table.
+    clear();
+  }, [clear, net?.error, pending]);
+
+  useEffect(() => {
+    if (!pending) return;
+    const onUnhandled = (event: PromiseRejectionEvent) => {
+      const reason = String(event.reason ?? "");
+      if (!/failed to fetch|network|load failed|fetch/i.test(reason)) return;
+      event.preventDefault();
+      fail();
+    };
+    window.addEventListener("unhandledrejection", onUnhandled);
+    return () => window.removeEventListener("unhandledrejection", onUnhandled);
+  }, [fail, pending]);
+
+  const dispatch = useCallback(
+    (action: GameAction) => {
+      if (!net || net.spectating || pendingRef.current) {
+        storeDispatch(action);
+        return;
+      }
+      const item: PendingNetItem = {
+        kind: "action",
+        id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
+        action,
+      };
+      pendingRef.current = item;
+      stateAtSubmitRef.current = state;
+      setPending(item);
+      storeDispatch(action);
+    },
+    [net, state, storeDispatch],
+  );
+
+  return { dispatch, pending };
+}
+
+function PendingActionHint({ pending }: { pending: PendingNetItem | null }) {
+  const lang = useLang();
+  if (!pending) return null;
+  return (
+    <span
+      data-pending-action={pending.id}
+      role="status"
+      aria-live="polite"
+      className="mr-auto inline-flex items-center gap-1.5 text-xs text-muted"
+    >
+      <span className="size-2 animate-pulse rounded-full bg-accent" aria-hidden />
+      {lang === "en" ? "Sending…" : "Отправляется…"}
+    </span>
+  );
+}
+
+function Table({
+  onTutorial,
+  tutorialLabel,
+}: {
+  onTutorial: () => void;
+  tutorialLabel: string;
+}) {
   const state = useGameStore((s) => s.state)!;
   const intent = useGameStore((s) => s.intent);
   const logOpen = useGameStore((s) => s.logOpen);
   const logUnread = useGameStore((s) => s.logUnread);
-  const dispatch = useGameStore((s) => s.dispatch);
+  const storeDispatch = useGameStore((s) => s.dispatch);
   const setIntent = useGameStore((s) => s.setIntent);
   const setLogOpen = useGameStore((s) => s.setLogOpen);
   const setRulesOpen = useGameStore((s) => s.setRulesOpen);
   const net = useGameStore((s) => s.net);
+  const { dispatch, pending: pendingAction } = usePendingAction(state, net, storeDispatch);
   const sendChat = useGameStore((s) => s.sendChat);
   const sendReaction = useGameStore((s) => s.sendReaction);
   const sendTyping = useGameStore((s) => s.sendTyping);
   const leaveNet = useGameStore((s) => s.leaveNet);
   const netResign = useGameStore((s) => s.netResign);
+  const [replaceTarget, setReplaceTarget] = useState<SeatInfo | null>(null);
+  const { replace: replaceOfflineBot, busySeat: replaceBusySeat } = useOfflineBotReplacement(net);
   const netError = useGameStore((s) => s.net?.error);
   const clearNetError = useGameStore((s) => s.clearNetError);
   const t = useT();
@@ -1215,11 +1709,34 @@ function Table() {
   const [confirmLeave, setConfirmLeave] = useState(false);
   const confirmRef = useRef(false);
   const askLeave = useCallback((v: boolean) => {
-    // Диалог подтверждения — модалка: открытие и закрытие звучат тихим свушем.
+    // Диалог подтверждения — модалка: открытие и закрытие звучат тихим шушем.
     sfx.play("modal");
     confirmRef.current = v;
     setConfirmLeave(v);
   }, []);
+
+  // Мягкий выход сохраняет токен места: `leaveNet` сейчас очищает его для
+  // добровольного ухода, поэтому временно возвращаем токен сразу после выхода.
+  // Постоянное исправление места — game-store.ts (вне пакета).
+  const softResumeCode = net?.code ?? "";
+  const [softResumeToken, setSoftResumeToken] = useState<string | null>(null);
+  useEffect(() => {
+    setSoftResumeToken(readSeatToken(softResumeCode));
+  }, [softResumeCode]);
+  const canResumeSoftExit = Boolean(
+    !net?.spectating && net?.seat !== -2 && !net?.waiting && softResumeToken,
+  );
+  const leaveForResume = useCallback(() => {
+    const code = softResumeCode;
+    const token = readSeatToken(code);
+    leaveNet();
+    if (!code || !token) return;
+    try {
+      window.localStorage.setItem(`evo-seat-${code.toUpperCase()}`, token);
+    } catch {
+      // Если localStorage недоступен, мягкий выход не обещает возврата.
+    }
+  }, [leaveNet, softResumeCode]);
 
   // Журнал и чат одной лентой (в соло чата нет — только записи движка).
   const feed = useFeedItems(state, net);
@@ -1235,6 +1752,68 @@ function Table() {
 
   const human = player(state, state.humanId);
   const actor = currentActor(state);
+  const isHost = Boolean(net && !net.spectating && net.seat === net.hostSeat);
+  const playerManagement = {
+    canManage: isHost && net?.status === "playing",
+    onReplaceSeat: setReplaceTarget,
+    replaceBusySeat,
+    onDispatch: dispatch,
+  };
+
+  // Отказ всегда объясняем рядом с тем местом, где игрок попытался
+  // сделать ход. Повтор одной и той же причины в пределах полусекунды
+  // не превращается в спам новых плашек и звуков.
+  const [rejectHint, setRejectHint] = useState<RejectHintState | null>(null);
+  const rejectTimerRef = useRef<number | null>(null);
+  const lastRejectRef = useRef<{ text: string; at: number } | null>(null);
+  const showRejectHint = useCallback(
+    (text: string, anchor?: Element | { x: number; y: number } | null) => {
+      const now = Date.now();
+      const last = lastRejectRef.current;
+      if (last && last.text === text && now - last.at < 500) return;
+      lastRejectRef.current = { text, at: now };
+      sfx.play("crack");
+
+      let x = window.innerWidth / 2;
+      let y = window.innerHeight / 2;
+      if (anchor instanceof Element) {
+        const rect = anchor.getBoundingClientRect();
+        x = rect.left + rect.width / 2;
+        y = rect.top + 6;
+      } else if (anchor) {
+        x = anchor.x;
+        y = anchor.y;
+      }
+      const halfWidth = Math.min(176, Math.max(12, (window.innerWidth - 24) / 2));
+      setRejectHint({
+        text,
+        x: Math.min(Math.max(halfWidth, x), Math.max(halfWidth, window.innerWidth - halfWidth)),
+        y: Math.min(Math.max(12, y), Math.max(12, window.innerHeight - 72)),
+      });
+      if (rejectTimerRef.current) window.clearTimeout(rejectTimerRef.current);
+      rejectTimerRef.current = window.setTimeout(() => setRejectHint(null), 2800);
+    },
+    [],
+  );
+  useEffect(
+    () => () => {
+      if (rejectTimerRef.current) window.clearTimeout(rejectTimerRef.current);
+    },
+    [],
+  );
+  const rejectAnimal = useCallback(
+    (animal: Animal, reason: RejectReason) => {
+      const text = animal.ownerId !== human.id
+        ? REJECT_COPY[lang].opponent
+        : reason === "trait"
+          ? t("dock.dev.faceBlocked")
+          : REJECT_COPY[lang][reason];
+      const anchor = document.querySelector<HTMLElement>(`[data-animal-id="${animal.id}"]`);
+      showRejectHint(text, anchor);
+    },
+    [human.id, lang, showRejectHint, t],
+  );
+
   // «Трава и грибы»: раунд безумца проводит сосед справа — стол человека
   // в этот раунд не интерактивен. Зритель смотрит стол как чужой ход:
   // сервер ставит ему humanId-якорь, поэтому одним флагом гасим и «Ваш ход»,
@@ -1452,25 +2031,29 @@ function Table() {
         const hl = animalHighlight(state, a, intent, isHumanTurn, feedActs, devActs, mutateGuess);
         const cardTarget = cardDragTargets?.has(a.id) ?? false;
         const underPointer = dndOver?.data.animalId === a.id;
-        const defenseTarget = Boolean(state.pendingAttack && defensePreviewId === a.id);
+        const defenseOpen = Boolean(state.pendingAttack && state.pendingAttack.waitingFor === human.id);
+        const defensePrey = defenseOpen && state.pendingAttack?.preyId === a.id;
+        const defenseTarget = defenseOpen && defensePreviewId === a.id;
         map.set(a.id, {
-          highlight: hl || cardTarget || defenseTarget,
-          dimmed: !defenseTarget && ((intent.kind !== "none" && !hl) || (cardDrag && !cardTarget)),
+          highlight: hl || cardTarget || defensePrey || defenseTarget,
+          dimmed: !defensePrey && !defenseTarget && ((intent.kind !== "none" && !hl) || (cardDrag && !cardTarget)),
           selected:
             (intent.kind === "playPair" && intent.first === a.id) ||
             (intent.kind === "hunt" && intent.carnivoreId === a.id) ||
             (intent.kind === "pirate" && intent.pirateId === a.id),
           // Цель под прицелом: охота с выбранным хищником, пиратство с пиратом,
           // атака хищного растения, паразитизм — красная «треснувшая» метка.
+          // Во время защиты отдельно отмечаем именно атакованное животное.
           danger:
-            hl &&
-            ((intent.kind === "hunt" && intent.carnivoreId !== undefined) ||
-              (intent.kind === "pirate" && intent.pirateId !== undefined) ||
-              (intent.kind === "plantAttack" && intent.plantId !== undefined) ||
-              intent.kind === "parasitize"),
+            defensePrey ||
+            (hl &&
+              ((intent.kind === "hunt" && intent.carnivoreId !== undefined) ||
+                (intent.kind === "pirate" && intent.pirateId !== undefined) ||
+                (intent.kind === "plantAttack" && intent.plantId !== undefined) ||
+                intent.kind === "parasitize")),
           // Подсвечиваем кольцом только допустимую цель под указателем.
           dropTarget:
-            defenseTarget || (underPointer && (cardDrag ? cardTarget : dndActive?.kind === "animal" && a.id !== dndActive.animalId)),
+            defensePrey || defenseTarget || (underPointer && (cardDrag ? cardTarget : dndActive?.kind === "animal" && a.id !== dndActive.animalId)),
         });
       }
     }
@@ -1644,7 +2227,18 @@ function Table() {
     if (!isHumanTurn || state.pendingAttack) return;
     const animal = findAnimal(state, target.getAttribute("data-animal-id")!);
     if (!animal) return;
-    handleAnimalClick(animal, { state, intent, isHumanTurn, human, feedActs, devActs, mutateGuess, dispatch, setIntent });
+    handleAnimalClick(animal, {
+      state,
+      intent,
+      isHumanTurn,
+      human,
+      feedActs,
+      devActs,
+      mutateGuess,
+      dispatch,
+      setIntent,
+      onReject: rejectAnimal,
+    });
   }
 
   // ── Броски @dnd-kit: цель и сторона вставки ───────────────────────────────
@@ -1656,8 +2250,17 @@ function Table() {
     return { id: String(over.id), data, side: dndSideOf(over, dndPointRef.current) };
   };
 
-  /** Короткий звук отказа: бросок на недопустимую цель ничего не делает. */
-  const rejectDrop = () => sfx.play("crack");
+  /** Короткий отказ с видимой причиной: бросок не должен выглядеть как зависший жест. */
+  const rejectDrop = (reason: RejectReason = "drop", point: { x: number; y: number } | null = null) => {
+    showRejectHint(REJECT_COPY[lang][reason], point);
+  };
+  const dropReasonForTarget = (target: DndData | undefined): RejectReason => {
+    if (target?.kind === "animal" && target.animalId) {
+      const animal = findAnimal(state, target.animalId);
+      if (animal && animal.ownerId !== human.id) return "opponent";
+    }
+    return "target";
+  };
 
   /**
    * Что делать при броске. Легальность не дублируем: сверяемся с devActs
@@ -1673,15 +2276,17 @@ function Table() {
     // ── Животное: перестановка в ряду или перенос между территориями ──
     if (active.kind === "animal") {
       const moved = active.animalId ? human.animals.find((a) => a.id === active.animalId) : undefined;
-      if (!moved) return;
+      if (!moved) return rejectDrop("drop", point);
       if (target.kind === "animal") {
         const dest = target.animalId ? findAnimal(state, target.animalId) : undefined;
-        if (!dest || dest.id === moved.id || dest.ownerId !== human.id) return;
+        if (!dest || dest.id === moved.id || dest.ownerId !== human.id) {
+          return rejectDrop(dest && dest.ownerId !== human.id ? "opponent" : "drop", point);
+        }
         const group = pairGroupIds(human.animals, moved.id);
         // Внутри своей же пары порядок не меняем: связка едет целиком.
         if (group.has(dest.id)) return;
         if (state.modules.continents && zoneOfAnimal(moved) !== zoneOfAnimal(dest)) {
-          if (state.phase !== "development") return rejectDrop();
+          if (state.phase !== "development") return rejectDrop("phase", point);
           dispatch({ type: "reorderAnimal", animalId: moved.id, toZoneId: zoneOfAnimal(dest) });
           return;
         }
@@ -1696,9 +2301,9 @@ function Table() {
         return;
       }
       if (target.kind === "zone") {
-        if (target.playerId !== human.id || !target.zoneId) return;
-        if (target.zoneId === "ocean") return rejectDrop(); // океан — только через свойство
-        if (state.phase !== "development") return rejectDrop();
+        if (target.playerId !== human.id || !target.zoneId) return rejectDrop("opponent", point);
+        if (target.zoneId === "ocean") return rejectDrop("drop", point); // океан — только через свойство
+        if (state.phase !== "development") return rejectDrop("phase", point);
         if (zoneOfAnimal(moved) === target.zoneId) return; // уже здесь
         dispatch({ type: "reorderAnimal", animalId: moved.id, toZoneId: target.zoneId });
         return;
@@ -1707,9 +2312,9 @@ function Table() {
     }
 
     // ── Карта из руки: новое животное или свойство ──
-    if (active.kind !== "card" || !active.cardId) return;
+    if (active.kind !== "card" || !active.cardId) return rejectDrop("drop", point);
     const cardId = active.cardId;
-    if (!human.hand.some((c) => c.id === cardId)) return;
+    if (!human.hand.some((c) => c.id === cardId)) return rejectDrop("hand", point);
     const face = selectedFaceOf(cardId);
     const acts = devActs.filter((a): a is DevCardAction => {
       if (a.type !== "devPlayTrait" && a.type !== "devPlayPair" && a.type !== "devPlayPlantTrait" && a.type !== "devPlayPlantPair") {
@@ -1720,12 +2325,12 @@ function Table() {
 
     if (target.kind === "animal") {
       const animalId = target.animalId;
-      if (!animalId) return;
+      if (!animalId) return rejectDrop("drop", point);
       // Пара: первый зверь уже выбран — этот бросок кладёт свойство на второго.
       if (intent.kind === "playPair" && intent.cardId === cardId && intent.first && intent.first !== animalId) {
         const act = acts.find((a) => a.type === "devPlayPair" && a.a === intent.first && a.b === animalId);
         if (act) return dispatch(act);
-        return rejectDrop();
+        return rejectDrop(dropReasonForTarget(target), point);
       }
       const simple = acts.find((a) => a.type === "devPlayTrait" && a.animalId === animalId);
       if (simple) return dispatch(simple);
@@ -1736,11 +2341,11 @@ function Table() {
         sfx.play("click");
         return;
       }
-      return rejectDrop();
+      return rejectDrop(dropReasonForTarget(target), point);
     }
 
     if (target.kind === "zone" || target.kind === "row") {
-      if (target.kind === "zone" && (!target.zoneId || target.zoneId === "ocean")) return rejectDrop();
+      if (target.kind === "zone" && (!target.zoneId || target.zoneId === "ocean")) return rejectDrop("drop", point);
       const act = devActs.find(
         (a) =>
           a.type === "devPlayAnimal" &&
@@ -1748,18 +2353,18 @@ function Table() {
           (target.kind === "zone" ? a.zoneId === target.zoneId : a.zoneId === undefined),
       );
       if (act) return dispatch(act);
-      return rejectDrop();
+      return rejectDrop("drop", point);
     }
 
     if (target.kind === "plants") {
       // Карточки растений рисует чужой компонент, поэтому ищем растение под
       // точкой броска по DOM (data-plant-id).
       const plantId = plantIdAtPoint(point);
-      if (!plantId) return rejectDrop();
+      if (!plantId) return rejectDrop("drop", point);
       if (intent.kind === "playPlantPair" && intent.cardId === cardId && intent.first && intent.first !== plantId) {
         const act = acts.find((a) => a.type === "devPlayPlantPair" && a.a === intent.first && a.b === plantId);
         if (act) return dispatch(act);
-        return rejectDrop();
+        return rejectDrop("target", point);
       }
       const simple = acts.find((a) => a.type === "devPlayPlantTrait" && a.plantId === plantId);
       if (simple) return dispatch(simple);
@@ -1769,7 +2374,7 @@ function Table() {
         sfx.play("click");
         return;
       }
-      return rejectDrop();
+      return rejectDrop("target", point);
     }
   }
 
@@ -1805,7 +2410,11 @@ function Table() {
     // захватываем её до сброса — сам ref обнуляем сразу, как раньше.
     const point = dndPointRef.current;
     dndPointRef.current = null;
-    if (!active || !info || !dndTargetAllowed(active, info.data)) return;
+    if (!active) return;
+    if (!info || !dndTargetAllowed(active, info.data)) {
+      rejectDrop(info ? dropReasonForTarget(info.data) : "drop", point);
+      return;
+    }
     performDndDrop(active, info.data, info.side, point);
   }
 
@@ -2042,7 +2651,9 @@ function Table() {
       recordedRef.current = false;
       return;
     }
-    if (recordedRef.current) return;
+    // Зритель не участвовал в партии: его финальный снимок не должен
+    // попасть в локальную историю и achievement-счётчики.
+    if (net?.spectating || net?.seat === -2 || recordedRef.current) return;
     recordedRef.current = true;
     // Партия всегда сетевая: в историю статистики она идёт как «net».
     const unlocked = recordGame(state, sessionRef.current, "net");
@@ -2051,7 +2662,7 @@ function Table() {
         description: achievementDesc(a.id),
       });
     }
-  }, [state]);
+  }, [net?.spectating, state]);
 
   return (
     // Один DndContext на стол: в нём и карточки рук/животных (draggable),
@@ -2078,6 +2689,8 @@ function Table() {
       <TopBar
         subtitle={`${t("game.yearN", { year: state.year })}${state.lastYear ? ` · ${t("game.yearLast")}` : ""} · ${t(PHASE_LABEL[state.phase] ?? ("phase.development" as const))}${actor ? ` · ${scientistName(actor.name, lang)}` : ""}`}
         subtitleShort={`${t("game.yearN", { year: state.year })} · ${t(PHASE_LABEL[state.phase] ?? ("phase.development" as const))}`}
+        onTutorial={onTutorial}
+        tutorialLabel={tutorialLabel}
       >
         <div className="flex items-center gap-2">
           <FoodBankChip count={state.foodBank} visible={state.phase === "feeding" || state.phase === "foodBank"} />
@@ -2161,6 +2774,7 @@ function Table() {
       </TopBar>
 
       <TableBanners state={state} />
+      <WaitingPlayerNotice actor={actor} net={net} />
 
       {/* Режим зрителя: read-only бейдж и панель реакций (доступна и игрокам). */}
       {net?.spectating ? (
@@ -2172,7 +2786,6 @@ function Table() {
           {t("game.spectBadge")}
         </div>
       ) : null}
-      {net ? <ReactionsLayer net={net} phase={state.phase} /> : null}
 
       {turnCard ? (
         // Клик в любое место экрана (включая саму карточку и фон) убирает её сразу;
@@ -2197,6 +2810,8 @@ function Table() {
           </div>
         </div>
       ) : null}
+
+      {net ? <ReactionsLayer net={net} phase={state.phase} /> : null}
 
       {/* Стол: узкое центральное поле-сукно, соперники по бокам без прокрутки, игрок снизу. */}
       {/* Журнал-док на xl+ живёт рядом с полем и сдвигает его раскрытием. */}
@@ -2271,6 +2886,7 @@ function Table() {
                 dying={dying}
                 freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
                 continents={Boolean(state.modules.continents)}
+                {...playerManagement}
               />
             ))}
           </div>
@@ -2286,6 +2902,7 @@ function Table() {
               dying={dying}
               freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
               continents={Boolean(state.modules.continents)}
+              {...playerManagement}
             />
           ))}
         </div>
@@ -2334,6 +2951,7 @@ function Table() {
               dying={dying}
               freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
               continents={Boolean(state.modules.continents)}
+              {...playerManagement}
             />
           ))}
         </div>
@@ -2354,6 +2972,7 @@ function Table() {
                 dying={dying}
                 freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
                 continents={Boolean(state.modules.continents)}
+                {...playerManagement}
               />
             ))}
           </div>
@@ -2371,6 +2990,7 @@ function Table() {
           dying={dying}
           freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
           continents={Boolean(state.modules.continents)}
+          {...playerManagement}
           style={wideSeats ? { gridArea: "human" } : undefined}
         />
       </main>
@@ -2395,6 +3015,7 @@ function Table() {
 
       {/* pb-safe: на телефонах с жестовой полосой кнопки дока не прилипают к краю. */}
       <footer className="sticky bottom-0 z-20 border-t border-border bg-bg/95 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur-sm sm:px-5">
+        <PendingActionHint pending={pendingAction} />
         {net?.spectating ? (
           // Зрителю вместо доков хода — явная плашка: кнопки действий ему недоступны.
           <div className="flex h-14 items-center justify-center gap-2 text-sm text-muted">
@@ -2475,6 +3096,7 @@ function Table() {
               sfx.play("pass");
               dispatch({ type: "feedSkip" });
             }}
+            onDispatch={dispatch}
           />
         ) : (
           <div className="flex h-14 items-center justify-center text-sm text-muted">
@@ -2510,10 +3132,32 @@ function Table() {
         <FlyingCube key={f.id} item={f} onDone={fly.remove} />
       ))}
 
+      {rejectHint ? <RejectHint hint={rejectHint} /> : null}
+
       <EventSpotlight replayEvents={netReplay} onActiveChange={setSpotlightActive} />
 
       {state.pendingAttack && state.pendingAttack.waitingFor === human.id ? (
         <DefenseDock acts={defActs} onPick={(a) => dispatch(a)} onPreview={setDefensePreviewId} />
+      ) : null}
+
+      {replaceTarget ? (
+        <ConfirmDialog
+          title={lang === "en" ? "Replace player with a bot?" : "Заменить игрока ботом?"}
+          body={
+            lang === "en"
+              ? `${replaceTarget.name} is currently offline. The bot will continue this seat.`
+              : `${replaceTarget.name} сейчас не в сети. За это место будет играть бот.`
+          }
+          confirmLabel={lang === "en" ? "Replace with bot" : "Заменить ботом"}
+          cancelLabel={t("common.cancel")}
+          tone="danger"
+          onConfirm={() => {
+            const target = replaceTarget;
+            setReplaceTarget(null);
+            if (target) void replaceOfflineBot(target);
+          }}
+          onClose={() => setReplaceTarget(null)}
+        />
       ) : null}
 
       {confirmLeave ? (
@@ -2522,13 +3166,17 @@ function Table() {
           body={
             net?.spectating
               ? t("leave.bodySpectator")
-              : t("leave.bodyPlayer")
+              : canResumeSoftExit
+                ? t("leave.bodyPlayer")
+                : lang === "en"
+                  ? "This browser cannot preserve a return link. Leaving now will not offer a way back to this seat."
+                  : "Этот браузер не сохранил ссылку возврата. При выходе вернуться за этот стол уже не получится."
           }
           confirmLabel={net?.spectating ? t("leave.confirmSpectator") : t("leave.confirmPlayer")}
           cancelLabel={t("leave.stay")}
           tone={net?.spectating ? "default" : "danger"}
-          extraLabel={net?.spectating ? undefined : t("leave.justLeave")}
-          onExtra={net?.spectating ? undefined : () => leaveNet()}
+          extraLabel={net?.spectating || !canResumeSoftExit ? undefined : t("leave.justLeave")}
+          onExtra={net?.spectating || !canResumeSoftExit ? undefined : leaveForResume}
           onConfirm={() => {
             askLeave(false);
             // Зрителю сдаваться нечем: просто выходит. Игрок отправляет сдачу
@@ -2574,9 +3222,10 @@ function handleAnimalClick(
     mutateGuess: (kind: "trait" | "population" | "plant", target: { animalId?: string; plantId?: string }) => boolean;
     dispatch: (a: GameAction) => void;
     setIntent: (i: UiIntent) => void;
+    onReject: (animal: Animal, reason: RejectReason) => void;
   },
 ) {
-  const { state, intent, human, feedActs, devActs, mutateGuess, dispatch, setIntent } = ctx;
+  const { state, intent, human, feedActs, devActs, mutateGuess, dispatch, setIntent, onReject } = ctx;
   if (state.pendingAttack) return;
 
   if (state.phase === "development") {
@@ -2586,6 +3235,7 @@ function handleAnimalClick(
         devActs.some((a) => a.type === "devMutate" && a.intent === "trait" && a.animalId === animal.id) ||
         mutateGuess("trait", { animalId: animal.id });
       if (ok) dispatch({ type: "devMutate", intent: "trait", animalId: animal.id });
+      else onReject(animal, "target");
       return;
     }
     if (intent.kind === "mutatePop") {
@@ -2593,6 +3243,7 @@ function handleAnimalClick(
         devActs.some((a) => a.type === "devMutate" && a.intent === "population" && a.animalId === animal.id) ||
         mutateGuess("population", { animalId: animal.id });
       if (ok) dispatch({ type: "devMutate", intent: "population", animalId: animal.id });
+      else onReject(animal, "target");
       return;
     }
     if (intent.kind === "playTrait") {
@@ -2600,10 +3251,14 @@ function handleAnimalClick(
         (a) => a.type === "devPlayTrait" && a.cardId === intent.cardId && a.face === intent.face && a.animalId === animal.id,
       );
       if (ok) dispatch({ type: "devPlayTrait", cardId: intent.cardId!, face: intent.face!, animalId: animal.id });
+      else onReject(animal, "trait");
       return;
     }
     if (intent.kind === "playPair") {
-      if (!legalPairTargets(devActs, intent).has(animal.id)) return;
+      if (!legalPairTargets(devActs, intent).has(animal.id)) {
+        onReject(animal, "trait");
+        return;
+      }
       if (!intent.first) {
         setIntent({ ...intent, first: animal.id });
         return;
@@ -2618,7 +3273,10 @@ function handleAnimalClick(
 
   // ── «Растения»/«Трава и грибы»: еда со стола — животное, затем растение или флора ──
   if (intent.kind === "takePlant" || intent.kind === "takeFlora") {
-    if (intent.animalId) return;
+    if (intent.animalId) {
+      onReject(animal, "target");
+      return;
+    }
     const acts = feedActs.filter(
       (a) =>
         (a.type === "feedTakePlant" || a.type === "feedTakeFlora" || a.type === "feedTake") &&
@@ -2628,17 +3286,24 @@ function handleAnimalClick(
       dispatch(acts[0]!);
     } else if (acts.length > 1) {
       setIntent({ kind: state.modules.fungi ? "takeFlora" : "takePlant", animalId: animal.id });
+    } else {
+      onReject(animal, "target");
     }
     return;
   }
   // ── «Растения»: убежище — животное, затем растение ──
   if (intent.kind === "shelter") {
-    if (intent.animalId) return;
+    if (intent.animalId) {
+      onReject(animal, "target");
+      return;
+    }
     const acts = feedActs.filter((a) => a.type === "feedShelter" && a.animalId === animal.id);
     if (acts.length === 1) {
       dispatch(acts[0]!);
     } else if (acts.length > 1) {
       setIntent({ kind: "shelter", animalId: animal.id });
+    } else {
+      onReject(animal, "target");
     }
     return;
   }
@@ -2646,16 +3311,22 @@ function handleAnimalClick(
   if (intent.kind === "plantAttack" && intent.plantId) {
     const ok = feedActs.some((a) => a.type === "feedPlantAttack" && a.plantId === intent.plantId && a.preyId === animal.id);
     if (ok) dispatch({ type: "feedPlantAttack", plantId: intent.plantId, preyId: animal.id });
+    else onReject(animal, "target");
     return;
   }
   if (intent.kind === "graze") {
     // С растениями топтун топчет растение: сначала животное, потом растение.
-    if (intent.animalId) return;
+    if (intent.animalId) {
+      onReject(animal, "target");
+      return;
+    }
     const acts = feedActs.filter((a) => a.type === "feedGraze" && a.animalId === animal.id);
     if (acts.length === 1) {
       dispatch(acts[0]!);
     } else if (acts.length > 1) {
       setIntent({ ...intent, animalId: animal.id });
+    } else {
+      onReject(animal, "target");
     }
     return;
   }
@@ -2665,35 +3336,42 @@ function handleAnimalClick(
       // охотник, а в ход бешенства охотится только бешеное животное.
       const ok = feedActs.some((a) => a.type === "feedHunt" && a.carnivoreId === animal.id);
       if (ok) setIntent({ kind: "hunt", carnivoreId: animal.id });
+      else onReject(animal, "target");
       return;
     }
     const ok = feedActs.some((a) => a.type === "feedHunt" && a.carnivoreId === intent.carnivoreId && a.preyId === animal.id);
     if (ok) dispatch({ type: "feedHunt", carnivoreId: intent.carnivoreId, preyId: animal.id });
+    else onReject(animal, "target");
     return;
   }
   if (intent.kind === "pirate") {
     if (!intent.pirateId) {
       const ok = feedActs.some((a) => a.type === "feedPirate" && a.pirateId === animal.id);
       if (ok) setIntent({ kind: "pirate", pirateId: animal.id });
+      else onReject(animal, "target");
       return;
     }
     const ok = feedActs.some((a) => a.type === "feedPirate" && a.pirateId === intent.pirateId && a.targetId === animal.id);
     if (ok) dispatch({ type: "feedPirate", pirateId: intent.pirateId, targetId: animal.id });
+    else onReject(animal, "target");
     return;
   }
   if (intent.kind === "hibernate") {
     const ok = feedActs.some((a) => a.type === "feedHibernate" && a.animalId === animal.id);
     if (ok) dispatch({ type: "feedHibernate", animalId: animal.id });
+    else onReject(animal, "target");
     return;
   }
   if (intent.kind === "fat") {
     const act = feedActs.find((a) => a.type === "feedConvertFat" && a.animalId === animal.id);
     if (act && act.type === "feedConvertFat") dispatch(act);
+    else onReject(animal, "target");
     return;
   }
   if (intent.kind === "take" || intent.kind === "none") {
     const ok = feedActs.some((a) => a.type === "feedTake" && a.animalId === animal.id);
     if (ok) dispatch({ type: "feedTake", animalId: animal.id });
+    else onReject(animal, "target");
   }
 }
 
@@ -2959,6 +3637,10 @@ const PlayerSection = memo(function PlayerSection({
   freshSince,
   continents,
   style,
+  canManage,
+  onReplaceSeat,
+  replaceBusySeat,
+  onDispatch,
 }: {
   p: Player;
   isHuman?: boolean;
@@ -2973,8 +3655,14 @@ const PlayerSection = memo(function PlayerSection({
   /** «Континенты»: животные группируются по территориям. */
   continents?: boolean;
   style?: React.CSSProperties;
+  /** Хост может предложить ботом продолжить офлайн-место. */
+  canManage?: boolean;
+  onReplaceSeat?: (seat: SeatInfo) => void;
+  replaceBusySeat?: number | null;
+  onDispatch?: (action: GameAction) => void;
 }) {
-  const dispatch = useGameStore((s) => s.dispatch);
+  const storeDispatch = useGameStore((s) => s.dispatch);
+  const dispatch = onDispatch ?? storeDispatch;
   const intent = useGameStore((s) => s.intent);
   const t = useT();
   const lang = useLang();
@@ -2993,6 +3681,7 @@ const PlayerSection = memo(function PlayerSection({
   // Цвет места игрока: в сети — из net.seats (место совпадает с id игрока),
   // в соло — из палитры. Подложка секции и точка у имени.
   const netSeats = useGameStore((s) => s.net?.seats);
+  const seatInfo = useMemo(() => netSeats?.find((s) => s.seat === p.id), [netSeats, p.id]);
   const seatTintColor = useMemo(
     () => netSeats?.find((s) => s.seat === p.id)?.color ?? colorForSeat(p.id),
     [netSeats, p.id],
@@ -3091,7 +3780,7 @@ const PlayerSection = memo(function PlayerSection({
   const rows: React.ReactNode[] = [];
   if (p.animals.length === 0) {
     rows.push(
-      <p key="empty" className="text-xs text-subtle">
+      <p key="empty" className="w-fit rounded-[var(--radius-xs)] bg-surface-2 px-2 py-1 text-xs font-medium text-fg">
         {isHuman ? t("game.placeFromHand") : t("game.noAnimals")}
       </p>,
     );
@@ -3150,7 +3839,7 @@ const PlayerSection = memo(function PlayerSection({
       className={cn(
         // Компактнее на широком столе: табло с «Континентами» держит три полосы
         // территорий, и лишние отступы складываются в сотни пикселей высоты.
-        "paper-sheet mb-3 rounded-[var(--radius-lg)] border bg-surface p-3 transition-[border-color,box-shadow] duration-[var(--motion-quick)] lg:mb-0 lg:p-2",
+        "player-section paper-sheet mb-3 rounded-[var(--radius-lg)] border bg-surface p-3 transition-[border-color,box-shadow] duration-[var(--motion-quick)] lg:mb-0 lg:p-2",
         active ? "border-accent/70 shadow-[0_0_0_1px_var(--color-accent),var(--shadow-card)]" : "border-border",
         currentTurn && "outline outline-1 outline-accent",
       )}
@@ -3171,13 +3860,49 @@ const PlayerSection = memo(function PlayerSection({
             who={scientistName(p.name, lang)}
             isHuman={Boolean(isHuman)}
           />
+          {seatInfo && !p.isAI && !seatInfo.online ? (
+            <span
+              data-player-offline={p.id}
+              className="rounded-full bg-ink/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
+            >
+              {lang === "en" ? "offline" : "офлайн"}
+            </span>
+          ) : null}
+          {canManage && seatInfo?.disconnected && !isHuman ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="min-h-9 px-2 text-xs"
+              data-replace-bot-party={p.id}
+              disabled={replaceBusySeat !== null}
+              aria-label={
+                lang === "en"
+                  ? `Replace ${p.name} with a bot`
+                  : `Заменить ${p.name} ботом`
+              }
+              title={lang === "en" ? "Replace with a bot" : "Заменить ботом"}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (seatInfo) onReplaceSeat?.(seatInfo);
+              }}
+            >
+              {replaceBusySeat === p.id
+                ? lang === "en"
+                  ? "…"
+                  : "…"
+                : lang === "en"
+                  ? "Replace with bot"
+                  : "Заменить ботом"}
+            </Button>
+          ) : null}
           {active ? (
-            <span className="flex items-center gap-1 text-xs text-accent">
+            <span className="flex items-center gap-1 text-xs text-fg">
               {t("game.acting")}
             </span>
           ) : null}
         </span>
-        <span className="flex items-center gap-1.5 text-xs text-muted">
+        <span className="flex items-center gap-1.5 rounded-[var(--radius-xs)] bg-surface-2 px-1.5 py-0.5 text-xs text-fg">
           {randomMutations ? (
             <img
               src={MUTATION_ART.deckBack}
@@ -3242,7 +3967,7 @@ const PlayerSection = memo(function PlayerSection({
                 playerId={p.id}
               >
                 {animals.length === 0 ? (
-                  <span className="px-1 text-[11px] text-subtle">
+                  <span className="rounded-[var(--radius-xs)] bg-surface-2 px-1.5 py-0.5 text-[11px] text-muted">
                     {terr.id === "ocean" ? t("game.territoryEmptyOcean") : t("game.territoryEmpty")}
                   </span>
                 ) : null}
@@ -3391,20 +4116,30 @@ function TerritoryRow({
     <div
       ref={setNodeRef}
       data-zone={zone}
-      role={pickable ? "button" : undefined}
-      aria-label={pickable ? t("game.placeOn", { name }) : undefined}
+      data-zone-target={pickable ? "true" : undefined}
+      // В обычном состоянии зона — группа, а во время выбора — кнопка-цель.
+      // Один tab-stop на каждую доступную цель не засоряет обход пустыми зонами.
+      role={pickable ? "button" : "group"}
+      tabIndex={pickable ? 0 : -1}
+      aria-label={
+        pickable
+          ? `${t("game.placeOn", { name })} · ${count}`
+          : `${name} · ${count}`
+      }
+      aria-pressed={pickable ? false : undefined}
+      aria-keyshortcuts={pickable ? "Enter Space" : undefined}
       onClick={pickable ? onPickZone : undefined}
       onKeyDown={
         pickable
-          ? (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onPickZone?.();
+          ? (event) => {
+              if (event.target !== event.currentTarget) return;
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                event.currentTarget.click();
               }
             }
           : undefined
       }
-      tabIndex={pickable ? 0 : undefined}
       className={cn(
         "relative flex flex-wrap items-stretch gap-2 rounded-[var(--radius-md)] border border-dashed px-2 transition-all duration-[var(--motion-quick)]",
         zone === "ocean" && "water-strip",
@@ -3593,7 +4328,7 @@ function TerritoryBanks({
               // min-w-0 и перенос ряда фишек: тайл не вылезает за сукно ни при
               // каком количестве еды (0…30) и любой ширине панели.
               "flex min-w-0 flex-col items-center gap-1 overflow-hidden rounded-[var(--radius-md)] border px-1.5 py-1.5 sm:px-2",
-              terr.id === "ocean" ? "border-water/50 bg-water/15" : "border-border bg-bg/45",
+              terr.id === "ocean" ? "border-water/50 bg-surface" : "border-border bg-surface",
             )}
           >
             {/* Квадратная миниатюра тайла территории: квадраты/вертикаль кадрируются по центру. */}
@@ -3623,7 +4358,10 @@ function TerritoryBanks({
 function BankPile({ count, active, oceanOnly }: { count: number; active: boolean; oceanOnly?: boolean }) {
   const t = useT();
   return (
-    <div className="relative flex flex-col items-center gap-1.5" title={active ? (oceanOnly ? t("game.oceanBankHint") : t("game.bankHint")) : t("game.bankHintIdle")}>
+    <div
+      className="relative flex flex-col items-center gap-1.5 rounded-[var(--radius-md)] border border-border bg-surface px-3 py-2 shadow-[var(--shadow-card)]"
+      title={active ? (oceanOnly ? t("game.oceanBankHint") : t("game.bankHint")) : t("game.bankHintIdle")}
+    >
       <div className="flex max-w-[260px] flex-wrap items-center justify-center gap-1">
         {count === 0 ? (
           <span className="text-xs text-subtle">{active ? (oceanOnly ? t("game.oceanEmpty") : t("game.bankEmpty")) : "—"}</span>
@@ -3648,24 +4386,53 @@ function BankPile({ count, active, oceanOnly }: { count: number; active: boolean
  * (~0.45 с). Итог появляется, когда кучка улеглась. Компонент перемонтируется
  * только со новым броском (ключ — значения кубиков).
  */
+/** Живой флаг системной настройки движения для задержки показа броска. */
+function usePrefersReducedMotionForTable(): boolean {
+  const [reduced, setReduced] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = () => setReduced(query.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+  return reduced;
+}
+
 function DiceTray({ roll, bank }: { roll: number[] | null; bank: number }) {
   const t = useT();
-  const [rolling, setRolling] = useState(Boolean(roll));
+  const reducedMotion = usePrefersReducedMotionForTable();
+  const [rolling, setRolling] = useState(Boolean(roll) && !reducedMotion);
   const rollId = roll?.join(",") ?? "";
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!rollId) return;
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (!rollId) {
+      setRolling(false);
+      return;
+    }
+    // Сервер уже отдал бросок к этому моменту. Дополнительные 1300 мс нужны
+    // только для физики; при reduced-motion результат доступен сразу.
+    if (reducedMotion) {
+      setRolling(false);
+      return;
+    }
     setRolling(true);
     timer.current = setTimeout(() => setRolling(false), 1300);
     return () => {
       if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
     };
-  }, [rollId]);
+  }, [reducedMotion, rollId]);
 
   if (!roll) {
     return (
-      <div className="relative flex items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-bg/50 px-4 py-2">
+      <div className="relative flex items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-surface px-4 py-2">
         <div aria-hidden className="flex h-[70px] w-[102px] shrink-0 items-center justify-center gap-[14px]">
           <span className="size-11 shrink-0 rounded-[var(--radius-md)] border border-border bg-muted/20" />
           <span className="size-11 shrink-0 rounded-[var(--radius-md)] border border-border bg-muted/20" />
@@ -3684,7 +4451,23 @@ function DiceTray({ roll, bank }: { roll: number[] | null; bank: number }) {
   const extra = bonus > 0 ? t("game.diceBonus", { n: bonus }) : bonus < 0 ? t("game.diceTerritory") : null;
   return (
     <div className="relative flex items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-bg/50 px-4 py-2">
-      <Dice3D values={roll} rolling={rolling} dieSize={44} ariaLabel={t("game.diceAria", { dice: roll.join(", ") })} />
+      <Suspense
+        fallback={
+          <span
+            className="grid h-[70px] min-w-[102px] place-items-center rounded-[var(--radius-md)] border border-border bg-muted/10 text-lg font-semibold tabular-nums text-fg"
+            aria-label={t("game.diceAria", { dice: roll.join(", ") })}
+          >
+            {roll.join(" · ")}
+          </span>
+        }
+      >
+        <LazyDice3D
+          values={roll}
+          rolling={rolling}
+          dieSize={44}
+          ariaLabel={t("game.diceAria", { dice: roll.join(", ") })}
+        />
+      </Suspense>
       <div className="flex flex-col">
         <span className={cn("font-display text-2xl leading-none tabular-nums", !rolling && "pop-in")}>
           {rolling ? "…" : total}
@@ -3753,17 +4536,22 @@ function useActionBarOffset(phase: string): number {
   return offset;
 }
 
-function ReactionsLayer({ net, phase }: { net: NetUiState; phase: string }) {
+function ReactionsLayer({
+  net,
+  phase,
+}: {
+  net: NetUiState;
+  phase: string;
+}) {
   const sendReaction = useGameStore((s) => s.sendReaction);
-  const logOpen = useGameStore((s) => s.logOpen);
   const t = useT();
   const [bubbles, setBubbles] = useState<Array<{ key: number; emoji: string; name: string; cheer: boolean }>>([]);
   const seenRef = useRef(new Set<number>());
   const counter = useRef(0);
-  // Панель — 42px в высоту; пузыри поднимаются над ней с зазором.
+  // Пузыри остаются временным уведомлением над доком; сама панель реакций
+  // теперь живёт в потоке футера и не может закрыть табло.
   const barOffset = useActionBarOffset(phase);
-  const panelStyle = barOffset ? { bottom: barOffset + 8 } : undefined;
-  const bubblesStyle = barOffset ? { bottom: barOffset + 60 } : undefined;
+  const bubblesStyle = barOffset ? { bottom: barOffset + 8 } : undefined;
 
   useEffect(() => {
     const fresh = net.reactions.filter((r) => !seenRef.current.has(r.id));
@@ -3784,16 +4572,12 @@ function ReactionsLayer({ net, phase }: { net: NetUiState; phase: string }) {
 
   return (
     <>
-      {/* Пузыри: поднимаются над доком реакции и растворяются. z-50 — выше
-          карточки «Ваш ход» (z-40), иначе реакции прячутся за ней. */}
+      {/* Пузыри: поднимаются над доком и растворяются. z-50 — выше карточки
+          «Ваш ход» (z-40), иначе реакции прячутся за ней. */}
       <div
         aria-hidden
         style={bubblesStyle}
-        className={cn(
-          "pointer-events-none fixed bottom-[132px] right-3 z-50 flex w-44 flex-col items-end gap-1 sm:right-4",
-          // Раскрытый журнал занимает правый край: уводим пузыри левее него.
-          logOpen && "reactions-shift",
-        )}
+        className="pointer-events-none fixed bottom-3 right-3 z-50 flex w-44 flex-col items-end gap-1 sm:right-4"
       >
         {bubbles.map((b) => (
           <span
@@ -3809,37 +4593,32 @@ function ReactionsLayer({ net, phase }: { net: NetUiState; phase: string }) {
         ))}
       </div>
 
-      {/* Панель реакций: на телефоне — компактная горизонтальная полоса над
-          нижним доком (вертикальная колонка закрывала «Вашу популяцию»).
-          bottom — инлайн от фактической высоты футера: док выше одной строки
-          на телефоне, и фиксированные 84px накрыли бы кнопки. */}
-      <div
-        role="group"
-        aria-label={t("game.reactions")}
-        style={panelStyle}
-        className={cn(
-          "fixed bottom-[84px] right-3 z-40 flex flex-row gap-0.5 rounded-full border border-border bg-surface/95 p-1 shadow-[var(--shadow-card)] backdrop-blur-sm sm:right-4 sm:gap-1",
-          // Раскрытый журнал занимает правый край: панель встаёт левее
-          // колонки (xl) или панели sm…xl, а не поверх композера чата.
-          logOpen && "reactions-shift",
-        )}
-      >
-        {REACTION_EMOJI.map((emoji) => (
-          <button
-            key={emoji}
-            type="button"
-            aria-label={t("game.reactionOf", { emoji })}
-            title={emoji === "👏" ? t("game.cheerTitle") : t("game.reactionOf", { emoji })}
-            // Палец (до xl): 44px; на широком экране с мышью — компактные 32px.
-            className="grid size-11 place-items-center rounded-full text-lg leading-none transition-transform duration-[var(--motion-fast)] hover:scale-110 hover:bg-surface-2 xl:size-8"
-            onClick={(e) => {
-              e.currentTarget.blur();
-              void sendReaction(emoji, emoji === "👏" ? "cheer" : "reaction");
-            }}
-          >
-            {emoji}
-          </button>
-        ))}
+      {/* Панель реакций — обычная строка дока. Так она доступна на телефоне,
+          но не перекрывает ни табло игроков, ни центральное поле. */}
+      <div className="flex justify-end px-3 py-1 sm:px-5">
+        <div
+          data-reactions
+          role="group"
+          aria-label={t("game.reactions")}
+          className="flex w-fit flex-row gap-0.5 rounded-full border border-border bg-surface p-1 shadow-[var(--shadow-card)] sm:gap-1"
+        >
+          {REACTION_EMOJI.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              aria-label={t("game.reactionOf", { emoji })}
+              title={emoji === "👏" ? t("game.cheerTitle") : t("game.reactionOf", { emoji })}
+              // Палец (до xl): 44px; на широком экране с мышью — компактные 32px.
+              className="grid size-11 place-items-center rounded-full text-lg leading-none transition-transform duration-[var(--motion-fast)] hover:scale-110 hover:bg-surface-2 xl:size-8"
+              onClick={(e) => {
+                e.currentTarget.blur();
+                void sendReaction(emoji, emoji === "👏" ? "cheer" : "reaction");
+              }}
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
       </div>
     </>
   );
@@ -4278,6 +5057,7 @@ function FeedDock({
   onIntent,
   onEndTurn,
   onSkip,
+  onDispatch,
 }: {
   /** Животные человека: по ним считаем голодных перед завершением питания. */
   human: Player;
@@ -4295,8 +5075,9 @@ function FeedDock({
   onIntent: (i: { kind: "take" | "takePlant" | "takeFlora" | "hunt" | "pirate" | "shelter" | "plantAttack" | "parasitize" | "hibernate" | "fat" | "graze" | "none" }) => void;
   onEndTurn: () => void;
   onSkip: () => void;
+  onDispatch: (action: GameAction) => void;
 }) {
-  const dispatch = useGameStore((s) => s.dispatch);
+  const dispatch = onDispatch;
   const state = useGameStore((s) => s.state)!;
   const t = useT();
   const lang = useLang();
@@ -4589,47 +5370,55 @@ function FeedDock({
           {intentHint}
         </HintNote>
       ) : null}
-      <Button
-        variant="secondary"
-        size="md"
-        onClick={(e) => {
-          // Снимаем фокус: иначе Enter «дожимает» кнопку и пасует за следующего игрока.
-          e.currentTarget.blur();
-          onEndTurn();
-        }}
-      >
-        {t("dock.feed.endTurn")}
-      </Button>
-      {intentKind !== "none" ? (
-        <Button variant="ghost" size="default" onClick={() => onIntent({ kind: "none" })} title={t("dock.cancelTitle")}>
-          {t("common.cancel")}
-        </Button>
-      ) : null}
-      {canSkip ? (
+      <div className="ml-auto flex flex-wrap items-center gap-2">
         <Button
-          variant="secondary"
+          variant="parchment"
           size="md"
+          className="h-auto min-h-12 flex-col items-start gap-0.5 whitespace-normal px-3 py-2 text-left"
           onClick={(e) => {
+            // Снимаем фокус: иначе Enter «дожимает» кнопку и пасует за следующего игрока.
             e.currentTarget.blur();
-            // Подтверждение — всегда: голодные погибнут в вымирание, а при
-            // сытых игрок просто завершает фазу питания досрочно.
-            sfx.play("modal");
-            setConfirmSkip(true);
+            onEndTurn();
           }}
-          title={
-            hungry > 0
-              ? t("dock.feed.skipHungryTitle", { n: hungry })
-              : t("dock.feed.skipFedTitle")
-          }
-          aria-label={t("dock.feed.skip")}
         >
-          {t("dock.feed.skip")}
+          <span>{t("dock.feed.endTurn")}</span>
+          <span className="text-[10px] font-normal text-ink/70">{t("dock.turnOpponentCards")}</span>
         </Button>
-      ) : canSkipHint ? (
-        <span className="text-xs text-subtle" title={t("dock.feed.skipHintTitle")}>
-          {t("dock.feed.skipHint")}
-        </span>
-      ) : null}
+        {intentKind !== "none" ? (
+          <Button variant="ghost" size="default" onClick={() => onIntent({ kind: "none" })} title={t("dock.cancelTitle")}>
+            {t("common.cancel")}
+          </Button>
+        ) : null}
+        {canSkip ? (
+          <Button
+            variant="danger"
+            size="md"
+            className="h-auto min-h-12 flex-col items-start gap-0.5 whitespace-normal px-3 py-2 text-left"
+            onClick={(e) => {
+              e.currentTarget.blur();
+              // Подтверждение — всегда: голодные погибнут в вымирание, а при
+              // сытых игрок просто завершает фазу питания досрочно.
+              sfx.play("modal");
+              setConfirmSkip(true);
+            }}
+            title={
+              hungry > 0
+                ? t("dock.feed.skipHungryTitle", { n: hungry })
+                : t("dock.feed.skipFedTitle")
+            }
+            aria-label={`${t("dock.feed.skip")}: ${hungry > 0 ? t("dock.feed.skipHungryTitle", { n: hungry }) : t("dock.feed.skipFedTitle")}`}
+          >
+            <span>{t("dock.feed.skip")}</span>
+            <span className="text-[10px] font-normal text-parchment/80">
+              {hungry > 0 ? t("dock.feed.skipHungryTitle", { n: hungry }) : t("dock.feed.skipFedTitle")}
+            </span>
+          </Button>
+        ) : canSkipHint ? (
+          <span className="text-xs text-subtle" title={t("dock.feed.skipHintTitle")}>
+            {t("dock.feed.skipHint")}
+          </span>
+        ) : null}
+      </div>
       {confirmSkip ? (
         <ConfirmDialog
           title={t("dock.feed.skipConfirmTitle")}
@@ -4656,6 +5445,17 @@ function FeedDock({
   );
 }
 
+function defenseOutcome(lang: Lang, kind: "running" | "tail" | "none"): string {
+  if (lang === "en") {
+    if (kind === "running") return "Roll 4 or higher to escape";
+    if (kind === "tail") return "The animal survives; the attacker gets 1 food";
+    return "The animal dies; the attacker gets 2 food";
+  }
+  if (kind === "running") return "Бросок 4+ спасает животное";
+  if (kind === "tail") return "Животное выживет, хищник получит 1 фишку";
+  return "Животное погибнет, хищник получит 2 фишки";
+}
+
 function DefenseDock({
   acts,
   onPick,
@@ -4676,6 +5476,18 @@ function DefenseDock({
     ? `${plantName(plant.kind, lang)} · ${t("game.pairNo", { n: (state.plants?.indexOf(plant) ?? 0) + 1 })}`
     : animalChoiceLabel(state, atk.carnivoreId, lang);
   useEffect(() => () => onPreview(null), [onPreview, atk.preyId]);
+  const [waitSeconds, setWaitSeconds] = useState(0);
+  useEffect(() => {
+    const started = Date.now();
+    setWaitSeconds(0);
+    const timer = window.setInterval(() => {
+      setWaitSeconds(Math.floor((Date.now() - started) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [atk.carnivoreId, atk.preyId, atk.plantId]);
+  const waitLabel = lang === "en"
+    ? `The table is waiting for your decision · ${waitSeconds}s`
+    : `Стол ждёт вашего решения · ${waitSeconds} с`;
   const running = acts.find((a) => a.type === "chooseDefense" && a.kind === "running");
   const none = acts.find((a) => a.type === "chooseDefense" && a.kind === "none");
   const mimics = acts.filter((a) => a.type === "chooseDefense" && a.kind === "mimicry");
@@ -4686,8 +5498,8 @@ function DefenseDock({
   return (
     <DialogShell
       titleId={titleId}
-      overlayClassName="fixed inset-0 z-40 flex items-end justify-center bg-bg/70 p-3 sm:items-center"
-      panelClassName="w-full max-w-md rounded-[var(--radius-xl)] border border-border bg-surface p-5"
+      overlayClassName="fixed inset-0 z-[60] flex items-end justify-center bg-bg/70 p-3 sm:items-center"
+      panelClassName="w-full max-w-lg rounded-[var(--radius-xl)] border border-border bg-surface p-5"
       onEscape={(event) => {
         // Обязательный выбор: Escape не закрывает диалог и не сбрасывает фоновые намерения.
         event.preventDefault();
@@ -4701,16 +5513,38 @@ function DefenseDock({
         {!atk.choosingPlantDefense && <p className="mt-1 text-sm text-muted">
           {t("defense.need", { need: prey ? foodNeeded(prey) : "—", food: prey?.food ?? 0 })}
         </p>}
+        <p className="mt-2 text-xs font-medium text-clay" role="status">{waitLabel}</p>
+        {prey ? (
+          <div className="mt-3 rounded-[var(--radius-md)] border border-danger/35 bg-danger/5 p-3">
+            <div className="flex items-baseline justify-between gap-3 text-sm">
+              <span className="font-medium text-fg">{animalChoiceLabel(state, prey.id, lang)}</span>
+              {!prey.traits.length ? <span className="text-xs text-muted">{t("card.noTraits")}</span> : null}
+            </div>
+            {prey.traits.length ? (
+              <div className="mt-2 flex flex-wrap gap-1.5" aria-label={lang === "en" ? "Target traits" : "Свойства атакованного животного"}>
+                {prey.traits.map((trait) => (
+                  <span key={trait.id} className="rounded-full border border-border bg-surface px-2 py-0.5 text-[11px] text-muted">
+                    {traitName(trait.type, lang)}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <div className="mt-4 flex flex-col gap-2">
           {acts.map((action) => {
             if (action.type !== "chooseDefense" || action.kind !== "ignore") return null;
             const trait = prey?.traits.find((x) => x.id === action.ignoredTraitId);
-            return trait ? <Button key={trait.id} onClick={() => onPick(action)}>
-              {t("defense.ignore", { trait: traitName(trait.type) })}
+            return trait ? <Button key={trait.id} className="h-auto flex-col items-start whitespace-normal text-left" onClick={() => onPick(action)}>
+              <span>{t("defense.ignore", { trait: traitName(trait.type, lang) })}</span>
+              <span className="text-xs font-normal text-muted">{t("defense.plantIgnore")}</span>
             </Button> : null;
           })}
           {running ? (
-            <Button onClick={() => onPick(running)}>{t("defense.running")}</Button>
+            <Button className="h-auto flex-col items-start whitespace-normal text-left" onClick={() => onPick(running)}>
+              <span>{t("defense.running")}</span>
+              <span className="text-xs font-normal text-muted">{defenseOutcome(lang, "running")}</span>
+            </Button>
           ) : null}
           {mimics.map((action) => {
             if (action.type !== "chooseDefense" || !action.mimicryTargetId) return null;
@@ -4731,13 +5565,15 @@ function DefenseDock({
             );
           })}
           {tails.map((a) => (
-            <Button key={a.discardTraitId} variant="secondary" onClick={() => onPick(a)}>
-              {t("defense.tailDiscard", { trait: traitName(prey?.traits.find((trait) => trait.id === a.discardTraitId)?.type ?? "tailLoss", lang) })}
+            <Button key={a.discardTraitId} variant="secondary" className="h-auto flex-col items-start whitespace-normal text-left" onClick={() => onPick(a)}>
+              <span>{t("defense.tailDiscard", { trait: traitName(prey?.traits.find((trait) => trait.id === a.discardTraitId)?.type ?? "tailLoss", lang) })}</span>
+              <span className="text-xs font-normal text-muted">{defenseOutcome(lang, "tail")}</span>
             </Button>
           ))}
           {none ? (
-            <Button variant="danger" onClick={() => onPick(none)}>
-              {t("defense.none")}
+            <Button variant="danger" className="h-auto flex-col items-start whitespace-normal text-left" onClick={() => onPick(none)}>
+              <span>{t("defense.none")}</span>
+              <span className="text-xs font-normal text-clay">{defenseOutcome(lang, "none")}</span>
             </Button>
           ) : null}
         </div>

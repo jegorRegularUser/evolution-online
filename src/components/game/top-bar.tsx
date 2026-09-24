@@ -1,3 +1,4 @@
+import { BookOpen } from "lucide-react";
 import type { ReactNode } from "react";
 import { LOGO } from "@/lib/art";
 import { cn } from "@/lib/utils";
@@ -12,6 +13,10 @@ export interface TopBarProps {
    * на <sm показывается она, а полная — с sm и шире.
    */
   subtitleShort?: string;
+  /** Открыть обучение прямо в партии; кнопка скрыта, если обработчика нет. */
+  onTutorial?: () => void;
+  /** Доступное и короткое имя кнопки обучения. */
+  tutorialLabel?: string;
   /** Правый слот: кнопки, тумблеры, чипы. */
   children?: ReactNode;
   /** Свой левый блок вместо лого и названия (лого и подпись при этом не рендерятся). */
@@ -52,7 +57,15 @@ export function LangToggle() {
  * Переключатель языка встроен в самый конец правого слота — он виден во всех
  * трёх местах использования шапки (меню, лобби, партия).
  */
-export function TopBar({ subtitle, subtitleShort, children, left, className }: TopBarProps) {
+export function TopBar({
+  subtitle,
+  subtitleShort,
+  onTutorial,
+  tutorialLabel = "Обучение",
+  children,
+  left,
+  className,
+}: TopBarProps) {
   const lang = useLang();
   return (
     <header
@@ -96,6 +109,18 @@ export function TopBar({ subtitle, subtitleShort, children, left, className }: T
           задаёт документу минимальную ширину (иначе мобильный Chrome
           выбирает layout viewport шире экрана и уводит стол за кадр). */}
       <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
+        {onTutorial ? (
+          <button
+            type="button"
+            onClick={onTutorial}
+            aria-label={tutorialLabel}
+            title={tutorialLabel}
+            className="flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-border bg-surface px-2 text-xs font-medium text-fg transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+          >
+            <BookOpen className="size-4" aria-hidden />
+            <span className="hidden sm:inline">{tutorialLabel}</span>
+          </button>
+        ) : null}
         {children}
         <LangToggle />
       </div>

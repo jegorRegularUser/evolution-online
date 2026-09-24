@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useId, useState } from "react";
+import type { Phase } from "@/game/types";
 import { DialogShell } from "@/components/ui/dialog-shell";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -8,9 +9,9 @@ import { t, useT } from "@/lib/i18n";
 /**
  * Интерактивное обучение: пять коротких слайдов по фазам года на
  * подготовленных артах (public/img/tutorial). Закрывается Esc и кликом по
- * затемнению — как правила; на последнем слайде можно сразу начать партию.
- * Тексты слайдов — ключи словаря (tutorial.s1..s5), поэтому переключение
- * языка меняет их без перезагрузки.
+ * затемнению — как правила. При открытии из партии можно указать текущую
+ * фазу, чтобы показать релевантный слайд. Тексты слайдов — ключи словаря
+ * (tutorial.s1..s5), поэтому переключение языка меняет их без перезагрузки.
  */
 
 interface Slide {
@@ -54,16 +55,31 @@ const SLIDES: Slide[] = [
   },
 ];
 
-export function TutorialScreen({ onClose }: { onClose: () => void }) {
+const PHASE_SLIDE: Record<Phase, number> = {
+  development: 1,
+  foodBank: 2,
+  feeding: 2,
+  extinction: 4,
+  growth: 2,
+  gameOver: 4,
+};
+
+export function TutorialScreen({
+  onClose,
+  phase,
+}: {
+  onClose: () => void;
+  /** Открывает обучение с тематического слайда активной фазы. */
+  phase?: Phase;
+}) {
   const tt = useT();
-  const [i, setI] = useState(0);
+  const [i, setI] = useState(() => (phase === undefined ? 0 : PHASE_SLIDE[phase]));
   const titleId = useId();
   const slide = SLIDES[i]!;
   const last = i === SLIDES.length - 1;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
       if (e.key === "ArrowRight") setI((v) => Math.min(v + 1, SLIDES.length - 1));
       if (e.key === "ArrowLeft") setI((v) => Math.max(v - 1, 0));
     };
@@ -77,6 +93,11 @@ export function TutorialScreen({ onClose }: { onClose: () => void }) {
       overlayClassName="fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-0 sm:items-center sm:p-6"
       panelClassName="flex max-h-[92dvh] w-full max-w-xl flex-col overflow-hidden rounded-t-[var(--radius-xl)] border border-border bg-surface sm:rounded-[var(--radius-xl)]"
       onBackdropClick={onClose}
+      onEscape={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+      }}
     >
         {slide.art ? (
           <img src={slide.art} alt="" className="h-40 w-full shrink-0 object-cover sm:h-52" />
