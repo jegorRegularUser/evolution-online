@@ -130,7 +130,7 @@ export const en: Record<keyof RuDict, string> = {
   "lobby.hostOnly": "Only the host can change settings",
   "lobby.difficulty": "Bot difficulty",
   "lobby.deckSize": "Trait deck size",
-  "lobby.deckInfo": "Deck of {n} cards · ≈{years} years of play",
+  "lobby.deckInfo": "Deck of {n:card} · ≈{years:year} of play",
   "lobby.deckShort": "Short",
   "lobby.deckNormal": "Normal",
   "lobby.deckFull": "Full",
@@ -153,7 +153,7 @@ export const en: Record<keyof RuDict, string> = {
   "lobby.spectators": "Watching · {n}",
   "lobby.waiterRemoveAria": "Remove {name} from the queue",
   "lobby.waiterRemoveTitle": "Remove from queue",
-  "lobby.inviteHint": "Send the link to friends — they'll join with a single tap.",
+  "lobby.inviteHint": "Send the link to friends — they'll join with one tap.",
   "lobby.kickSeat.title": "Remove player?",
   "lobby.kickSeat.body":
     "{name} will lose their seat and return to the menu. The seat will free up for another guest or a bot.",
@@ -197,7 +197,7 @@ export const en: Record<keyof RuDict, string> = {
 
   // ── waiting room ─────────────────────────────────────────────────────────
   "wait.subtitle": "Table · no seats",
-  "wait.position": "You are {place} in line. As soon as a seat frees up, you'll be seated automatically.",
+  "wait.position": "You are {place:ordinalM} in line. As soon as a seat frees up, you'll be seated automatically.",
   "wait.inQueue": "You're in line for a seat at the table.",
   "wait.queue": "Queue · {n}",
   "wait.atTable": "At the table",
@@ -222,11 +222,11 @@ export const en: Record<keyof RuDict, string> = {
   "rules.tab.mutations": "Random Mutations",
 
   "rules.base.intro":
-    "The base Russian “Evolution” (Pravilnye Igry, 2010). An 84-card deck, 2–4 players. The winner is the player whose population scores the most points after the final year.",
-  "rules.base.year": "The turn of a year",
+    "The base Russian “Evolution” (Pravilnye Igry, 2010): an 84-card deck for 2–4 players. A year consists of four phases; a turn is one player's turn within a phase. The winner is the player whose animals score the most points after the final year.",
+  "rules.base.year": "Year and phases",
   "rules.base.dev": "Development.",
   "rules.base.dev.text":
-    "Going around the table, play one card at a time: a new animal or a trait. Traits lie face up — everyone sees what everyone played. A double-sided card is played as one of its two sides. A parasite can only be placed on another player's animal. A pair card (symbiosis, cooperation, communication) is placed between two animals: one such card per pair, and no more than two per animal. Once you pass, you play no more cards this phase; the phase ends when everyone has passed.",
+    "On your development turn, play one card: a new animal or a trait. Traits lie face up, so everyone sees what everyone played. A double-sided card is played as one of its two sides. A parasite can only be placed on another player's animal. A paired trait (symbiosis, cooperation, communication) goes between two animals: one such trait per pair. Online simplification: one animal can have no more than two paired traits, and pairs cannot form a closed ring. Once you pass, you play no more cards this phase; the phase ends when everyone has passed.",
   "rules.base.food": "Food supply.",
   "rules.base.feed": "Feeding.",
   "rules.base.feed.text":
@@ -268,14 +268,14 @@ export const en: Record<keyof RuDict, string> = {
     "Declare a migration instead of a normal turn: no food, no hunting, only travel. Any number of your animals may migrate: from the Ocean to any continent, from a continent to the Ocean (swimmers only). There's no direct route between continents — a land animal on a continent has nowhere to go. After the move, each remora of the same area may follow the migrant at its owner's choice, resolved in turn order (in the Ocean, only swimmers).",
   "rules.cont.newTraits": "New traits.",
   "rules.cont.newTraits.text":
-    "Herding: while herding animals in a territory equal or outnumber carnivores, they cannot be eaten. Nematocysts: the attacking carnivore cannot hunt, steal or migrate until the end of the feeding phase, and in the Ocean it's also washed ashore onto a continent. Regeneration: the animal eaten by a carnivore returns — in extinction its owner plays a card from their hand as a new animal, with no draw for it. Recombination (pair): once per year, during its owner's feeding turn, each partner gives the other one unpaired trait (a duplicate goes to the discard; a swimmer that loses “Swimming” in the Ocean moves to a continent). Neoplasia is a virus: played only on an opponent's animal, it rises every year at the start of food supply determination, disabling another unpaired trait (a disabled one doesn't work and gives no points); when there's nothing left to disable, the animal dies immediately. Viral traits (parasite, neoplasia) are marked purple.",
+    "Herding: while herding animals in a territory equal or outnumber carnivores, they cannot be eaten. Nematocysts: even after an unsuccessful attack, all of the attacking carnivore's traits stop working until the feeding phase ends and its food requirement becomes 1; the cards stay, and the traits recover after hunger is determined. If the attack happened in the Ocean, the paralyzed carnivore is washed ashore. Regeneration: an animal eaten by a carnivore returns — during extinction its owner plays a card from their hand, or from the deck if the hand is empty, as a new animal, with no draw for it. Recombination (pair): once per year, during its owner's feeding turn, each partner gives the other one unpaired trait (a duplicate goes to the discard; a swimmer that loses “Swimming” in the Ocean moves to a continent). Neoplasia is a virus: played only on an opponent's animal, it rises every year at the start of food supply determination, disabling another unpaired trait (a disabled one doesn't work and gives no points); when there's nothing left to disable, the animal dies immediately. Viral traits (parasite, neoplasia) are marked purple.",
   "rules.cont.rescue": "Rescue.",
   "rules.cont.rescue.text":
     "A player with no cards and no animals takes 10 cards; two of them are immediately played as animals, one on each continent.",
   "rules.cont.traits": "Expansion traits",
 
   "rules.plants.intro":
-    "The “Plants” expansion (Pravilnye Igry, 2016): 36 double-sided cards — a plant trait on one side, an animal trait on the other. Enabled in the menu before a game, compatible with “Continents”.",
+    "The “Plants” expansion (Pravilnye Igry, 2016): 36 double-sided cards — a plant trait on one side, an animal trait on the other. The online version can combine it with “Continents” and “Random Mutations”, but not with “Grass and Mushrooms”. The mutation combination is simplified: there is no separate plant-trait deck; the top card of the personal deck is revealed.",
   "rules.plants.base": "Food supply without dice.",
   "rules.plants.base.text":
     "This year's food sits on plants. In the food supply phase there's no roll: feeding starts right away. With “Continents”, plants stand on Laurasia and Gondwana, while the Ocean gets its bank by the usual rules. Plants are shared — they belong to nobody.",
@@ -284,7 +284,7 @@ export const en: Record<keyof RuDict, string> = {
     "A token is taken from a plant onto an animal, but only if the animal can feed on it: a “Water Plant” feeds only swimmers, a “Root Vegetable” only burrowing animals, a “Tree” only high body weight ones. Carnivores eat only from plants with a fruit icon and from “Nutritious” ones. Instead of eating or attacking, an animal can claim a plant's shelter: the token protects from carnivores and carnivorous plants until the end of the phase. You can't pass while any of your animals can still get food or shelter.",
   "rules.plants.carnivorous": "Carnivorous plant.",
   "rules.plants.carnivorous.text":
-    "Once per feeding phase: it counterattacks the animal taking food from it (the survivor still gets the token), or one of the players directs it at any animal a traitless carnivore could attack. Eats an animal — 2 tokens, gets a tail — 1, eats a poisonous one — dies in extinction.",
+    "Once per feeding phase: it counterattacks the animal taking food from it (the survivor still gets the token), or one of the players directs it at any eligible animal, including their own. Eats an animal — 2 tokens; if the prey escapes by dropping its tail — 1; eats a poisonous one — dies in the extinction phase.",
   "rules.plants.extinction": "Extinction.",
   "rules.plants.extinction.text":
     "Plants eaten to the ground die — except the annual (it survives) and plant parasites (they die only with their host). A micorrhiza link survives while at least one of its plants still has food. A fungus gets a token for every animal that died.",
@@ -300,7 +300,7 @@ export const en: Record<keyof RuDict, string> = {
     "Animal traits on the second sides of “Plants” cards come from the base game — see them in the “Base game” tab.",
 
   "rules.fungi.intro":
-    "The “Grass and Mushrooms” expansion (Pravilnye Igry, 2019): 24 long flora cards (6 fungi and 6 grasses, 2 copies each), 8 consequence marks and 2 new animal traits. The year's food supply is all the red tokens on flora cards; flora is a full participant of the game and can win.",
+    "The “Grass and Mushrooms” expansion (Pravilnye Igry, 2019): 24 long flora cards (6 fungi and 6 grasses, 2 copies each), 8 consequence marks and 2 new animal traits. The year's food supply is all the red tokens on flora cards; flora is a full participant of the game and can win. The online version can combine it only with “Continents”: it cannot be enabled together with either “Plants” or “Random Mutations”.",
   "rules.fungi.table": "The flora table.",
   "rules.fungi.table.text":
     "2 cards are open at the start; in the food supply phase, cards come out of the deck by player count (8 max on the table). A fungus enters play with 1 red token, grass with 3; a card holds at most 4 tokens. With “Continents”, flora lives on Laurasia and Gondwana, and the Ocean feeds by the usual rules.",
@@ -321,22 +321,22 @@ export const en: Record<keyof RuDict, string> = {
   "rules.fungi.animalTraits": "Animal traits",
 
   "rules.mutations.intro":
-    "The “Random Mutations” expansion (after the game of the same name by Pravilnye Igry, 2013): the hand of cards is gone — each player has a personal blind deck. In the development phase you first declare how you'll play the top card, and only then reveal it. Traits come at random, including harmful mutations (dark cards). Not compatible with “Grass and Mushrooms”: that expansion cannot be combined with “Random Mutations”.",
+    "The “Random Mutations” expansion (after the game of the same name by Pravilnye Igry, 2013): the hand of cards is gone — each player has a personal blind deck. In the development phase you first declare how you'll play the top card, and only then reveal it. Traits come at random, including harmful mutations (dark cards). The online version can combine it with “Continents” and “Plants”, but not with “Grass and Mushrooms”. The “Continents” combination is an unofficial hybrid: full geography stays in play, while only “Herding” and “Edificator” are available from that expansion.",
   "rules.mut.deck": "Personal deck.",
   "rules.mut.deck.text":
     "7 cards at the start, no peeking. On your development turn, declare one way to play it: (1) a new species — the card is played as an animal; (2) a trait — onto your species of one animal; (3) +1 animal to the species. With “Plants” you may also declare a plant trait — the card is revealed on the chosen plant.",
   "rules.mut.fate": "The trait's fate.",
   "rules.mut.fate.text":
     "If a trait can't be played on the chosen species, it moves to the neighboring species on the right; if it fits nowhere, it becomes a new mutant species itself. Harmful mutations are mandatory: you can't refuse them.",
-  "rules.mut.population": "Species population.",
+  "rules.mut.population": "Species size.",
   "rules.mut.population.text":
-    "A species can consist of several animals (marked “×N” on its card). Population can't exceed the number of your species; the exception is “Budding”. Food, hunting, hunger and poison act on animals one at a time: an attack removes one animal, not the whole species.",
+    "A species can consist of several animals (marked “×N” on its card). Its size can't exceed the number of your species; the exception is “Budding”. Food, hunting, hunger and poison affect animals one at a time: an attack removes one animal, not the whole species.",
   "rules.mut.draw": "Draw.",
   "rules.mut.draw.text":
     "At the end of a year: the number of animals + 2 cards to the bottom of your personal deck. When the shared stock runs out — the final year.",
   "rules.mut.score": "Points.",
   "rules.mut.score.text":
-    "2 points for each animal (population counted), 1 for a trait and trait bonuses; metabolic syndrome gives 2 extra points.",
+    "2 points for each animal (counting every animal in the species), 1 for a trait and trait bonuses; metabolic syndrome gives 2 extra points.",
   "rules.mut.traits": "Expansion traits",
   "rules.mut.footnote":
     "The other traits in the blind deck come from the base game and the enabled expansions; see their rules in the respective tabs.",
@@ -347,7 +347,7 @@ export const en: Record<keyof RuDict, string> = {
   "rules.terr.gondwana":
     "The southern continent: 7/10/13 tokens by player count. With “Plants” and “Grass and Mushrooms”, flora stands on both continents.",
   "rules.terr.ocean":
-    "The world of water: only swimmers live here, bank 5/7/9 by player count. There's no way back: an animal can only leave the Ocean by migrating.",
+    "The world of water: only swimmers live here, with a 5/7/9 bank by player count. The normal route to a continent is migration. Exceptions: a carnivore paralyzed by nematocysts is washed ashore, while an animal that loses “Swimming” through recombination moves to a chosen continent.",
   "rules.flora.fungus": "(fungus · enters with 1 token)",
   "rules.flora.grass": "(grass · enters with 3)",
   "rules.mark.line": "Mark “{name}” · 4 in the set",
@@ -362,21 +362,21 @@ export const en: Record<keyof RuDict, string> = {
   "stats.chart": "Points of recent games",
   "stats.chartGame": "Game {i}",
   "stats.chartScore": "Score",
-  "stats.chartPoints": "{n} points",
+  "stats.chartPoints": "{n:point}",
   "stats.topTraits": "Favorite traits",
   "stats.history": "Game history",
   "stats.historyLast": " · last {n}",
   "stats.place": "{place} of {players}",
   "stats.mode.net": "online",
   "stats.mode.solo": "solo",
-  "stats.modules": "{n} expansions",
+  "stats.modules": "{n:expansion}",
   "stats.win": "win",
   "stats.achievements": "Achievements",
   "stats.achievementsOf": " · {got} of {total}",
 
   // ── game over ────────────────────────────────────────────────────────────
   "final.kicker": "The end of evolution",
-  "final.win": "Your population dominates",
+  "final.win": "Your animals dominate",
   "final.lose": "You have been displaced",
   "final.show": "Show the game results",
   "final.collapseAria": "Collapse the results and view the table",
@@ -405,7 +405,7 @@ export const en: Record<keyof RuDict, string> = {
   "final.labels.flora.traits": "flora traits",
   "final.labels.flora.extras": "tokens on flora",
   "final.hints.animals":
-    "2 points for each surviving animal; with “Mutations”, for each animal in population size",
+    "2 points for each surviving animal; with “Mutations”, for every animal in the species",
   "final.hints.traits": "1 point for each active animal trait (disabled ones don't count)",
   "final.hints.extras":
     "Trait bonuses: carnivore and high body weight +1, parasite and metabolic syndrome +2",
@@ -419,7 +419,7 @@ export const en: Record<keyof RuDict, string> = {
   "final.defeat.behind": "You were beaten by {gap} points",
   "final.defeat.plain": "{lead}.",
   "final.defeat.discardTie":
-    "Points are tied at {total}, but the discard broke the tie: the leader has {leader} cards to your {human}.",
+    "Points are tied at {total}, but the discard broke the tie: the leader has {leader:card}, you have {human:card}.",
   "final.defeat.flora":
     "The flora beat you by {gap} points: “{name}” — {leader} to your {human}.",
   "final.defeat.on.animals": "on animals",
@@ -447,36 +447,36 @@ export const en: Record<keyof RuDict, string> = {
   "tutorial.s1.p1":
     "You breed species and guide them through hungry years. A year consists of four phases — they're shown in the table's header.",
   "tutorial.s1.p2":
-    "The winner is the player whose population scores the most points after the final year: 2 points for each animal of a species and 1 point for each trait.",
+    "The winner is the player whose animals score the most points after the final year: 2 points for each animal of a species and 1 point for each trait.",
   "tutorial.s1.p3":
     "A game takes 10–20 minutes: pick the number of players, bot difficulty and expansions — and off you go.",
   "tutorial.s2.title": "Development",
   "tutorial.s2.p1":
-    "Play one card per round: as a new animal or as a trait on your species. A double-sided card is one of its two traits, your choice.",
+    "On your development turn, play one card: as a new animal or as a trait on your species. A double-sided card is one of its two traits, your choice.",
   "tutorial.s2.p2":
     "Highlighting shows where a card can be placed; hovering a trait chip opens its rule. Paired traits (symbiosis, cooperation) are placed between two animals.",
   "tutorial.s2.p3": "When everyone has passed, the phase ends.",
   "tutorial.s3.title": "Feeding",
   "tutorial.s3.p1":
-    "The food supply is rolled with dice — those are the red tokens. Feed your animals to requirement: click the highlighted card or the “Take food” button.",
+    "In the base game and with “Continents”, dice determine the food supply — those are the red tokens. With “Plants” or “Grass and Mushrooms”, food is on the cards and there is no roll. Feed your animals to requirement: click a highlighted card or the “Take food” button.",
   "tutorial.s3.p2":
     "Carnivores take blue tokens from prey, and “fat tissue” stores food for a hungry year. A fed animal no longer uses its traits.",
   "tutorial.s3.p3":
-    "The phase goes around while there's food and willing players: one turn lasts until you press “End turn”.",
+    "Players take turns while there's food and willing players: one turn lasts until you press “End turn”.",
   "tutorial.s4.title": "Hunting",
   "tutorial.s4.p1":
-    "The “Hunt” button on a carnivore highlights valid prey: high body weight is off-limits, water dwellers only in the ocean, herding defends by numbers.",
+    "The “Hunt” button on a carnivore highlights valid prey: only a carnivore with “High Body Weight” can eat a large animal, only a swimming carnivore can hunt a swimmer, and herding is protected by numbers.",
   "tutorial.s4.p2":
-    "Prey can escape: “Running” rolls a die, camouflage hides, tail loss sheds a tail. Eaten prey gives the carnivore +2 blue tokens.",
+    "Prey can escape: “Running” rolls a die, “Camouflage” hides the animal, and “Tail Loss” sacrifices a tail. Eating prey gives the carnivore 2 blue tokens.",
   "tutorial.s4.p3":
     "Defend in time — the table itself asks you with a modal window when you're attacked.",
   "tutorial.s5.title": "Extinction and the finale",
   "tutorial.s5.p1":
     "Unfed animals die; for the survivors you draw cards from the deck. When the deck is empty, the final year begins.",
   "tutorial.s5.p2":
-    "In the finale, points are counted from living animals, traits and bonuses: carnivore and high body weight give extra.",
+    "In the finale, points come from living animals, traits and bonuses: “Carnivore” and “High Body Weight” each add 1 point, while “Parasite” adds 2.",
   "tutorial.s5.p3":
-    "Each player's score is visible on their scoreboard next to the discard — keep an eye on the gap.",
+    "Each player's score is visible on their scoreboard next to the discard. If scores are tied, the discard decides who ranks higher.",
 
   // ── sound ────────────────────────────────────────────────────────────────
   "sound.settings": "Sound settings",
@@ -498,7 +498,7 @@ export const en: Record<keyof RuDict, string> = {
   "card.animal": "Animal",
   "card.carnivore": "Carnivore",
   "card.obligateCarnivore": "Obligate Carnivore",
-  "card.water": "Water animal",
+  "card.water": "Swimming animal",
   "card.noTraits": "no traits",
   "card.shelter": "shelter",
   "card.sedated": "sedated",
@@ -509,12 +509,12 @@ export const en: Record<keyof RuDict, string> = {
   "card.pair": "pair",
   "card.card": "Card",
   "card.foodTitle": "Food {food} / {need}",
-  "card.foodBlue": " · blue {n}",
+  "card.foodBlue": " · blue tokens: {n}",
   "card.foodFat": " · fat {n}",
   "card.redToken": "Red token",
   "card.blueToken": "Blue token",
   "card.fatToken": "Fat",
-  "card.popTitle": "Species population: {n}",
+  "card.popTitle": "Species size: {n}",
   "card.shelterTitle": "In a plant shelter: carnivores and carnivorous plants won't touch it until the end of the feeding phase",
   "card.sedatedTitle": "Fed from a medicinal plant: fed, but its traits don't work until the end of the feeding phase",
   "card.noFood": "no food",
@@ -526,7 +526,7 @@ export const en: Record<keyof RuDict, string> = {
   "card.sheltersFree": "Free shelters: {n}",
   "card.carnivoreEdible": "Carnivores may take food from this plant",
   "card.plantAttacked": "attacked",
-  "card.plantAttackedTitle": "This carnivorous plant has already attacked this year",
+  "card.plantAttackedTitle": "This carnivorous plant has already attacked in this feeding phase",
   "card.markLabel": "“{name}” mark",
   "card.givesMark": "Gives the “{name}” mark",
   "card.floraDeck": "deck {n} · discard {m}",
@@ -559,8 +559,8 @@ export const en: Record<keyof RuDict, string> = {
   "game.yearLast": "final",
   "game.turnYour": "Your turn",
   "game.turnCardSub": "Year {year} · {phase}",
-  "game.madBanner": "Madness: a bot controls your animals this round — the neighbor does not participate (neighbor control is not yet implemented in the online version)",
-  "game.lastYearBanner": "The final year — the game ends after this round",
+  "game.madBanner": "Madness: a bot controls your animals on this turn — the neighbor does not participate (neighbor control is not yet implemented in the online version)",
+  "game.lastYearBanner": "Final year — the game ends when it is over",
   "game.openingFinal": "Opening the final table…",
   "game.reconnecting": "Reconnecting…",
   "game.opening": "Opening the table…",
@@ -580,12 +580,12 @@ export const en: Record<keyof RuDict, string> = {
   "game.wait.roll": "Rolling the food bank…",
   "game.wait.extinction": "Extinction: unfed animals die…",
   "game.wait.growth": "Growth: plants spread and new ones appear…",
-  "game.wait.madness": "Madness: {name}'s round is played by a bot (neighbor control is not yet implemented in the online version)…",
+  "game.wait.madness": "Madness: {name}'s turn is played by a bot (neighbor control is not yet implemented in the online version)…",
   "game.wait.actor": "{name} is playing…",
   "game.wait.waiting": "Waiting",
 
   // ── game: player board ───────────────────────────────────────────────────
-  "game.yourPopulation": "Your population",
+  "game.yourPopulation": "Your animals",
   "game.noAnimals": "No animals",
   "game.placeFromHand": "Place an animal from your hand",
   "game.acting": "playing",
@@ -613,12 +613,12 @@ export const en: Record<keyof RuDict, string> = {
   "game.oceanBankLower": "ocean food bank",
   "game.growthBanner": "Growth: plants are spreading",
   "game.extinctionNone": "Extinction: nobody dies",
-  "game.extinctionN": "Extinction: {n} animals die",
+  "game.extinctionN": "Extinction: losses — {n}",
   "game.tableFoodTitle": "This year's food is on the table — take tokens from the plants and flora cards",
   "game.plantsFoodTitle": "This year's food is on the plants — take tokens from them",
   "game.floraFoodTitle": "This year's food is on the grass and fungi",
-  "game.plantsTokens": "tokens on {n} plants · shelters {m}",
-  "game.floraTokens": "tokens on {n} grass and fungi cards",
+  "game.plantsTokens": "tokens on {n:plant}; free shelters: {m}",
+  "game.floraTokens": "tokens on {n:floraCard}",
   "game.territoryBankTitle": "“{name}” food bank",
   "game.oceanBankHint": "The Ocean food bank — on the continents the food is on the plants",
   "game.bankHint": "Food bank tokens — take one per feeding turn",
@@ -702,7 +702,7 @@ export const en: Record<keyof RuDict, string> = {
   "dock.dev.needAnimalFirst": "Place an animal first — traits go on it",
   "dock.dev.faceBlocked": "This face can't be played right now",
   "dock.endDev": "End development",
-  "dock.endDevTitle": "End development: your turn in this round is over",
+  "dock.endDevTitle": "End development: your turn in the development phase is over",
   "dock.cancelTitle": "Cancel the selection (Esc)",
 
   // ── game: Random Mutations dock ──────────────────────────────────────────
@@ -717,7 +717,7 @@ export const en: Record<keyof RuDict, string> = {
   "dock.mut.trait": "Trait",
   "dock.mut.traitHint": "onto a single-animal species",
   "dock.mut.pop": "+1 animal to a species",
-  "dock.mut.popHint": "population ≤ number of species",
+  "dock.mut.popHint": "species size ≤ number of species",
   "dock.mut.plantTrait": "Plant trait",
   "dock.mut.plantTraitHint": "if the deck has such a face",
 
@@ -738,7 +738,7 @@ export const en: Record<keyof RuDict, string> = {
   "dock.feed.migrate": "Migration",
   "dock.feed.endTurn": "End turn",
   "dock.feed.skip": "End feeding",
-  "dock.feed.skipHungryTitle": "End feeding: {n} animals unfed",
+  "dock.feed.skipHungryTitle": "End feeding: unfed animals — {n}",
   "dock.feed.skipFedTitle": "End feeding: all animals are fed",
   "dock.feed.skipHint": "End feeding is unavailable — there is food or shelters to take",
   "dock.feed.skipHintTitle": "While at least one of your animals can still get food or a shelter, ending the feeding phase is not allowed (“Plants” rules)",
@@ -831,11 +831,11 @@ export const en: Record<keyof RuDict, string> = {
   "spot.plantStrikes": "The plant strikes the attacker",
   "spot.plantCatches": "The plant catches {a}",
   "spot.paralysis": "Paralysis",
-  "spot.cannotAttack": "{a} cannot attack this year",
+  "spot.cannotAttack": "{a} cannot attack until the feeding phase ends",
   "spot.diedOneNoStarve": "An animal died — not of hunger",
   "spot.diedOneStarve": "An animal died of hunger",
-  "spot.diedMany": "Animals died: {n}",
-  "spot.diedManyStarve": "Animals died: {n} (of hunger — {m})",
+  "spot.diedMany": "Animal deaths: {n}",
+  "spot.diedManyStarve": "Animal deaths: {n} (from hunger — {m})",
   "spot.skip": "Skip",
   "spot.clickHint": "click the card to continue",
   "spot.dieAria": "Die: {dice}",
@@ -856,7 +856,7 @@ export const en: Record<keyof RuDict, string> = {
   "netErr.seatTaken": "Your seat no longer exists — you were probably removed or the table closed",
   "netErr.roomGone": "The table no longer exists",
   "netErr.roomGoneCheck": "Table not found — check the code",
-  "netErr.moveIllegal": "This move is not allowed right now",
+  "netErr.moveIllegal": "This move is no longer possible — the table changed. Try again",
   "netErr.resigned": "You resigned — your turns are skipped automatically",
   "netErr.notPlaying": "The game is not in progress",
   "netErr.reorderPhase": "Animals can't be rearranged right now",
@@ -867,11 +867,11 @@ export const en: Record<keyof RuDict, string> = {
   "netErr.renameOwner": "You can rename only your own animals",
   "netErr.renameLength": "Animal name is up to 24 characters",
   "netErr.colorTaken": "This color is already taken — choose another one",
-  "netErr.chatEmpty": "The message is empty",
+  "netErr.chatEmpty": "Write a message",
   "netErr.rateLimit": "Too many messages — wait a minute",
   "netErr.rateFast": "Too fast — wait a second",
   "netErr.reactionLimit": "Too many reactions — wait a minute",
-  "netErr.reactionMissing": "The message was not found at this table",
+  "netErr.reactionMissing": "That message is no longer available",
   "netErr.probeLimit": "Too many attempts — wait",
   "netErr.entryLimit": "Too many connections — wait a minute",
   "netErr.createLimit": "Too many tables created — try later",
@@ -885,12 +885,35 @@ export const en: Record<keyof RuDict, string> = {
   "netErr.lobbyOnly": "This can be done before the game starts",
   "netErr.gameStarted": "The game has already started",
   "netErr.gameFinished": "The game is already over",
-  "netErr.gameRunning": "The game is not over yet",
+  "netErr.gameRunning": "The game is still in progress — wait for the final results",
   "netErr.seatsUnfinished": "Fill all the seats — with players or bots",
   "netErr.noFreeSeats": "No free seats yet",
   "netErr.seatRace": "The seat was just taken — try again",
   "netErr.retry": "The table changed, try again",
   "netErr.noSession": "The table session is already closed",
+  "netErr.tooManyBots": "There are more bots than free seats",
+  "netErr.codeFailed": "Couldn't create the table — try again",
+  "netErr.kickSelf": "You can't remove or replace yourself with a bot",
+  "netErr.seatFree": "That seat is already free",
+  "netErr.kickBot": "Remove or replace a bot with the “Bot” button",
+  "netErr.badColor": "That color isn't in the table palette",
+  "netErr.colorSeat": "Choose a color after taking a seat, not while waiting",
+  "netErr.botColor": "The table assigns bot colors",
+  "netErr.hostHuman": "Only a person at the table can become host",
+  "netErr.waiterGone": "That waiting player has already left the queue",
+  "netErr.playersOffline": "A player is offline — replace them with a bot",
+  "netErr.playerOnline": "The player is still online — wait until they disconnect",
+  "netErr.botChat": "Bots don't write in chat",
+  "netErr.botResign": "Bots can't resign",
+  "netErr.botRename": "Bots can't be renamed",
+  "netErr.emptyName": "Enter a name",
+  "netErr.seatMissing": "Your seat wasn't found in the game — return to the menu and rejoin",
+  "netErr.modulesIncompatible":
+    "“Grass and Mushrooms” is incompatible with “Plants” and “Random Mutations”. Turn off the conflicting expansions.",
+  "netErr.generic": "Couldn't complete that action. Try again",
+  "netErr.offline": "No connection to the table — check your internet and try again",
+  "netErr.invalidResponse": "The table returned an unexpected response. Refresh the page and try again",
+  "feed.charCount": "{n} / 400",
 
   // ── waiting screen note ──────────────────────────────────────────────────
   "net.waitNote.capacityShrunk": "The host reduced the number of seats — you are in the queue",
@@ -935,8 +958,8 @@ export const en: Record<keyof RuDict, string> = {
   "log.mutationMoved": "{name}: “{trait}” didn't fit the species — it moved to the neighbor.",
   "log.mutateAnimal": "{name}: a new species is declared — a card from the deck becomes an animal.",
   "log.extremophileDiscard": "“Extremophile”: an extra card goes to the discard.",
-  "log.mutatePopulation": "{name}: the species gets +1 animal (population {pop}).",
-  "log.budding": "{name}: “Budding” — the species grows to {pop} animal(s).",
+  "log.mutatePopulation": "{name}: the species gets +1 animal (size {pop}).",
+  "log.budding": "{name}: “Budding” — the species grows to {pop:animal}.",
   "log.plantParasite": "{name}: plant parasite on {plant}.",
   "log.plantTrait": "{name}: trait {trait} → {plant}.",
   "log.micorrhiza": "{name}: micorrhiza links {plant} and {plant2}.",
@@ -945,15 +968,15 @@ export const en: Record<keyof RuDict, string> = {
   "log.feedFungi": "Feeding: this year's food is on the grass and fungi.",
   "log.bankStart": "Determining the food bank.",
   "log.oceanBank": "Ocean: food bank {bank}. On the continents the food is on the flora table.",
-  "log.basesRoll": "Food banks — Laurasia {l}, Gondwana {g}, Ocean {o}.",
+  "log.basesRoll": "Food banks — Laurasia {l} ({lroll}), Gondwana {g} ({groll}), Ocean {o}.",
   "log.diceBank": "Food bank dice: {dice}{extra} = {food}.",
   "log.oceanBankPlantsFungi": "Ocean: food bank {bank}. On the continents the food is on the flora table (plants and grass with fungi).",
   "log.oceanBankPlants": "Ocean: food bank {bank}. On the continents the food is on the flora table (plants).",
   "log.oceanBankFungi": "Ocean: food bank {bank}. On the continents the food is on the flora table (grass and fungi).",
   "log.bases": "Food banks: Laurasia {l}, Gondwana {g}, Ocean {o}.",
   "log.bank": "Food bank: {bank}.",
-  "log.rage": "Rage: {name}'s animal must attack this round!",
-  "log.madness": "Madness: {name}'s round is played by a bot (neighbor control is not yet implemented in the online version).",
+  "log.rage": "Rage: {name}'s animal must attack on this turn!",
+  "log.madness": "Madness: {name}'s turn is played by a bot (neighbor control is not yet implemented in the online version).",
   "log.takeBank": "{name} takes food from the bank ({left} left).",
   "log.medicinal": "{name}: medicinal plant — the animal is fed, its traits don't work until the end of the phase.",
   "log.takePlant": "{name}: a token from the {plant} ({left} left).",
@@ -965,8 +988,8 @@ export const en: Record<keyof RuDict, string> = {
   "log.commTakeFlora": "Communication: {name} takes a token from the same flora card.",
   "log.cleanser": "Cleansing grass: {name} keeps one token, the rest are removed.",
   "log.cleanserMarks": "Cleansing grass: {name} keeps one token, the rest are removed, marks removed: {marks}.",
-  "log.insight": "Mushroom of Insight: {name} discards their whole hand ({lost} cards).",
-  "log.soaringDrop": "Soaring Mushroom: {dropped} paired traits go to the discard.",
+  "log.insight": "Mushroom of Insight: {name} discards their whole hand ({lost:card}).",
+  "log.soaringDrop": "Soaring Mushroom: paired traits sent to the discard — {dropped}.",
   "log.soaringFood": "Soaring Mushroom: the animal gets 1 blue token.",
   "log.passionflower": "Passionflower: the “{trait}” trait becomes a new animal of {name}.",
   "log.barkBeetle": "{name}: “Bark Beetle” — the shelter turns into a blue food token.",
@@ -981,8 +1004,8 @@ export const en: Record<keyof RuDict, string> = {
   "log.fat": "{name} spends fat tissue ({n}). The turn continues.",
   "log.grazeFlora": "{name}: trampling destroys a token from the {flora} card ({left} left).",
   "log.grazePlant": "{name}: trampling destroys a token from the {plant} ({left} left).",
-  "log.grazeBank": "{name}: trampling destroys {burned} food. Bank: {bank}.",
-  "log.migrate": "{name} declares a migration ({count} animal(s)).",
+  "log.grazeBank": "{name}: trampling destroys {burned:foodAcc}. Bank: {bank}.",
+  "log.migrate": "{name} declares a migration ({count:animal}).",
   "log.pairSplit": "The paired trait of animals that moved apart goes to the discard.",
   "log.runningEscape": "Running: rolled {roll} — the animal escaped!",
   "log.runningCaught": "Running: rolled {roll} — the predator caught up.",
@@ -994,7 +1017,7 @@ export const en: Record<keyof RuDict, string> = {
   "log.tailLossPlant": "Tail loss: the animal survived, the plant got 1 token.",
   "log.banksBurned": "The remains of the food banks ({total}) burn away.",
   "log.bankBurned": "The rest of the food bank ({bank}) burns away.",
-  "log.starved": "{name}'s species loses {deficit} animal(s) to hunger ({left} left).",
+  "log.starved": "{name}'s species loses {deficit:animal} to hunger ({left} left).",
   "log.poisonDeath": "{name}'s species loses an animal to poison ({left} left).",
   "log.diedPoison": "Carnivore {name} dies of poison.",
   "log.diedPoisonMark": "{name}'s animal dies from the “Poison” mark.",
@@ -1019,9 +1042,9 @@ export const en: Record<keyof RuDict, string> = {
   "log.regenerated": "{name} restores the regenerated animal.",
   "log.newYear": "Year {year}. {name} plays first. Deck: {deck}.",
   "log.newYearLast": "Year {year} — the final one. {name} plays first.",
-  "log.floraWin": "Victory: Grass and Fungi ({total} points).",
+  "log.floraWin": "Victory: Grass and Fungi ({total:point}).",
   "log.draw": "Draw: {names}.",
-  "log.win": "Victory: {name} ({total} points).",
+  "log.win": "Victory: {name} ({total:point}).",
 
   // ── feeding action block reasons (feedBlockReasonInfo) ───────────────────
   "feedBlock.rageHuntOnly": "This is a rage turn: only the enraged animal can attack.",
@@ -1040,7 +1063,8 @@ export const en: Record<keyof RuDict, string> = {
   "feedBlock.migratedHunt": "The turn was spent on migration — no hunting.",
   "feedBlock.huntersFed": "The carnivores are fed or can't hunt.",
   "feedBlock.noHunter": "No hungry carnivore.",
-  "feedBlock.huntersUsed": "All carnivores have already attacked this turn.",
+  "feedBlock.huntersUsed": "All carnivores have already hunted this year; each can hunt again next year.",
+  "feedBlock.huntLimit": "No more than two carnivores can attack in one turn.",
   "feedBlock.noPrey": "No prey available for an attack.",
   "feedBlock.afterFoodNoPiracy": "After taking food, the pirate doesn't steal.",
   "feedBlock.shelterBlocksPiracy": "The shelter takes up the turn — piracy is unavailable.",

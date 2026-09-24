@@ -210,7 +210,7 @@ export const TRAIT_EN: Record<string, TermEn> = {
   },
   budding: {
     name: "Budding",
-    desc: "At the start of each of your turns in the development phase the species buds one more animal: its card comes from your personal deck. Budding bypasses the usual population limit of “no more than the number of your species”.",
+    desc: "Once per year, at the start of your development turn the species buds one more animal: its card comes from your personal deck. Budding bypasses the usual population limit of “no more than the number of your species”.",
   },
   metabolicSyndrome: {
     name: "Metabolic Syndrome",
@@ -352,7 +352,7 @@ export const PLANT_EN: Record<string, TermEn> = {
   },
   grass: {
     name: "Grass",
-    desc: "Grows by the scheme 1→2, 2→4, 3+→5 (5 max). Appears with 2 tokens (scheme reconstructed from the rulebook illustration).",
+    desc: "Grows by the scheme 1→2, 2→3, 3+→5 (5 max). Appears with 2 tokens.",
   },
   liana: {
     name: "Liana",
@@ -360,11 +360,11 @@ export const PLANT_EN: Record<string, TermEn> = {
   },
   fungus: {
     name: "Fungus",
-    desc: "Whenever any animal dies, each fungus gets 1 token (6 max — reconstruction). Carnivores may take food from it.",
+    desc: "Whenever any animal dies, each fungus gets 1 token (4 max). Enters play with 1 token. Carnivores may take food from it.",
   },
   carnivorous: {
     name: "Carnivorous Plant",
-    desc: "Once per feeding phase it attacks: it counterattacks the animal taking food from it (ignoring one of its defenses), or one of the players directs it at another player's animal. Eats an animal — 2 tokens, gets a tail — 1, eats a poisonous one — dies in extinction. 6 tokens max, starts empty. Carnivores may take food from it.",
+    desc: "Once per feeding phase it attacks: it counterattacks the animal taking food from it (ignoring one of its defenses), or one of the players directs it at any eligible animal, including their own. Eats an animal — 2 tokens; if the prey escapes by dropping its tail — 1; eats a poisonous one — dies in the extinction phase. 6 tokens max, starts empty. Carnivores may take food from it.",
   },
   parasite: {
     name: "Plant Parasite",
@@ -389,14 +389,17 @@ export const ACHIEVEMENT_EN: Record<string, TermEn> = {
   "streak-3": { name: "Dominant Species", desc: "3 wins in a row" },
   apex: { name: "Apex Predator", desc: "Declare 5 or more attacks in a game" },
   gourmet: { name: "Abundance", desc: "Collect 15 or more food tokens in a game" },
-  "clean-pop": { name: "Clean Population", desc: "Win without losing a single animal" },
+  "clean-pop": { name: "No Losses", desc: "Win without losing a single animal" },
   "hard-win": { name: "Environmental Pressure", desc: "Win on “Harder” difficulty" },
   "big-table": { name: "Overpopulation", desc: "A game at an 8-player table" },
   "win-continents": { name: "Pangaea", desc: "Win with the “Continents” expansion" },
   "win-plants": { name: "Gardener", desc: "Win with the “Plants” expansion" },
   "win-fungi": { name: "Mushroomer", desc: "Win with the “Grass and Mushrooms” expansion" },
   "win-mutations": { name: "Radiation", desc: "Win with the “Random Mutations” expansion" },
-  "all-modules": { name: "Full Ecosystem", desc: "A game with all four expansions" },
+  "all-modules": {
+    name: "Full Ecosystem",
+    desc: "A game with “Continents”, “Plants”, and “Random Mutations”",
+  },
   darwin: { name: "Darwinism", desc: "Play 25 games" },
   escape: { name: "Narrow Escape", desc: "3 successful defenses in a game" },
   "five-traits": { name: "Complex Organism", desc: "An animal with five traits" },
