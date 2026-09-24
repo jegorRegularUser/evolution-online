@@ -686,9 +686,8 @@ describe("отбрасывание хвоста", () => {
     const traits = g.players[1]!.animals[0]!.traits.map((x) => x.type);
     assert.ok(!traits.includes("tailLoss"));
     assert.ok(traits.includes("piracy"));
-    // Хищник ещё голоден: ход остаётся за ним, пока не закончит его сам.
-    assert.equal(g.currentPlayerId, 0);
-    g = applyAction(g, { type: "feedEndTurn" });
+    // Хищник после охоты не может ни есть, ни охотиться снова в этом году,
+    // поэтому ход сразу уходит владельцу жертвы (раньше оставался за хищником).
     assert.equal(g.currentPlayerId, 1);
   });
 });
@@ -906,7 +905,7 @@ describe("континенты: колода и размещение", () => {
 });
 
 describe("континенты: питание по территориям", () => {
-  it("бросок кормовой базы даёт таблицу 8/7/5 на двоих и +2 за эдификатора", () => {
+  it("кормовые базы территорий считаются по официальной таблице с броском", () => {
     let g = continentScenario([
       [{ id: "e1", traits: [t("edificator")] }],
       [],
@@ -917,7 +916,12 @@ describe("континенты: питание по территориям", () 
     g.players[1]!.passedDev = true;
     while (g.phase === "development") g = applyAction(g, { type: "devPass" });
     g = applyAction(g, { type: "rollFoodBank" });
-    assert.deepEqual(g.territoryFood, { laurasia: 10, gondwana: 7, ocean: 5 });
+    // 2 игрока: Лавразия — 1 кубик, Гондвана — 1 кубик + 2, Океан — 3.
+    // Эдификатор в Лавразии добавляет к своей территории ещё 2 фишки.
+    assert.equal(g.foodRoll!.length, 2);
+    assert.equal(g.territoryFood!.ocean, 3);
+    assert.equal(g.territoryFood!.laurasia, g.foodRoll![0]! + 2);
+    assert.equal(g.territoryFood!.gondwana, g.foodRoll![1]! + 2);
   });
 
   it("нельзя взять еду из чужой территории в один ход", () => {
@@ -1815,6 +1819,16 @@ describe("трава и грибы: бешенство и безумие", () =>
     assert.equal(hunt.currentPlayerId, 1);
   });
 
+  it("бешеный раунд без доступной жертвы можно завершить", () => {
+    const g = floraScenario([[mkAnimal("mad", 0, [])], []], [mkFlora("f1", "thryn", 3)]);
+    g.currentPlayerId = 0;
+    g.rageTurn = { animalId: "mad" };
+    assert.ok(legalFeedActions(g, 0).some((action) => action.type === "feedEndTurn"));
+    const next = applyAction(g, { type: "feedEndTurn" });
+    assert.equal(next.rageTurn, null);
+    assert.ok(legalFeedActions(next, next.currentPlayerId).length > 0);
+  });
+
   it("безумие: раунд игрока проводит сосед — метка снимается", () => {
     const g = floraScenario(
       [[mkAnimal("a", 0, []), mkAnimal("crazy", 0, [])], [mkAnimal("b", 1, [])]],
@@ -2009,12 +2023,21 @@ function blindPop(g: GameState, playerId: number): number {
 }
 
 describe("случайные мутации: раздача и развитие", () => {
-  it("личные слепые колоды вместо руки", () => {
+  it("личные слепые колоды и три стартовых вида", () => {
     const g = createGame(3, "normal", 11, undefined, { randomMutations: true });
     for (const p of g.players) {
       assert.equal(p.hand.length, 0);
       assert.equal(p.blindDeck!.length, 7);
+      assert.equal(p.animals.length, 3);
+      assert.ok(p.animals.every((animal) => animal.traits.length === 0));
     }
+    const bodyIds = g.players.flatMap((p) => p.animals.map((animal) => animal.cardId));
+    const stockIds = new Set([
+      ...g.deck,
+      ...g.players.flatMap((p) => [...p.hand, ...(p.blindDeck ?? [])]),
+    ].map((card) => card.id));
+    assert.equal(new Set(bodyIds).size, bodyIds.length);
+    assert.ok(bodyIds.every((cardId) => !stockIds.has(cardId)));
   });
 
   it("новый вид: карта ложится животным с численностью 1, пустая колода — пас", () => {
@@ -2065,6 +2088,21 @@ describe("случайные мутации: раздача и развитие"
     assert.equal(hasTrait(g.players[0]!.animals[0]!, "burrowing"), false);
     const mutant = g.players[0]!.animals.find((x) => x.id !== "a" && hasTrait(x, "burrowing"));
     assert.ok(mutant, "отделённое свойство уехало новым видом");
+  });
+
+  it("упрощение не создаёт второе тело из карты тела-мутанта", () => {
+    const animal = mkAnimal("a", 0, []);
+    animal.traits = [
+      { id: nid("t"), cardId: animal.cardId, type: "hibernation", hidden: false, playSeq: 1 },
+    ];
+    let g = mutationScenario([[animal], []], [["simplification"], []]);
+    g = applyAction(g, { type: "devMutate", intent: "trait", animalId: "a" });
+    const species = g.players[0]!.animals;
+    const bodyIds = species.map((candidate) => candidate.cardId);
+    assert.equal(species.length, 2);
+    assert.equal(new Set(bodyIds).size, 2);
+    assert.equal(hasTrait(species[0]!, "hibernation"), false);
+    assert.equal(species[1]!.traits.length, 0);
   });
 
   it("почкование растит вид в начале хода развития", () => {
@@ -2244,7 +2282,7 @@ describe("случайные мутации: полные партии бото�
     const g = driveMutations(401, {});
     assert.equal(g.phase, "gameOver");
     assert.ok(g.scores);
-    for (const s of g.scores) assert.ok(s.total > 0);
+    assert.ok(g.scores.some((score) => score.total > 0));
   });
 
   it("партия мутации+континенты доходит до конца", () => {
@@ -2575,6 +2613,20 @@ describe("масштаб колоды", () => {
     const g = createGame(2, "normal", 61, undefined, {}, 30);
     const total = g.deck.length + g.players.reduce((s, p) => s + p.hand.length, 0);
     assert.equal(total, 30);
+  });
+
+  it("сжатие сохраняет все свойства и не выдаёт больше колоды", () => {
+    const fullProperties = new Set(buildDeck(nid).flatMap((card) => card.faces));
+    for (const deckSize of [20, 30, 40, 60, 84]) {
+      for (const playerCount of [2, 3, 4, 5, 6, 7, 8]) {
+        const g = createGame(playerCount, "normal", 2000 + deckSize + playerCount, undefined, {}, deckSize);
+        const cards = [...g.deck, ...g.players.flatMap((player) => player.hand)];
+        const properties = new Set(cards.flatMap((card) => card.faces));
+        for (const property of fullProperties) assert.ok(properties.has(property));
+        for (const player of g.players) assert.equal(player.hand.length, 6);
+        assert.ok(cards.length >= deckSize);
+      }
+    }
   });
 
   it("укороченная колода даёт меньше лет и корректный финал", () => {

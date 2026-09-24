@@ -350,8 +350,10 @@ export function canRageAttack(state: GameState, attacker: Animal, prey: Animal):
 
 export function animalValue(animal: Animal): number {
   let v = 2 * (animal.population ?? 1);
+  const seenCards = new Set<string>();
   for (const t of animal.traits) {
-    if (!isActive(t)) continue;
+    if (!isActive(t) || seenCards.has(t.cardId)) continue;
+    seenCards.add(t.cardId);
     v += 1 + TRAITS[t.type].scoreBonus;
   }
   return v;
@@ -471,17 +473,20 @@ export function liveScore(state: GameState, playerId: number): number {
   const p = state.players.find((x) => x.id === playerId);
   if (!p) return 0;
   let total = 0;
+  const seenCards = new Set<string>();
   for (const a of p.animals) {
     total += 2 * (a.population ?? 1);
     for (const t of a.traits) {
-      if (t.disabled) continue;
+      if (t.disabled || seenCards.has(t.cardId)) continue;
+      seenCards.add(t.cardId);
       total += 1 + TRAITS[t.type].scoreBonus;
     }
   }
   for (const pending of state.pendingRegeneration ?? []) {
     if (pending.ownerId !== playerId) continue;
     for (const t of pending.traits ?? []) {
-      if (t.disabled) continue;
+      if (t.disabled || seenCards.has(t.cardId)) continue;
+      seenCards.add(t.cardId);
       total += 1 + TRAITS[t.type].scoreBonus;
     }
   }

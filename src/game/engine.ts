@@ -68,6 +68,13 @@ import {
 export const AI_NAMES = ["Дарвин", "Уоллес", "Мендель", "Линней", "Кювье", "Ламарк", "Геккель"];
 
 /**
+ * Сколько хищников могут атаковать за один ход игрока (решение владельца
+ * от 24.09.2026). Поверх правила «одно животное — одна охота за год»
+ * (отслеживается в `Animal.huntedYear`).
+ */
+export const HUNTS_PER_TURN = 2;
+
+/**
  * Запись в журнал. Локализация (волна 8): движок продолжает писать готовый
  * русский `text` (его проверяют тесты и его показывают старые кадры без key),
  * а рядом кладёт машиночитаемые `key` + `params` — клиент при lang=en рендерит
@@ -111,15 +118,25 @@ function nid(state: GameState, prefix: string): string {
 }
 
 /**
- * Колода партии: полный состав либо масштабированный до deckSize.
- * Сначала число копий свойств масштабируется (минимум 1 на уникальную карту),
- * затем размер доводится точно: лишние карты убираются с конца, недостающие —
- * копии случайных карт (с новыми id; партии остаются воспроизводимыми).
+ * Колода партии: полный состав либо масштабированная до deckSize.
+ * Масштаб считается вниз, поэтому каждая уникальная карта остаётся в
+ * укороченной колоде. Запрошенный размер ниже обязательной подготовки или
+ * состава поднимается: все игроки получают свою долю, а в общей колоде
+ * остаётся хотя бы одна карта. Недостающие копии добираются из уже
+ * представленных карт с новыми id, поэтому партия остаётся воспроизводимой.
  */
 function buildScaledDeck(state: GameState, deckSize?: number): Card[] {
   const nextId = (prefix: string) => nid(state, prefix);
-  const target = deckSize && deckSize > 0 ? Math.floor(deckSize) : 0;
-  if (!target) return buildDeck(nextId, state.modules);
+  const requested = deckSize && deckSize > 0 ? Math.floor(deckSize) : 0;
+  if (!requested) return buildDeck(nextId, state.modules);
+  const dealEach = state.modules.randomMutations ? 7 : state.modules.plants ? 8 : 6;
+  const startingSpecies = state.modules.randomMutations ? 3 : 0;
+  const firstDrawEach = state.modules.randomMutations ? startingSpecies + 2 : 1;
+  const minimum = Math.max(
+    deckSizeFor(0, state.modules),
+    state.players.length * (dealEach + startingSpecies + firstDrawEach) + 1,
+  );
+  const target = Math.max(requested, minimum);
   const base = deckSizeFor(1, state.modules);
   const cards = buildDeck(nextId, state.modules, target / base);
   while (cards.length > target) cards.pop();
@@ -206,15 +223,19 @@ export function createGame(
     state.floraDeckCount = state.floraDeck.length;
   }
   if (state.modules.randomMutations) {
-    // «Случайные мутации»: руки нет — у каждого своя слепая колода (7 карт),
-    // разыгрывается верхняя карта после объявления способа розыгрыша.
+    // «Случайные мутации»: сначала каждому выдают семь карт в личную
+    // колоду, затем ещё три карты рубашкой вверх — это стартовые виды.
     for (const p of state.players) {
       for (let i = 0; i < 7; i++) {
         const c = state.deck.pop();
         if (c) p.blindDeck!.push(c);
       }
+      for (let i = 0; i < 3; i++) {
+        const c = state.deck.pop();
+        if (c) spawnSpecies(state, p, c);
+      }
     }
-    log(state, `Случайные мутации: у каждого игрока личная колода из 7 карт.`, "log.mutationsIntro", undefined, "good");
+    log(state, `Случайные мутации: у каждого игрока личная колода из 7 карт и три стартовых вида.`, "log.mutationsIntro", undefined, "good");
   } else {
     // «Растения» раздают по 8 карт (правила дополнения), базовая игра — по 6.
     const dealEach = state.modules.plants ? 8 : 6;
@@ -826,11 +847,12 @@ function hookAsTrait(hook: NonNullable<TraitDef["onPartnerFed"]>): TraitId {
   return hook === "communication" ? "communication" : "cooperation";
 }
 
-function triggerScavenger(state: GameState, hunterOwnerId: number) {
+function triggerScavenger(state: GameState, hunterOwnerId: number, excludeAnimalId?: string) {
   const n = state.players.length;
   for (let k = 0; k < n; k++) {
     const p = state.players[(hunterOwnerId + k) % n]!;
     for (const a of p.animals) {
+      if (a.id === excludeAnimalId) continue;
       const hasScav = a.traits.some((t) => t.type === "scavenger" && isActive(t)) && !isAsleep(a);
       if (!hasScav) continue;
       if (a.hibernating) continue;
@@ -860,7 +882,7 @@ export function legalFeedActions(state: GameState, playerId: number): GameAction
   const actions: GameAction[] = [];
 
   // «Трава и грибы»: ход бешенства — только обязательная атака бешеного
-  // животного (любым допустимым образом) и завершение хода.
+  // животного. Завершение остаётся страховкой лишь при отсутствии жертвы.
   if (state.rageTurn) {
     const mad = findAnimal(state, state.rageTurn.animalId);
     if (mad && canRageAttackWith(mad)) {
@@ -870,7 +892,7 @@ export function legalFeedActions(state: GameState, playerId: number): GameAction
         }
       }
     }
-    actions.push({ type: "feedEndTurn" });
+    if (!actions.length) actions.push({ type: "feedEndTurn" });
     return actions;
   }
 
@@ -942,8 +964,16 @@ export function legalFeedActions(state: GameState, playerId: number): GameAction
       }
     }
     // Сытый хищник не охотится — даже ради жирового запаса; парализованный тоже.
-    // Убежище занимает ход вместо еды или атаки.
-    if (canHuntWith(state, a) && !used.carnivores.includes(a.id) && !used.foodTaken && !used.sheltered) {
+    // Убежище занимает ход вместо еды или атаки. Не чаще одного раза в год
+    // (huntedYear) и не более двух атак за один ход (used.carnivores).
+    if (
+      canHuntWith(state, a) &&
+      !used.carnivores.includes(a.id) &&
+      a.huntedYear !== state.year &&
+      used.carnivores.length < HUNTS_PER_TURN &&
+      !used.foodTaken &&
+      !used.sheltered
+    ) {
       for (const prey of allAnimals(state)) {
         if (canAttack(state, a, prey)) {
           actions.push({ type: "feedHunt", carnivoreId: a.id, preyId: prey.id });
@@ -1331,8 +1361,19 @@ function feedBlockOf(
           ? block("Хищники накормлены или не могут охотиться.", "feedBlock.huntersFed")
           : block("Нет голодного хищника.", "feedBlock.noHunter");
       }
-      const ready = hunters.filter((a) => !used.carnivores.includes(a.id));
-      if (!ready.length) return block("Все хищники уже атаковали в этот ход.", "feedBlock.huntersUsed");
+      const ready = hunters.filter(
+        (a) => !used.carnivores.includes(a.id) && a.huntedYear !== state.year,
+      );
+      if (!ready.length) {
+        return hunters.length
+          ? block("Все хищники уже охотились в этом году.", "feedBlock.huntersUsed")
+          : p.animals.some(isCarnivoreLike)
+            ? block("Хищники накормлены или не могут охотиться.", "feedBlock.huntersFed")
+            : block("Нет голодного хищника.", "feedBlock.noHunter");
+      }
+      if (used.carnivores.length >= HUNTS_PER_TURN) {
+        return block("За один ход атакуют не более двух хищников.", "feedBlock.huntLimit");
+      }
       const prey = allAnimals(state).some((t) => ready.some((c) => canAttack(state, c, t)));
       if (!prey) return block("Нет добычи, доступной для атаки.", "feedBlock.noPrey");
       return null;
@@ -1658,8 +1699,8 @@ function finishHuntSuccess(
       }
     }
   } else {
-    // Бешеное животное добычу не ест, но падальщик кормится (правило дополнения).
-    triggerScavenger(state, hunter.id);
+    // Бешеное животное не получает фишку даже за собственное «Падальщик».
+    triggerScavenger(state, hunter.id, carnivore.id);
   }
   // В мутациях ядовитая добыча убивает одну особь сразу, а не в вымирание.
   // Базовая игра по-прежнему использует отложенный флаг poisoned.
@@ -2085,10 +2126,12 @@ function resolveSimplification(state: GameState, p: Player, card: Card, target: 
   if (last) {
     target.traits = target.traits.filter((t) => t.id !== last.id);
     if (target.neoplasia?.id === last.id) target.neoplasia = undefined;
-    const mutant = spawnSpecies(state, p, cardShell(last.cardId, last.type), target.zoneId);
-    mutant.traits.push(makeTrait(state, cardShell(last.cardId, last.type), last.type, { playSeq: last.playSeq }));
-    settleAfterTraitChange(state, mutant);
-    ev(state, { kind: "traitPlaced", animalId: mutant.id, type: last.type, hidden: false });
+    if (last.cardId !== target.cardId) {
+      const mutant = spawnSpecies(state, p, cardShell(last.cardId, last.type), target.zoneId);
+      mutant.traits.push(makeTrait(state, cardShell(last.cardId, last.type), last.type, { playSeq: last.playSeq }));
+      settleAfterTraitChange(state, mutant);
+      ev(state, { kind: "traitPlaced", animalId: mutant.id, type: last.type, hidden: false });
+    }
     log(state, `${p.name}: «Упрощение» — «${TRAITS[last.type].name}» отделяется новым видом.`, "log.simplificationSplit", { name: p.name, trait: last.type }, "bad");
   }
   spawnSpecies(state, p, card, target.zoneId);
@@ -2397,10 +2440,14 @@ function startFoodRoll(state: GameState) {
   const n = state.players.length;
   if (state.modules.plants || state.modules.fungi) {
     // «Растения»/«Трава и грибы» + «Континенты»: на континентах еда — на
-    // растениях и флоре; в Океане кормовая база определяется по обычным
-    // правилам (таблица + эдификаторы). Флора добавляется в revealAndStartFood.
+    // растениях и флоре; в Океане кормовая база определяется по официальной
+    // таблице (без броска) + эдификаторы. Флора добавляется в revealAndStartFood.
     advanceNeoplasia(state);
-    const bases = territoryBases(n);
+    const bases: Record<TerritoryId, number> = {
+      laurasia: 0,
+      gondwana: 0,
+      ocean: territoryFoodSpec(n).ocean,
+    };
     for (const a of allAnimals(state)) {
       if (a.hibernating) continue;
       if (!hasTrait(a, "edificator")) continue;
@@ -2421,10 +2468,16 @@ function startFoodRoll(state: GameState) {
   if (state.modules.continents) {
     // Неоплазия поднимается в начале определения кормовой базы (правило).
     advanceNeoplasia(state);
-    // Официальная таблица: у каждой территории своя кормовая база.
-    // Кубики бросаются для атмосферы аудита: значения нужны для UI, еда — из таблицы.
-    const dice = [dieFor(state), dieFor(state)];
-    const bases = territoryBases(n);
+    // Официальная таблица дополнения: у каждой территории своя база.
+    // Лавразия — белые кубики, Гондвана — цветные, Океан — константа.
+    const spec = territoryFoodSpec(n);
+    const laurasia = rollSpec(state, spec.laurasia);
+    const gondwana = rollSpec(state, spec.gondwana);
+    const bases: Record<TerritoryId, number> = {
+      laurasia: laurasia.food,
+      gondwana: gondwana.food,
+      ocean: spec.ocean,
+    };
     // Эдификаторы добавляют по 2 фишки в свою территорию.
     for (const a of allAnimals(state)) {
       if (a.hibernating) continue;
@@ -2433,31 +2486,33 @@ function startFoodRoll(state: GameState) {
       bases[z] += 2;
       ev(state, { kind: "edificator", territory: z, amount: 2 });
     }
+    const dice = [...laurasia.dice, ...gondwana.dice];
     state.foodRoll = dice;
     state.territoryFood = bases;
     state.foodBank = bases.laurasia + bases.gondwana + bases.ocean;
     ev(state, { kind: "diceRoll", dice, total: state.foodBank });
+    const lRoll = `${laurasia.dice.join(" + ")}${spec.laurasia.bonus ? ` + ${spec.laurasia.bonus}` : ""}`;
+    const gRoll = `${gondwana.dice.join(" + ")}${spec.gondwana.bonus ? ` + ${spec.gondwana.bonus}` : ""}`;
     log(
       state,
       `Кормовые базы — Лавразия ${bases.laurasia}, Гондвана ${bases.gondwana}, Океан ${bases.ocean}.`,
       "log.basesRoll",
-      { l: bases.laurasia, g: bases.gondwana, o: bases.ocean },
+      { l: bases.laurasia, g: bases.gondwana, o: bases.ocean, lroll: lRoll, groll: gRoll },
       "good",
     );
     return;
   }
-  const dice = n === 2 ? [dieFor(state)] : [dieFor(state), dieFor(state)];
-  let food = dice.reduce((s, d) => s + d, 0);
-  if (n === 2) food += 2;
-  else if (n >= 4) food += 2;
+  const spec = baseFoodSpec(n);
+  const { dice, food } = rollSpec(state, spec);
   state.foodRoll = dice;
   state.foodBank = food;
   ev(state, { kind: "diceRoll", dice, total: food });
+  const extra = spec.bonus ? ` (+${spec.bonus})` : "";
   log(
     state,
-    `Кубики кормовой базы: ${dice.join(" + ")}${n !== 3 ? " (+2)" : ""} = ${food}.`,
+    `Кубики кормовой базы: ${dice.join(" + ")}${extra} = ${food}.`,
     "log.diceBank",
-    { dice: dice.join(" + "), extra: n !== 3 ? " (+2)" : "", food },
+    { dice: dice.join(" + "), extra, food },
     "good",
   );
 }
@@ -2511,14 +2566,45 @@ function freshTurnUse(): FeedTurnUse {
   };
 }
 
-/** Кормовые базы «Континентов» по официальной таблице (игроки → Лавразия/Гондвана/Океан). */
-export function territoryBases(playerCount: number): Record<TerritoryId, number> {
-  if (playerCount <= 2) return { laurasia: 8, gondwana: 7, ocean: 5 };
-  if (playerCount === 3) return { laurasia: 11, gondwana: 10, ocean: 7 };
-  if (playerCount === 4) return { laurasia: 14, gondwana: 13, ocean: 9 };
-  // Свыше четырёх (нестандартная партия) — растём по +2/+2/+1 на игрока.
-  const extra = playerCount - 4;
-  return { laurasia: 14 + 2 * extra, gondwana: 13 + 2 * extra, ocean: 9 + extra };
+/**
+ * Кормовая база базовой игры по официальной таблице (листок с правилами, блок
+ * «Игра с двумя наборами»): 2 игрока — 1 кубик +2; 3 — 2 кубика; 4 — 2 кубика +2;
+ * 5 — 3 кубика +2; 6 — 3 кубика +4; 7 — 4 кубика +2; 8 — 4 кубика +4.
+ * Больше восьми мест за столом не собирается.
+ */
+export function baseFoodSpec(playerCount: number): { dice: number; bonus: number } {
+  if (playerCount <= 2) return { dice: 1, bonus: 2 };
+  if (playerCount === 3) return { dice: 2, bonus: 0 };
+  if (playerCount === 4) return { dice: 2, bonus: 2 };
+  if (playerCount === 5) return { dice: 3, bonus: 2 };
+  if (playerCount === 6) return { dice: 3, bonus: 4 };
+  if (playerCount === 7) return { dice: 4, bonus: 2 };
+  return { dice: 4, bonus: 4 };
+}
+
+/**
+ * Кормовые базы «Континентов» по официальной таблице PDF (игроки → Лавразия /
+ * Гондвана / Океан). Лавразия набирается белыми кубиками, Гондвана — цветными,
+ * Океан — постоянная величина «число игроков + 1».
+ */
+export function territoryFoodSpec(playerCount: number): {
+  laurasia: { dice: number; bonus: number };
+  gondwana: { dice: number; bonus: number };
+  ocean: number;
+} {
+  if (playerCount <= 2) return { laurasia: { dice: 1, bonus: 0 }, gondwana: { dice: 1, bonus: 2 }, ocean: 3 };
+  if (playerCount === 3) return { laurasia: { dice: 1, bonus: 0 }, gondwana: { dice: 2, bonus: 0 }, ocean: 4 };
+  if (playerCount === 4) return { laurasia: { dice: 1, bonus: 2 }, gondwana: { dice: 2, bonus: 0 }, ocean: 5 };
+  if (playerCount === 5) return { laurasia: { dice: 1, bonus: 3 }, gondwana: { dice: 2, bonus: 2 }, ocean: 6 };
+  if (playerCount === 6) return { laurasia: { dice: 1, bonus: 5 }, gondwana: { dice: 2, bonus: 3 }, ocean: 7 };
+  if (playerCount === 7) return { laurasia: { dice: 2, bonus: 2 }, gondwana: { dice: 3, bonus: 2 }, ocean: 8 };
+  return { laurasia: { dice: 2, bonus: 2 }, gondwana: { dice: 3, bonus: 4 }, ocean: 9 };
+}
+
+/** Бросок кубиков по спецификации: столько кубиков, столько и сумма. */
+function rollSpec(state: GameState, spec: { dice: number; bonus: number }): { dice: number[]; food: number } {
+  const dice = Array.from({ length: spec.dice }, () => dieFor(state));
+  return { dice, food: dice.reduce((s, d) => s + d, 0) + spec.bonus };
 }
 
 /**
@@ -3035,6 +3121,7 @@ function feedHunt(state: GameState, carnivoreId: string, preyId: string) {
     if (!canRageAttack(state, carnivore, prey)) return;
     state.rageTurn = null;
     state.turnUse.combatUsed = true;
+    carnivore.huntedYear = state.year;
     ev(state, { kind: "huntDeclared", carnivoreId, preyId });
     const atk: PendingAttack = {
       carnivoreId,
@@ -3055,9 +3142,12 @@ function feedHunt(state: GameState, carnivoreId: string, preyId: string) {
     return;
   }
   if (state.turnUse.foodTaken || state.turnUse.sheltered || state.turnUse.carnivores.includes(carnivoreId)) return;
+  if (state.turnUse.carnivores.length >= HUNTS_PER_TURN) return;
+  if (carnivore.huntedYear === state.year) return;
   if (!canAttack(state, carnivore, prey)) return;
   state.turnUse.carnivores.push(carnivoreId);
   state.turnUse.combatUsed = true;
+  carnivore.huntedYear = state.year;
   ev(state, { kind: "huntDeclared", carnivoreId, preyId });
   const atk: PendingAttack = {
     carnivoreId,
@@ -3122,6 +3212,11 @@ function feedHibernate(state: GameState, animalId: string) {
 
 /** «Закончить ход»: передача хода следующему игроку без паса до конца фазы. */
 function feedEndTurn(state: GameState) {
+  if (state.rageTurn) {
+    const mad = findAnimal(state, state.rageTurn.animalId);
+    const mustAttack = mad && canRageAttackWith(mad) && allAnimals(state).some((prey) => canRageAttack(state, mad, prey));
+    if (mustAttack) return;
+  }
   log(state, `${player(state, state.currentPlayerId).name} заканчивает ход.`, "log.endTurn", { name: player(state, state.currentPlayerId).name });
   advanceFeed(state);
 }
@@ -3321,22 +3416,90 @@ function feedRemora(state: GameState, action: RemoraAction) {
   advanceMigrationResponses(state);
 }
 
-/** Разъехались животные с общей парной картой — карта уходит в сброс (правило). */
-function dropCrossTerritoryPairs(state: GameState) {
-  if (!state.modules.continents) return;
+/** Удалить обе физические половины парной карты и учесть её ровно один раз. */
+function discardPairCard(
+  state: GameState,
+  cardId: string,
+  ownerId: number,
+  pendingItems: RegenPending[] = state.pendingRegeneration ?? [],
+) {
   for (const p of state.players) {
-    for (const a of [...p.animals]) {
+    for (const a of p.animals) a.traits = a.traits.filter((t) => t.cardId !== cardId);
+  }
+  for (const pending of pendingItems) {
+    if (pending.traits) pending.traits = pending.traits.filter((t) => t.cardId !== cardId);
+  }
+  player(state, ownerId).discardCount += 1;
+  log(state, `Парное свойство разъехавшихся животных уходит в сброс.`, "log.pairSplit");
+}
+
+/** Найти вторую половину пары, в том числе в очереди регенерации. */
+function findPendingPair(
+  state: GameState,
+  pairWith: string,
+  cardId: string,
+  pendingItems: RegenPending[] = state.pendingRegeneration ?? [],
+): { pending: RegenPending; trait: TraitInstance } | undefined {
+  for (const pending of pendingItems) {
+    const trait = pending.traits?.find((t) => t.pairWith === pairWith && t.cardId === cardId);
+    if (trait) return { pending, trait };
+  }
+  return undefined;
+}
+
+/**
+ * Разъехались животные с общей парной картой — карта уходит в сброс (правило).
+ * Проверяем и живые животные, и тела в очереди регенерации: отсутствие второй
+ * половины на столе не делает уже сброшенную карту действующей.
+ */
+function dropCrossTerritoryPairs(
+  state: GameState,
+  pendingItems: RegenPending[] = state.pendingRegeneration ?? [],
+) {
+  if (!state.modules.continents) return;
+  const dropped = new Set<string>();
+  const zoneOfPending = (pending: RegenPending) => pending.zoneId ?? "laurasia";
+
+  const dropIfSplit = (
+    cardId: string,
+    pairWith: string,
+    zone: TerritoryId | undefined,
+    ownerId: number,
+  ) => {
+    if (dropped.has(cardId)) return;
+    const other = findAnimal(state, pairWith);
+    const otherZone = other?.zoneId ?? findPendingPair(state, pairWith, cardId, pendingItems)?.pending.zoneId;
+    if (otherZone === undefined) {
+      // Оборванная пара не должна оставаться на столе даже после миграции.
+      discardPairCard(state, cardId, ownerId, pendingItems);
+      dropped.add(cardId);
+      return;
+    }
+    if ((zone ?? "laurasia") !== (otherZone ?? "laurasia")) {
+      discardPairCard(state, cardId, ownerId, pendingItems);
+      dropped.add(cardId);
+    }
+  };
+
+  for (const p of state.players) {
+    for (const a of p.animals) {
       for (const t of [...a.traits]) {
         if (!t.pairWith) continue;
-        const other = findAnimal(state, t.pairWith);
-        if (!other) continue;
-        if (a.zoneId !== other.zoneId) {
-          a.traits = a.traits.filter((x) => x.cardId !== t.cardId);
-          other.traits = other.traits.filter((x) => x.cardId !== t.cardId);
-          p.discardCount += 1;
-          log(state, `Парное свойство разъехавшихся животных уходит в сброс.`, "log.pairSplit");
-          // Removing a pair cannot grant swimming; keep the chosen locations.
-        }
+        dropIfSplit(t.cardId, t.pairWith, a.zoneId, p.id);
+      }
+    }
+  }
+  // Пары, обе половины которых пока находятся в очереди, тоже должны быть
+  // проверены после миграции: восстановление не воскресит разорванную карту.
+  for (const pending of pendingItems) {
+    for (const t of [...(pending.traits ?? [])]) {
+      if (!t.pairWith) continue;
+      const other = findAnimal(state, t.pairWith);
+      const otherPending = findPendingPair(state, t.pairWith, t.cardId, pendingItems)?.pending;
+      const otherZone = other?.zoneId ?? otherPending?.zoneId;
+      if (otherZone !== undefined && zoneOfPending(pending) !== otherZone) {
+        discardPairCard(state, t.cardId, pending.ownerId, pendingItems);
+        dropped.add(t.cardId);
       }
     }
   }
@@ -3380,6 +3543,7 @@ function moveAnimalToZoneHuman(state: GameState, animalId: string, zone: Territo
   // Пара (сотрудничество/симбиоз) переезжает вместе: связанных животных
   // перенос не разрывает, иначе свойство слетело бы при смене территории.
   for (const member of pairGroup(state, a)) member.zoneId = zone;
+  dropCrossTerritoryPairs(state);
   return true;
 }
 
@@ -4031,6 +4195,9 @@ function restoreRegenerated(state: GameState) {
         if (t.pairWith === item.animalId) t.pairWith = animal.id;
       }
     }
+    // Восстановленный корпус возвращается в зону съедения. Если партнёр уже
+    // уехал, общая карта должна уйти в сброс, а не снова стать межтерриториальной.
+    dropCrossTerritoryPairs(state, pend ?? []);
     // За регенерировавшее животное карты в добор не идут (правило).
     stats[p.id] = (stats[p.id] ?? 0) + 1;
     ev(state, { kind: "regenerated", ownerId: p.id });
@@ -4052,7 +4219,8 @@ function drawCards(state: GameState) {
       const pop = p.animals.reduce((s, a) => s + (a.population ?? 1), 0);
       let want = Math.max(1, pop - (state.regeneratedThisYear?.[p.id] ?? 0) + 2);
       if (p.animals.length === 0 && (p.blindDeck ?? []).length === 0) {
-        // Спасение на вылет: 10 карт, две сразу животными (по континенту).
+        // Спасение на вылет всегда возвращает новую колоду из десяти карт.
+        // С «Континентами» две из них сразу становятся животными.
         if (state.modules.continents) {
           for (let i = 0; i < 10; i++) {
             const c = state.deck.pop();
@@ -4067,7 +4235,7 @@ function drawCards(state: GameState) {
           playRescueAnimal(state, p, "gondwana");
           continue;
         }
-        want = 6;
+        want = 10;
       }
       for (let i = 0; i < want; i++) {
         const c = state.deck.pop();
@@ -4166,10 +4334,12 @@ function finishGame(state: GameState) {
     let animals = 0;
     let traits = 0;
     let extras = 0;
+    const seenCards = new Set<string>();
     for (const a of p.animals) {
       animals += 2 * (a.population ?? 1);
       for (const t of a.traits) {
-        if (t.disabled) continue;
+        if (t.disabled || seenCards.has(t.cardId)) continue;
+        seenCards.add(t.cardId);
         traits += 1;
         extras += TRAITS[t.type].scoreBonus;
       }
@@ -4177,7 +4347,8 @@ function finishGame(state: GameState) {
     for (const pending of state.pendingRegeneration ?? []) {
       if (pending.ownerId !== p.id) continue;
       for (const t of pending.traits ?? []) {
-        if (t.disabled) continue;
+        if (t.disabled || seenCards.has(t.cardId)) continue;
+        seenCards.add(t.cardId);
         traits += 1;
         extras += TRAITS[t.type].scoreBonus;
       }

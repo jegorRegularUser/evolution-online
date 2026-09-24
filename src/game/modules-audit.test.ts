@@ -1,6 +1,6 @@
 import { it } from "node:test";
 import assert from "node:assert/strict";
-import { createGame, applyAction, legalDevActions, legalFeedActions, legalDefenseActions } from "./engine.ts";
+import { createGame, applyAction, legalDevActions, legalFeedActions, legalDefenseActions, baseFoodSpec, territoryFoodSpec } from "./engine.ts";
 import { chooseAIAction } from "./ai.ts";
 import { FLORA, fullMarksPool } from "./flora.ts";
 import { PLANTS, plantTable, shelterCapacity } from "./plants.ts";
@@ -123,10 +123,12 @@ for (let mask = 0; mask < 16; mask++) {
       const continentCards = modules.continents ? (modules.randomMutations ? 10 : 42) : 0;
       const total = 84 + continentCards + (modules.plants ? 36 : 0) + (modules.fungi ? 8 : 0) + (modules.randomMutations ? 28 : 0);
       const deal = modules.randomMutations ? 7 : modules.plants ? 8 : 6;
-      assert.equal(g.deck.length, total - n * deal);
+      const startingSpecies = modules.randomMutations ? 3 : 0;
+      assert.equal(g.deck.length, total - n * (deal + startingSpecies));
       for (const p of g.players) {
         assert.equal(p.hand.length, modules.randomMutations ? 0 : deal);
         assert.equal(p.blindDeck?.length ?? 0, modules.randomMutations ? deal : 0);
+        assert.equal(p.animals.length, startingSpecies);
       }
       if (modules.plants) {
         assert.equal(g.plants!.length, n + 1);
@@ -148,9 +150,22 @@ for (let mask = 0; mask < 16; mask++) {
         g = applyAction(g, { type: "rollFoodBank" });
         assert.ok(g.foodRoll!.every((die) => Number.isInteger(die) && die >= 1 && die <= 6));
         if (modules.continents) {
-          const ocean = 2 * n + 1;
-          assert.deepEqual(g.territoryFood, { laurasia: modules.plants || modules.fungi ? 0 : 3 * n + 2, gondwana: modules.plants || modules.fungi ? 0 : 3 * n + 1, ocean });
-        } else assert.equal(g.foodBank, g.foodRoll!.reduce((a, b) => a + b, 0) + (n === 3 ? 0 : 2));
+          // Официальная таблица: Лавразия — белые кубики, Гондвана — цветные,
+          // Океан — константа «число игроков + 1». С растениями/грибами еда на
+          // континентах лежит на столе флоры, поэтому базы континентов нулевые.
+          const spec = territoryFoodSpec(n);
+          const flora = modules.plants || modules.fungi;
+          const sum = (from: number, count: number) =>
+            g.foodRoll!.slice(from, from + count).reduce((a, b) => a + b, 0);
+          const laurasia = flora ? 0 : sum(0, spec.laurasia.dice) + spec.laurasia.bonus;
+          const gondwana = flora
+            ? 0
+            : sum(spec.laurasia.dice, spec.gondwana.dice) + spec.gondwana.bonus;
+          assert.deepEqual(g.territoryFood, { laurasia, gondwana, ocean: spec.ocean });
+        } else {
+          const spec = baseFoodSpec(n);
+          assert.equal(g.foodBank, g.foodRoll!.reduce((a, b) => a + b, 0) + spec.bonus);
+        }
       } else assert.equal(g.foodBank, 0);
       invariants(g);
     }

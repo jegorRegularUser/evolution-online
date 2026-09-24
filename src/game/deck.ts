@@ -121,7 +121,7 @@ export const BASE_DECK_SIZE = DECK_SIZE;
 
 /** Сколько копий карты нужно при масштабе: минимум одна на уникальную карту. */
 function scaledCount(n: number, scale: number): number {
-  return Math.max(1, Math.round(n * scale));
+  return Math.max(1, Math.floor(n * scale));
 }
 
 /**
