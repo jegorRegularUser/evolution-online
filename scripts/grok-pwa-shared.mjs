@@ -6,7 +6,17 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const DEFAULT_APP_NAME = "Grok App";
+export const APP_NAME = "Эволюция";
+export const APP_SHORT_NAME = "Эволюция";
+export const APP_DESCRIPTION =
+  "Происхождение видов — создавайте животных, играйте свойства, охотьтесь и выживайте.";
+export const APP_THEME_COLOR = "#111410";
+export const APP_BACKGROUND_COLOR = "#111410";
+// Пустой query-параметр сохраняет тот же deep-link контракт, что и
+// `?room=CODE`: приглашение передаёт реальный код, а стартовая страница не
+// подставляет выдуманный literal-код.
+export const APP_START_URL = "/?room=";
+export const DEFAULT_APP_NAME = APP_NAME;
 export const OG_SERVICE_URL_DEFAULT = "https://og.grok.me";
 export const OG_SITE_REL_PATH = "src/lib/og/site.json";
 
@@ -120,8 +130,7 @@ export function isInstallQuery(url) {
   const query = String(url ?? "").split("?", 2)[1] ?? "";
   const params = new URLSearchParams(query);
   const install = params.get("install");
-  const platform = (params.get("platform") ?? "").toLowerCase();
-  return (install === "1" || install === "true") && platform === "ios";
+  return install === "1" || install === "true";
 }
 
 /** Paths that can carry an app document (vs assets / API / internals). */
@@ -151,29 +160,81 @@ export function stripInstallParams(url) {
   return rest ? `${path}?${rest}` : path;
 }
 
-export function renderInstallPageHtml(template, { host, url } = {}) {
-  return String(template)
-    .replaceAll("{{APP_NAME}}", escapeHtml(appNameFromHost(host)))
+const INSTALL_COPY = [
+  ['lang="en"', 'lang="ru"'],
+  ['content="#000000"', 'content="#111410"'],
+  ["Add {{APP_NAME}} to your&nbsp;Home&nbsp;Screen", "Добавить {{APP_NAME}} на&nbsp;экран&nbsp;«Домой»"],
+  ["Add {{APP_NAME}} to your Home Screen", "Добавить {{APP_NAME}} на экран «Домой»"],
+  ["Add to Home Screen", "На экран «Домой»"],
+  ["Open this link on your iPhone&nbsp;or&nbsp;iPad", "Откройте эту ссылку на iPhone&nbsp;или&nbsp;iPad"],
+  ["This page shows how to add {{APP_NAME}} to an iOS Home Screen.", "Эта страница показывает, как добавить {{APP_NAME}} на экран «Домой» iOS."],
+  ["Open {{APP_NAME}}", "Открыть {{APP_NAME}}"],
+  ["/__grok/install/assets/homescreen/logo-grok.svg", "/img/meta/app-icon.png"],
+  ["Powered by Grok", "Работает на Эволюция"],
+  ["Powered by", "Работает на"],
+  [">Grok<", ">Эволюция<"],
+  [">Tap<", ">Нажмите<"],
+  [">Select<", ">Выберите<"],
+  ["in the bottom bar, then", "на нижней панели, затем"],
+  ["in the tool bar, then", "на панели инструментов, затем"],
+  ["in the bottom bar", "на нижней панели"],
+  ["in the tool bar", "на панели инструментов"],
+];
+
+/** Переводит шаблон iOS-подсказки без правки чужого HTML-ассета. */
+function localizeInstallMarkup(markup) {
+  return INSTALL_COPY.reduce(
+    (html, [from, to]) => html.replaceAll(from, to),
+    markup,
+  );
+}
+
+export function renderInstallPageHtml(template, { host: _host, url } = {}) {
+  return localizeInstallMarkup(String(template))
+    .replaceAll("{{APP_NAME}}", escapeHtml(APP_NAME))
     .replaceAll("{{APP_URL}}", escapeHtml(stripInstallParams(url)));
 }
 
-export function renderWebManifest(hostHeader) {
-  const name = appNameFromHost(hostHeader);
+export function renderWebManifest(_hostHeader) {
   return JSON.stringify(
     {
-      name,
-      short_name: name,
+      name: APP_NAME,
+      short_name: APP_SHORT_NAME,
+      description: APP_DESCRIPTION,
+      lang: "ru",
       id: "/",
-      start_url: "/",
+      // `room=` оставлен в start_url намеренно: существующий вход `?room=CODE`
+      // остаётся deep-link совместимым, а нестандартный literal-код не подставляется.
+      start_url: APP_START_URL,
       scope: "/",
       display: "standalone",
-      background_color: "#000000",
-      theme_color: "#000000",
+      background_color: APP_BACKGROUND_COLOR,
+      theme_color: APP_THEME_COLOR,
+      categories: ["games"],
       icons: [
         {
           src: "/__grok/icon-180.png",
           sizes: "180x180",
           type: "image/png",
+          purpose: "any",
+        },
+        {
+          src: "/__grok/icon-192.png",
+          sizes: "192x192",
+          type: "image/png",
+          purpose: "any",
+        },
+        {
+          src: "/__grok/icon-512.png",
+          sizes: "512x512",
+          type: "image/png",
+          purpose: "any",
+        },
+        {
+          src: "/__grok/icon-512.png",
+          sizes: "512x512",
+          type: "image/png",
+          purpose: "maskable",
         },
       ],
     },
@@ -187,6 +248,8 @@ export function grokPwaHeadTags(appName = DEFAULT_APP_NAME) {
     // Standalone display comes from the manifest ("display": "standalone");
     // the legacy *-web-app-capable metas it replaces are deliberately absent.
     ["manifest", '<link rel="manifest" href="/__grok/manifest.webmanifest">'],
+    ["icon", '<link rel="icon" type="image/png" sizes="192x192" href="/__grok/icon-192.png">'],
+    ["mask-icon", '<link rel="mask-icon" href="/__grok/icon-512.png" color="#111410">'],
     ["apple-touch-icon", '<link rel="apple-touch-icon" href="/__grok/icon-180.png">'],
     [
       "apple-mobile-web-app-title",
@@ -196,7 +259,7 @@ export function grokPwaHeadTags(appName = DEFAULT_APP_NAME) {
       "apple-mobile-web-app-status-bar-style",
       '<meta name="apple-mobile-web-app-status-bar-style" content="black">',
     ],
-    ["theme-color", '<meta name="theme-color" content="#000000">'],
+    ["theme-color", `<meta name="theme-color" content="${APP_THEME_COLOR}">`],
   ];
 }
 
@@ -254,7 +317,11 @@ export function readOgSite(cwd = process.cwd()) {
 
 /** Public path of an on-disk share card, or "" if neither file exists. */
 export function ogCardPublicPath(cwd = process.cwd()) {
+  // Если рядом есть PWA-брендированный вариант, он приоритетнее; корневой
+  // legacy-ассет остаётся fallback для старых workspace и brand-check.
+  if (existsSync(join(cwd, "public/__grok/og.jpg"))) return "/__grok/og.jpg";
   if (existsSync(join(cwd, "public/og.jpg"))) return "/og.jpg";
+  if (existsSync(join(cwd, "public/__grok/og.png"))) return "/__grok/og.png";
   if (existsSync(join(cwd, "public/og.png"))) return "/og.png";
   return "";
 }
@@ -277,7 +344,9 @@ export function snapshotOgIdentity(cwd = process.cwd()) {
     if (siteHasCustomCard(site)) delete site.card;
     if (site.image) delete site.image;
   }
-  if (existsSync(join(cwd, "public/x-banner.jpg"))) {
+  if (existsSync(join(cwd, "public/__grok/x-banner.jpg"))) {
+    site.banner = site.banner || "/__grok/x-banner.jpg";
+  } else if (existsSync(join(cwd, "public/x-banner.jpg"))) {
     site.banner = site.banner || "/x-banner.jpg";
   }
   return { site };
@@ -345,10 +414,14 @@ export function grokOgHeadTags({
   const tags = [
     `<meta name="twitter:card" content="summary_large_image">`,
     `<meta property="og:title" content="${escapeHtml(title)}">`,
+    `<meta name="twitter:title" content="${escapeHtml(title)}">`,
   ];
   const description = String(site.description ?? "").trim();
   if (description) {
-    tags.push(`<meta property="og:description" content="${escapeHtml(description)}">`);
+    tags.push(
+      `<meta property="og:description" content="${escapeHtml(description)}">`,
+      `<meta name="twitter:description" content="${escapeHtml(description)}">`,
+    );
   }
   if (String(site.type ?? "").toLowerCase() === "x:game") {
     tags.push(`<meta property="og:type" content="x:game">`);
@@ -362,6 +435,7 @@ export function grokOgHeadTags({
     const color = !custom ? placeholderCardColor(site) : "";
     if (color) image += `&color=${encodeURIComponent(color)}`;
     tags.push(`<meta property="og:image" content="${escapeHtml(image)}">`);
+    tags.push(`<meta name="twitter:image" content="${escapeHtml(image)}">`);
     tags.push(`<meta property="og:image:width" content="1200">`);
     tags.push(`<meta property="og:image:height" content="630">`);
     const banner = String(site.banner ?? "").trim();
@@ -437,6 +511,8 @@ export function injectGrokPwaHead(html, ctx = {}) {
   const missing = grokPwaHeadTags(appName)
     .filter(([key]) => {
       if (key === "manifest") return !next.includes('href="/__grok/manifest.webmanifest"');
+      if (key === "icon") return !next.includes('href="/__grok/icon-192.png"');
+      if (key === "mask-icon") return !next.includes('rel="mask-icon"');
       if (key === "apple-touch-icon") return !next.includes('href="/__grok/icon-180.png"');
       return !next.includes(`name="${key}"`);
     })

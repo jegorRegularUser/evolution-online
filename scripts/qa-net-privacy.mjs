@@ -182,7 +182,9 @@ try {
 
   // ── Открытый стол наблюдается без пароля (регресс старого пути) ──────────
   // Хост переключает стол в «Открытый» — после этого зритель входит без цифр.
-  const openToggle = host.getByRole("button", { name: /Приватный|Открытый/ }).first();
+  const openToggle = host
+    .getByRole("button", { name: /стол.*(?:приватн|открыт)/i })
+    .first();
   if (await openToggle.count()) {
     await safeClick(openToggle, 4000);
     await sleep(1200);

@@ -58,8 +58,15 @@ test("non-.sql entries are dropped (readdir also yields the auth/ directory)", (
 
 test("the auth schema ships outside the globbed directory", () => {
   const migrationsDir = join(projectRoot(), "migrations");
-  assert.deepEqual(pendingMigrations(readdirSync(migrationsDir), []), []);
-  assert.ok(readdirSync(join(migrationsDir, "auth")).includes("0001_auth.sql"));
+  const rootMigrations = readdirSync(migrationsDir).filter(isMigrationFile);
+  const pending = pendingMigrations(rootMigrations, []);
+
+  // В корне намеренно лежат только игровые миграции; auth-копия появляется
+  // отдельным auth-on шагом и не должна молча попадать в этот glob.
+  assert.ok(rootMigrations.length > 0);
+  assert.deepEqual(pending.map(({ name }) => name), rootMigrations);
+  assert.equal(rootMigrations.includes(AUTH_MIGRATION), false);
+  assert.ok(readdirSync(join(migrationsDir, "auth")).includes(AUTH_MIGRATION));
 });
 
 test("this workspace's auth schema copy is byte-identical to its source", () => {

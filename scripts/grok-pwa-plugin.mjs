@@ -1,8 +1,9 @@
 /**
- * Dev/preview (Vite) half of the platform PWA chrome: serves the ?install=1
- * tutorial and the per-app manifest, and injects missing PWA head tags into
- * app documents. The deployed-app half lives in server/middleware/grok-pwa.ts;
- * both share scripts/grok-pwa-shared.mjs.
+ * Dev/preview (Vite) half of the platform PWA chrome: serves the `?install=1`
+ * tutorial (including the bare query), the branded manifest and compatibility
+ * favicon, and injects missing PWA head tags into app documents. The deployed-
+ * app half lives in server/middleware/grok-pwa.ts; both share
+ * scripts/grok-pwa-shared.mjs.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -21,6 +22,7 @@ import {
 export const GROK_OG_IDENTITY_ID = "virtual:grok-og-identity";
 
 const INSTALL_PAGE_PATH = join(dirname(fileURLToPath(import.meta.url)), "install-page.html");
+const FAVICON_PATH = join(dirname(fileURLToPath(import.meta.url)), "../public/__grok/favicon.svg");
 
 function requestHost(req) {
   const forwarded = req.headers["x-forwarded-host"];
@@ -49,6 +51,24 @@ function serveGrokPwa(middlewares) {
     const method = (req.method ?? "GET").toUpperCase();
     if (method !== "GET") {
       next();
+      return;
+    }
+
+    // Некоторые браузеры всё ещё запрашивают favicon по историческому пути.
+    // Отдаём тот же брендированный SVG, не оставляя запись в 404.
+    if (pathOnly === "/favicon.ico") {
+      try {
+        const body = readFileSync(FAVICON_PATH);
+        res.statusCode = 200;
+        res.setHeader("content-type", "image/svg+xml; charset=utf-8");
+        res.setHeader("cache-control", "public, max-age=86400");
+        res.setHeader("content-length", String(body.byteLength));
+        res.end(body);
+      } catch (err) {
+        console.error("[app-builder] favicon missing:", err);
+        res.statusCode = 404;
+        res.end("favicon unavailable");
+      }
       return;
     }
 
