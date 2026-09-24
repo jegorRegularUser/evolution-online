@@ -608,14 +608,8 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
 export function StatsScreen({ onClose }: { onClose: () => void }) {
   const tt = useT();
   const lang = useLang();
+  const titleId = useId();
   const stats = useMemo(() => readStats(), []);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   const games = stats.games;
   const wins = games.filter((g) => g.won).length;
@@ -640,15 +634,18 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
   ];
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-3 backdrop-blur-sm sm:p-6"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+    <DialogShell
+      titleId={titleId}
+      overlayClassName="fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-3 backdrop-blur-sm sm:p-6"
+      panelClassName="relative flex max-h-[92dvh] w-full max-w-2xl flex-col rounded-[var(--radius-xl)] border border-border bg-surface shadow-[var(--shadow-card)]"
+      onBackdropClick={onClose}
+      onEscape={(event) => {
+        event.preventDefault();
+        onClose();
       }}
     >
-      <div className="relative flex max-h-[92dvh] w-full max-w-2xl flex-col rounded-[var(--radius-xl)] border border-border bg-surface shadow-[var(--shadow-card)]">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
-          <h2 className="text-xl">{tt("stats.title")}</h2>
+          <h2 id={titleId} tabIndex={-1} className="text-xl">{tt("stats.title")}</h2>
           <Button variant="secondary" size="sm" onClick={onClose}>
             {tt("common.close")}
           </Button>
@@ -745,7 +742,7 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
                         key={a.id}
                         className={cn(
                           "flex items-start gap-3 rounded-[var(--radius-md)] border px-3 py-2.5",
-                          got ? "border-accent/60 bg-accent/10" : "border-border bg-bg opacity-60",
+                          got ? "border-accent/60 bg-accent/10" : "border-border bg-bg",
                         )}
                       >
                         {got ? (
@@ -765,8 +762,7 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
             </>
           )}
         </div>
-      </div>
-    </div>
+    </DialogShell>
   );
 }
 

@@ -1,7 +1,9 @@
 @import "tailwindcss";
 
 @theme {
-  --font-display: "Fraunces", "Iowan Old Style", "Palatino Linotype", Palatino, serif;
+  /* Единая антиква для латиницы и кириллицы без новой сетевой загрузки.
+     Cambria входит в Windows и покрывает оба набора глифов. */
+  --font-display: "Noto Serif", "Source Serif 4", "PT Serif", Cambria, Georgia, "Times New Roman", serif;
   --font-sans: "Source Sans 3", "Source Sans Pro", "Segoe UI", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 
@@ -11,8 +13,15 @@
   --color-surface-2: #252b21;
   --color-fg: #e6e2d6;
   --color-muted: #9aa08f;
-  --color-subtle: #6d7366;
+  --color-subtle: #aeb6a4;
   --color-accent: #8b9a74;
+  /* Чернила для пергамента: те же тона, но с контрастом не ниже 4.5:1. */
+  --color-accent-ink: #525b44;
+  --color-leaf-ink: #3a5a27;
+  --color-good-ink: #485a3c;
+  --color-clay-ink: #864334;
+  --color-virus-ink: #6e347f;
+  --color-water-ink: #1d526b;
   --color-accent-fg: #111410;
   --color-border: color-mix(in oklab, #e6e2d6 12%, transparent);
   --color-border-strong: color-mix(in oklab, #e6e2d6 22%, transparent);
@@ -82,6 +91,14 @@
     line-height: 1.15;
     font-weight: 600;
   }
+}
+
+/* Светлый носитель требует тёмных чернил, даже если глобальный token рассчитан
+   на тёмные поверхности. Иначе служебная подпись снова опускается ниже AA. */
+.paper-sheet .text-subtle,
+.animal-card .text-subtle,
+.plant-card .text-subtle {
+  color: var(--color-ink-soft);
 }
 
 @media (prefers-reduced-motion: reduce) {

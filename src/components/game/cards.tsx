@@ -82,12 +82,12 @@ export const FoodDots = memo(function FoodDots({ animal }: { animal: Animal }) {
  * помечаются одинаково, и видно, какое свойство к какой паре относится.
  */
 export const PAIR_COLORS = [
-  "#1d6f8b",
-  "#8a4b1f",
-  "#4b7a2a",
-  "#7a3b86",
-  "#a33a3a",
-  "#2f6f57",
+  "#15536a",
+  "#743d19",
+  "#365f1c",
+  "#6b2f75",
+  "#84302f",
+  "#245744",
 ] as const;
 
 /** Метка пары для одного экземпляра свойства: цвет и «кто напарник». */
@@ -143,6 +143,7 @@ export const TraitChip = memo(function TraitChip({
     <span
       ref={anchorRef}
       {...tip.triggerProps}
+      tabIndex={-1}
       data-trait-chip
       style={
         mark && !disabled
@@ -152,13 +153,13 @@ export const TraitChip = memo(function TraitChip({
       className={cn(
         "anim-chip-in relative inline-flex h-6 items-center gap-1 rounded-[var(--radius-xs)] px-1.5 text-[11px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
         disabled
-          ? "bg-virus/15 text-virus line-through decoration-virus/60"
+          ? "bg-virus/15 text-virus-ink line-through decoration-virus-ink/60"
           : def.virusLike
-            ? "bg-virus/20 text-virus ring-1 ring-inset ring-virus/50"
+            ? "bg-virus/20 text-virus-ink ring-1 ring-inset ring-virus-ink/50"
             : def.harmful
               ? "bg-ink/85 text-parchment ring-1 ring-inset ring-clay/60"
               : type === "carnivore"
-                ? "bg-clay/15 text-clay"
+                ? "bg-clay/15 text-clay-ink"
                 : type === "fatTissue"
                   ? "bg-food-yellow/20 text-ink"
                   : "bg-ink/8 text-ink",
@@ -173,16 +174,16 @@ export const TraitChip = memo(function TraitChip({
       )}
       {traitShort(type, lang)}
       {def.extraFood > 0 ? (
-        <span className="text-[9px] font-semibold text-clay" title={t("card.extraFoodNeed", { n: def.extraFood })}>
+        <span className="text-[10px] font-semibold text-clay-ink" title={t("card.extraFoodNeed", { n: def.extraFood })}>
           +{def.extraFood}
         </span>
       ) : null}
       {mark ? (
-        <span className="text-[9px] font-semibold" style={{ color: mark.color }}>
+        <span className="text-[10px] font-semibold" style={{ color: mark.color }}>
           {mark.note}
         </span>
       ) : pair ? (
-        <span className="text-[9px] opacity-70">{t("card.pair")}</span>
+        <span className="text-[10px] text-ink-soft">{t("card.pair")}</span>
       ) : null}
       {fresh ? <span className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-clay" /> : null}
       {bubble}
@@ -249,7 +250,27 @@ export const AnimalCard = memo(function AnimalCard({
   onRename?: (animalId: string, name: string) => void;
 }) {
   const t = useT();
+  const lang = useLang();
   const fed = isFed(animal);
+  const need = speciesNeed(animal);
+  const fallbackName = hasTrait(animal, "obligateCarnivore")
+    ? t("card.obligateCarnivore")
+    : hasTrait(animal, "carnivore")
+      ? t("card.carnivore")
+      : hasTrait(animal, "swimming")
+        ? t("card.water")
+        : t("card.animal");
+  const animalName = animal.name ?? fallbackName;
+  const accessibleName = [
+    name,
+    no ? t("game.pairNo", { n: no }) : null,
+    animalName,
+    animal.traits.length ? animal.traits.map((trait) => traitName(trait.type, lang)).join(", ") : t("card.noTraits"),
+    t("card.foodTitle", { food: animal.food, need }),
+    animal.fatTokens > 0 ? t("card.foodFat", { n: animal.fatTokens }) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   // Inline-правка клички: карандаш у имени раскрывает поле, галочка —
   // сохранить, крестик/Esc — отменить. Номер «№N» не редактируется.
   const [renaming, setRenaming] = useState(false);
@@ -271,9 +292,25 @@ export const AnimalCard = memo(function AnimalCard({
       // Нативный HTML5-драг картинок/текста внутри карточки мешал бы датчикам.
       onDragStartCapture={(e) => e.preventDefault()}
       data-animal-id={animal.id}
+      data-board-target={highlight || undefined}
+      role={highlight ? "button" : "group"}
+      tabIndex={highlight ? 0 : -1}
+      aria-label={accessibleName}
+      aria-pressed={highlight ? Boolean(selected) : undefined}
+      aria-disabled={dimmed ? true : undefined}
+      aria-keyshortcuts={highlight ? "Enter Space" : undefined}
+      onKeyDown={(event) => {
+        // Вложенная кнопка переименования обрабатывается отдельно; выбор цели
+        // не должен срабатывать на её Enter/Space.
+        if (event.target !== event.currentTarget || !highlight || dimmed) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          event.currentTarget.click();
+        }
+      }}
       style={{ width }}
       className={cn(
-        "animal-card anim-card-in relative shrink-0 rounded-[var(--radius-lg)] border border-ink/10 bg-parchment p-3 text-left text-ink shadow-[var(--shadow-card)] transition-[transform,opacity] duration-[var(--motion-fast)] ease-[var(--ease-out)]",
+        "animal-card anim-card-in relative shrink-0 rounded-[var(--radius-lg)] border border-ink/10 bg-parchment p-3 text-left text-ink shadow-[var(--shadow-card)] outline-none transition-[transform,opacity] duration-[var(--motion-fast)] ease-[var(--ease-out)] focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-2",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
         // Единый признак состояния — одно кольцо. Приоритет:
         // цель под прицелом > выбрано > обычное; цвет рамки не меняем.
@@ -311,10 +348,9 @@ export const AnimalCard = memo(function AnimalCard({
           <Crosshair className="size-3.5" />
         </span>
       ) : null}
-      {/* Шапка переносится при нехватке места: название усекается, бейджи
-          (численность, убежище, сон, метки) уходят на вторую строку, а не
-          выпадают за край карточки. */}
-      <div className="mb-1 flex flex-wrap items-start justify-between gap-x-2 gap-y-1">
+      {/* Имя и состояния занимают отдельные строки. Статусы переносятся внутри
+          карточки, поэтому длинный набор не выталкивает их под соседнюю. */}
+      <div className="mb-1 min-w-0">
         {renaming && onRename ? (
           /* Правка клички: поле вместо имени, галочка сохраняет, крестик/Esc
              отменяют. События не всплывают — клики не выбирают животное и не
@@ -361,16 +397,7 @@ export const AnimalCard = memo(function AnimalCard({
             {no ? <span className="shrink-0 text-[10px] tabular-nums text-ink-soft">№{no}</span> : null}
             {/* Кличка владельца заменяет подпись вида; без неё — как раньше:
                 облигатный хищник / хищник / водное / животное. */}
-            <span className="truncate">
-              {animal.name ??
-                (hasTrait(animal, "obligateCarnivore")
-                  ? t("card.obligateCarnivore")
-                  : hasTrait(animal, "carnivore")
-                    ? t("card.carnivore")
-                    : hasTrait(animal, "swimming")
-                      ? t("card.water")
-                      : t("card.animal"))}
-            </span>
+            <span className="truncate">{animalName}</span>
             {/* Карандаш клички — только на своих животных в свой ход; место
                 под него выделяется внутри flex-1 строки, карточка не прыгает
                 и на тач-ширинах виден без hover. */}
@@ -391,11 +418,11 @@ export const AnimalCard = memo(function AnimalCard({
             ) : null}
           </span>
         )}
-        <span className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+        <span className="mt-1 flex w-full min-w-0 max-w-full flex-wrap items-center justify-start gap-1">
           {(animal.population ?? 1) > 1 ? (
             <span
               title={t("card.popTitle", { n: animal.population ?? 1 })}
-              className="flex items-center gap-0.5 rounded-full bg-accent/20 px-1.5 text-[10px] font-semibold tabular-nums text-accent"
+              className="flex shrink-0 items-center gap-0.5 rounded-full bg-accent/20 px-1.5 text-[11px] font-semibold tabular-nums text-accent-ink"
             >
               <img src={TOKEN.population} alt="" loading="lazy" className="size-3 rounded-full object-cover" />
               ×{animal.population}
@@ -404,7 +431,7 @@ export const AnimalCard = memo(function AnimalCard({
           {animal.sheltered ? (
             <span
               title={t("card.shelterTitle")}
-              className="flex items-center gap-1 rounded-full bg-leaf/25 px-1.5 text-[10px] font-medium uppercase tracking-wide text-leaf"
+              className="flex shrink-0 items-center gap-1 rounded-full bg-leaf/25 px-1.5 text-[11px] font-medium uppercase tracking-wide text-leaf-ink"
             >
               <span className="size-2 rounded-full border border-leaf/60 bg-leaf/40" />
               {t("card.shelter")}
@@ -413,22 +440,22 @@ export const AnimalCard = memo(function AnimalCard({
           {animal.sedated ? (
             <span
               title={t("card.sedatedTitle")}
-              className="rounded-full bg-ink/10 px-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-soft"
+              className="inline-flex shrink-0 rounded-full bg-ink/10 px-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-soft"
             >
               {t("card.sedated")}
             </span>
           ) : null}
           {animal.traits.some((tr) => tr.paralyzed) ? (
-            <span className="rounded-full bg-ink/10 px-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-soft">
+            <span className="inline-flex shrink-0 rounded-full bg-ink/10 px-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-soft">
               {t("card.paralyzed")}
             </span>
           ) : null}
           {animal.hibernating ? (
-            <span className="rounded-full bg-ink/10 px-1.5 text-[10px] font-medium uppercase tracking-wide">{t("card.hibernating")}</span>
+            <span className="inline-flex shrink-0 rounded-full bg-ink/10 px-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-soft">{t("card.hibernating")}</span>
           ) : fed ? (
-            <span className="rounded-full bg-good/20 px-1.5 text-[10px] font-medium uppercase tracking-wide text-good">{t("card.fed")}</span>
+            <span className="inline-flex shrink-0 rounded-full bg-good/20 px-1.5 text-[11px] font-medium uppercase tracking-wide text-good-ink">{t("card.fed")}</span>
           ) : (
-            <span className="rounded-full bg-clay/15 px-1.5 text-[10px] font-medium uppercase tracking-wide text-clay">{t("card.hungry")}</span>
+            <span className="inline-flex shrink-0 rounded-full bg-clay/15 px-1.5 text-[11px] font-medium uppercase tracking-wide text-clay-ink">{t("card.hungry")}</span>
           )}
         </span>
       </div>
@@ -507,6 +534,7 @@ export function PairPlate({
         tip.anchorRef.current = el;
       }}
       {...tip.triggerProps}
+      tabIndex={-1}
       data-trait-chip
       title={`${traitShort(type, lang)}${note ? ` · ${note}` : ""} — ${traitDesc(type, lang)}`}
       style={color ? { borderColor: color, backgroundColor: `${color}14` } : undefined}
@@ -532,12 +560,12 @@ export function PairPlate({
         </span>
       )}
       <span className="flex min-w-0 flex-1 flex-col sm:w-full sm:flex-none sm:items-center">
-        <span className="flex items-center gap-1 truncate text-[10px] font-semibold leading-tight sm:text-[9px]">
+        <span className="flex items-center gap-1 truncate text-[11px] font-semibold leading-tight">
           {color ? <span className="size-2 shrink-0 rounded-full" style={{ background: color }} /> : null}
           {traitShort(type, lang)}
         </span>
         <span
-          className="truncate text-[9px] leading-tight text-ink-soft sm:max-w-full sm:text-center sm:text-[8px]"
+          className="truncate text-[10px] leading-tight text-ink-soft sm:max-w-full sm:text-center"
           style={color ? { color } : undefined}
         >
           {note ?? t("card.pair")}
@@ -604,6 +632,8 @@ const HandFace = memo(function HandFace({
           }
           onSelect();
         }}
+        aria-label={traitName(face, lang)}
+        aria-pressed={active}
         aria-disabled={blocked || undefined}
         className={cn(
           "flex min-h-0 flex-1 flex-col items-stretch text-left outline-none transition-colors duration-[var(--motion-fast)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
@@ -622,7 +652,7 @@ const HandFace = memo(function HandFace({
               loading="lazy"
               className={cn(
                 "absolute inset-0 h-full w-full",
-                dark ? "scale-[0.86] object-contain" : "object-cover object-[50%_28%]",
+                dark ? "scale-[0.86] object-contain" : "object-cover object-top",
               )}
             />
           ) : (
@@ -636,7 +666,7 @@ const HandFace = memo(function HandFace({
           <span className="truncate">{traitName(face, lang)}</span>
         </span>
         {def.extraFood ? (
-          <span className="px-2 pb-1.5 text-[10px] leading-tight text-clay">
+          <span className="px-2 pb-1.5 text-[10px] leading-tight text-clay-ink">
             {t("traitTip.extraFood", { n: def.extraFood })}
           </span>
         ) : (
@@ -707,6 +737,7 @@ export function HandCard({
       <button
         type="button"
         disabled={disabled}
+        aria-pressed={cardPicked}
         onClick={() => onSelect("animal")}
         className={cn(
           // h-11: тап-таргет 44px — «Животное» первый ход партии, его жмут пальцем.
@@ -764,7 +795,7 @@ export function CardPreview({ card }: { card: Card }) {
                   loading="lazy"
                   className={cn(
                     "absolute inset-0 h-full w-full",
-                    dark ? "scale-[0.86] object-contain" : "object-cover object-[50%_28%]",
+                    dark ? "scale-[0.86] object-contain" : "object-cover object-top",
                   )}
                 />
               ) : (

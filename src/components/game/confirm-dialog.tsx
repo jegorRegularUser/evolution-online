@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { DialogShell } from "@/components/ui/dialog-shell";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 
@@ -54,10 +55,8 @@ export function ConfirmDialog({
   const pendingRef = useRef<(() => void) | null>(null);
   const [closing, setClosing] = useState(false);
 
-  // Фокус на кнопке отмены: случайный Enter не подтверждает опасное действие.
-  useEffect(() => {
-    cancelRef.current?.focus();
-  }, []);
+  // DialogShell ставит фокус на cancelRef, удерживает Tab внутри и возвращает
+  // его инициатору после закрытия.
 
   const requestClose = useCallback((action: () => void) => {
     if (pendingRef.current) return;
@@ -80,14 +79,6 @@ export function ConfirmDialog({
     return () => window.clearTimeout(timer);
   }, [closing]);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") requestClose(onClose);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, requestClose]);
-
   // Портал в body: диалог могут рендерить изнутри элементов с backdrop-filter
   // или transform (футер дока, шапка) — такой предок становится содержащим
   // блоком для position: fixed, и модалка «прилипает» к нему вместо центра
@@ -98,60 +89,57 @@ export function ConfirmDialog({
   if (!portalHost) return null;
 
   return createPortal(
-    <div
-      className={cn(
+    <DialogShell
+      titleId={titleId}
+      initialFocus={cancelRef}
+      overlayClassName={cn(
         "fixed inset-0 z-50 flex items-center justify-center bg-bg/70 p-4 backdrop-blur-sm",
         closing ? "modal-backdrop-out" : "modal-backdrop-in",
       )}
-      onMouseDown={(event) => {
-        // Клик по затемнению закрывает, клик по самой карточке — нет.
-        if (event.target === event.currentTarget) requestClose(onClose);
+      panelClassName={cn(
+        "w-full max-w-sm rounded-[var(--radius-xl)] border border-border bg-surface p-6 shadow-[var(--shadow-card)]",
+        closing ? "modal-card-out" : "modal-card-in",
+      )}
+      onBackdropClick={() => requestClose(onClose)}
+      onEscape={(event) => {
+        event.preventDefault();
+        requestClose(onClose);
       }}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className={cn(
-          "w-full max-w-sm rounded-[var(--radius-xl)] border border-border bg-surface p-6 shadow-[var(--shadow-card)]",
-          closing ? "modal-card-out" : "modal-card-in",
-        )}
-      >
-        <h2 id={titleId} className="text-xl">
-          {title}
-        </h2>
-        {body ? <div className="mt-2 text-sm leading-snug text-muted">{body}</div> : null}
-        {/* Кнопки решений: на телефоне выше (h-14), чтобы попадать пальцем. */}
-        <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:gap-3">
-          <Button
-            ref={cancelRef}
-            variant="secondary"
-            size="md"
-            className="h-14 flex-1 sm:h-12"
-            onClick={() => requestClose(onClose)}
-          >
-            {cancelLabel}
-          </Button>
-          <Button
-            variant={tone === "danger" ? "danger" : "default"}
-            size="md"
-            className="h-14 flex-1 sm:h-12"
-            onClick={() => requestClose(onConfirm)}
-          >
-            {confirmLabel}
-          </Button>
-        </div>
-        {extraLabel && onExtra ? (
-          <button
-            type="button"
-            onClick={() => requestClose(onExtra)}
-            className="mt-3 w-full rounded-[var(--radius-sm)] px-2 py-2 text-xs text-muted underline decoration-dotted underline-offset-4 transition-colors duration-[var(--motion-fast)] hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {extraLabel}
-          </button>
-        ) : null}
+      <h2 id={titleId} className="text-xl">
+        {title}
+      </h2>
+      {body ? <div className="mt-2 text-sm leading-snug text-muted">{body}</div> : null}
+      {/* Кнопки решений: на телефоне выше (h-14), чтобы попадать пальцем. */}
+      <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:gap-3">
+        <Button
+          ref={cancelRef}
+          variant="secondary"
+          size="md"
+          className="h-14 flex-1 sm:h-12"
+          onClick={() => requestClose(onClose)}
+        >
+          {cancelLabel}
+        </Button>
+        <Button
+          variant={tone === "danger" ? "danger" : "default"}
+          size="md"
+          className="h-14 flex-1 sm:h-12"
+          onClick={() => requestClose(onConfirm)}
+        >
+          {confirmLabel}
+        </Button>
       </div>
-    </div>,
+      {extraLabel && onExtra ? (
+        <button
+          type="button"
+          onClick={() => requestClose(onExtra)}
+          className="mt-3 w-full rounded-[var(--radius-sm)] px-2 py-2 text-xs text-muted underline decoration-dotted underline-offset-4 transition-colors duration-[var(--motion-fast)] hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {extraLabel}
+        </button>
+      ) : null}
+    </DialogShell>,
     portalHost,
   );
 }

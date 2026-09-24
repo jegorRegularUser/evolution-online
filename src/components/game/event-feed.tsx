@@ -2,7 +2,7 @@ import { ArrowDown, ChevronLeft, ChevronRight, Dices, Send, SmilePlus } from "lu
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { REACTION_EMOJI, type ReactionEmoji, type ReactionMessage } from "@/lib/net/shared";
-import { useGameStore } from "@/store/game-store";
+import { useGameStore, type ReactionFailure } from "@/store/game-store";
 import { translate, useLang, useT, type Lang } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -75,6 +75,8 @@ const SPECTATOR_SEAT = -2;
 
 /** Окно, в котором подряд идущие реплики одного автора считаются одним блоком. */
 const GROUP_WINDOW_MS = 3 * 60 * 1000;
+/** Сервер режет чат до 400 символов; поле показывает тот же лимит до отправки. */
+const CHAT_MAX_LENGTH = 400;
 
 /**
  * Мягкая подложка реплики: цвет автора, подмешанный к фону поверхностей, —
@@ -136,7 +138,7 @@ function timeLabel(at: number, lang: Lang): string {
 }
 
 /**
- * Высота нижнего дока (footer игры) — оверлей журнала не должен его накрывать:
+ * Высота нижнего дока (footer игры) — мобильная шторка не должна его накрывать:
  * в фазе развития док высокий из-за карты руки. Меряем при раскрытии, при
  * ресайзе окна и при изменении самого футера (смена фазы, модулей, вёрстки).
  */
@@ -203,18 +205,34 @@ function groupItems(items: FeedItem[]): FeedRowView[] {
   return rows;
 }
 
-/** Слить агрегаты реакций из пропсов и локальные (оптимистичные). */
-function mergeReactions(have: FeedReaction[] | undefined, local: FeedReaction[]): FeedReaction[] {
-  if (!local.length) return have ?? [];
-  const out = [...(have ?? [])];
-  for (const r of local) {
-    const i = out.findIndex((x) => x.emoji === r.emoji);
-    if (i < 0) out.push(r);
-    // count берём по максимуму: серверный агрегат уже мог учесть мою реакцию,
-    // и сумма удвоила бы счётчик под сообщением.
-    else out[i] = { emoji: r.emoji, count: Math.max(out[i]!.count, r.count), mine: Boolean(out[i]!.mine || r.mine) };
+/** Локально выбранное состояние своей реакции, независимое от серверного агрегата. */
+type LocalReactionState = Partial<Record<ReactionEmoji, boolean>>;
+
+/**
+ * Свести серверный агрегат с локальным toggle. Пока сервер не умеет удалять
+ * реакцию, ложное «mine» маскируется только у одного автора: из чужого
+ * счётчика вычитается ровно одна строка, а остальные сохраняются.
+ */
+function mergeReactions(
+  have: FeedReaction[] | undefined,
+  desired: LocalReactionState,
+): FeedReaction[] {
+  const merged = new Map<ReactionEmoji, FeedReaction>();
+  for (const reaction of have ?? []) {
+    const wanted = desired[reaction.emoji];
+    const mine = wanted ?? Boolean(reaction.mine);
+    const count = Math.max(
+      0,
+      reaction.count +
+        (wanted === undefined ? 0 : Number(wanted) - Number(Boolean(reaction.mine))),
+    );
+    if (count > 0) merged.set(reaction.emoji, { emoji: reaction.emoji, count, mine });
   }
-  return out;
+  for (const [emoji, wanted] of Object.entries(desired) as [ReactionEmoji, boolean][]) {
+    if (!wanted || merged.has(emoji)) continue;
+    merged.set(emoji, { emoji, count: 1, mine: true });
+  }
+  return [...merged.values()];
 }
 
 /**
@@ -268,18 +286,6 @@ export function typingLabel(names: string[] | undefined, lang: Lang): string {
   return translate(lang, "feed.typingMany");
 }
 
-/** Поставить/снять свою реакцию в локальном слое (до серверного учёта). */
-function toggleMine(prev: FeedReaction[], emoji: ReactionEmoji): FeedReaction[] {
-  // Сервер реакции только добавляет (удаления в контракте нет): локальный слой
-  // нужен, чтобы своя реакция была видна сразу, а после прихода серверного
-  // агрегата он лишь дополняет его (см. mergeReactions — там max, не сумма).
-  const found = prev.find((r) => r.emoji === emoji);
-  if (!found) return [...prev, { emoji, count: 1, mine: true }];
-  if (!found.mine) return prev.map((r) => (r.emoji === emoji ? { ...r, count: r.count + 1, mine: true } : r));
-  if (found.count > 1) return prev.map((r) => (r.emoji === emoji ? { ...r, count: r.count - 1, mine: false } : r));
-  return prev.filter((r) => r.emoji !== emoji);
-}
-
 /**
  * Одна запись ленты: время, автор и текст в оформлении по типу.
  *
@@ -296,11 +302,13 @@ function FeedRow({
   grouped,
   tail,
   onReact,
+  reactionFailure,
 }: {
   item: FeedItem;
   grouped: boolean;
   tail: boolean;
   onReact?: ((emoji: ReactionEmoji) => void) | undefined;
+  reactionFailure: ReactionFailure | null;
 }) {
   const rowRef = useRef<HTMLLIElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -308,11 +316,23 @@ function FeedRow({
   const lang = useLang();
   // Локальный (оптимистичный) слой реакций: своя реакция видна сразу, ещё до
   // появления серверной привязки реакции к сообщению (контракт — в отчёте).
-  const [localReactions, setLocalReactions] = useState<FeedReaction[]>([]);
+  const [localReactions, setLocalReactions] = useState<LocalReactionState>({});
   const isChat = item.kind === "chat";
   const canReact = Boolean(onReact) && isChat;
   const tint = isChat && item.color ? feedTint(item.color) : undefined;
   const chips = mergeReactions(item.reactions, localReactions);
+
+  // Сервер отклонил оптимистичную реакцию: возвращаем строку к серверному
+  // агрегату. Чужие реакции и счётчик под ними при этом не меняются.
+  useEffect(() => {
+    if (!reactionFailure || reactionFailure.chatId !== item.chatId) return;
+    setLocalReactions((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, reactionFailure.emoji)) return prev;
+      const next = { ...prev };
+      delete next[reactionFailure.emoji];
+      return next;
+    });
+  }, [item.chatId, reactionFailure]);
 
   // Палитра реакций закрывается кликом вне строки и по Esc.
   useEffect(() => {
@@ -333,7 +353,19 @@ function FeedRow({
 
   const react = (emoji: ReactionEmoji) => {
     setPickerOpen(false);
-    setLocalReactions((prev) => toggleMine(prev, emoji));
+    if (useGameStore.getState().net?.sending) return;
+    const visible = chips.find((reaction) => reaction.emoji === emoji);
+    if (visible?.mine) {
+      setLocalReactions((prev) => ({ ...prev, [emoji]: false }));
+      return;
+    }
+    // Серверный контракт умеет только INSERT. Если строка уже есть, повторный
+    // клик возвращает локальную видимость без нового POST — иначе появился бы дубль.
+    if (item.reactions?.some((reaction) => reaction.emoji === emoji && reaction.mine)) {
+      setLocalReactions((prev) => ({ ...prev, [emoji]: true }));
+      return;
+    }
+    setLocalReactions((prev) => ({ ...prev, [emoji]: true }));
     onReact?.(emoji);
   };
 
@@ -348,7 +380,7 @@ function FeedRow({
         "feed-item-in group relative grid grid-cols-[2.6rem_minmax(0,1fr)] items-start gap-x-1.5 px-2 text-xs",
         item.kind === "system" ? "py-0.5 text-[10px] leading-4" : grouped ? "py-0.5" : "py-1",
         KIND_CLASS[item.kind],
-        canReact && "pr-7",
+        canReact && "pr-12 xl:pr-7",
         // Подложка «как в игре»: у реплики с цветом автора — бумажная текстура
         // paper-sheet поверх подложки цветом (inline backgroundColor ниже,
         // blend-mode overlay смешивает лист с цветом — та же пара, что у табло
@@ -402,7 +434,7 @@ function FeedRow({
                 disabled={!canReact}
                 onClick={() => react(r.emoji)}
                 className={cn(
-                  "inline-flex h-5 min-w-5 items-center justify-center gap-0.5 rounded-full border px-1.5 text-[10px] leading-none transition-colors duration-[var(--motion-fast)]",
+                  "inline-flex h-11 min-w-11 items-center justify-center gap-1 rounded-full border px-2 text-xs leading-none transition-colors duration-[var(--motion-fast)] xl:h-5 xl:min-w-5 xl:gap-0.5 xl:px-1.5 xl:text-[10px]",
                   r.mine
                     ? "border-accent bg-accent/15 text-fg"
                     : "border-border bg-surface/80 text-muted hover:bg-surface-2",
@@ -436,7 +468,7 @@ function FeedRow({
             <div
               role="group"
               aria-label={t("game.reactions")}
-              className="absolute right-1 top-7 z-10 flex gap-0.5 rounded-full border border-border bg-surface p-0.5 shadow-[var(--shadow-card)]"
+              className="absolute right-1 top-12 z-10 flex gap-1 rounded-full border border-border bg-surface p-1 shadow-[var(--shadow-card)] xl:top-7 xl:gap-0.5 xl:p-0.5"
             >
               {REACTION_EMOJI.map((emoji) => (
                 <button
@@ -493,6 +525,8 @@ export function EventFeed({
   // Непрочитанные — в сторе: бейдж показывается на кнопке журнала в шапке.
   const unread = useGameStore((s) => s.logUnread);
   const setUnread = useGameStore((s) => s.setLogUnread);
+  const chatSending = useGameStore((s) => s.net?.sending === "chat");
+  const reactionFailure = useGameStore((s) => s.net?.reactionFailure ?? null);
   const [chatUnread, setChatUnread] = useState(false);
   // В доке на широком экране в DOM одновременно живут два списка: колонка xl и
   // (скрытая) мобильная шторка. Один ref указывал бы на последний отрисованный
@@ -500,13 +534,54 @@ export function EventFeed({
   // список выбираем по фактической высоте: скрытый имеет clientHeight = 0.
   const listRef = useRef<HTMLDivElement>(null);
   const listSheetRef = useRef<HTMLDivElement>(null);
+  const mobileSheetRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
   const pinnedRef = useRef(true);
   const prevCountRef = useRef(items.length);
   // Тексты своих сообщений с временем отправки: по ним лента узнаёт своё
   // сообщение в потоке и прокручивает список вниз в любом случае.
-  const ownQueueRef = useRef<Array<{ text: string; at: number }>>([]);
-  // Оверлей на sm…xl не должен накрывать нижний док (карта руки в развитии).
+  const ownQueueRef = useRef<Array<{ text: string; at: number; clearDraft: boolean }>>([]);
+  // Панель на sm…xl не должна накрывать нижний док (карта руки в развитии).
   const dockInset = useDockInset(open && variant === "dock");
+
+  // Мобильный журнал живёт в потоке после стола, поэтому открытие прокручивает
+  // к нему вместо наложения на секции игроков. Esc закрывает шторку, а фокус
+  // возвращается на кнопку в шапке, открывшую журнал.
+  useEffect(() => {
+    if (variant !== "dock") return;
+    const wasOpen = wasOpenRef.current;
+    if (open && !wasOpen) {
+      returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+    if (!open && wasOpen) {
+      requestAnimationFrame(() => {
+        const target = returnFocusRef.current;
+        if (target?.isConnected) target.focus({ preventScroll: true });
+      });
+    }
+    wasOpenRef.current = open;
+    if (!open) return;
+    requestAnimationFrame(() => {
+      if (window.matchMedia("(max-width: 39.999rem)").matches) {
+        mobileSheetRef.current?.scrollIntoView({ block: "end" });
+      }
+    });
+  }, [open, onToggle, variant]);
+
+  useEffect(() => {
+    if (!open || variant !== "dock") return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // Открытый ConfirmDialog владеет Escape: журнал под ним не должен
+      // закрываться одновременно и перехватывать возврат фокуса.
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      event.preventDefault();
+      onToggle(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onToggle, open, variant]);
 
   /** Живой список ленты: первый из отрисованных, у которого есть высота. */
   const activeList = useCallback((): HTMLDivElement | null => {
@@ -562,11 +637,21 @@ export function EventFeed({
     if (queue.length) {
       const now = Date.now();
       const fresh = queue.filter((q) => now - q.at < 60_000);
-      ownQueueRef.current = fresh;
-      own = fresh.some((q) =>
-        items.some((i) => i.kind === "chat" && i.text === q.text && (i.at ?? 0) >= q.at - 2000),
-      );
-      if (own) ownQueueRef.current = [];
+      const waiting: typeof fresh = [];
+      for (const q of fresh) {
+        const delivered = items.some(
+          (i) => i.kind === "chat" && i.text === q.text && (i.at ?? 0) >= q.at - 2000,
+        );
+        if (!delivered) {
+          waiting.push(q);
+          continue;
+        }
+        own = true;
+        if (q.clearDraft) {
+          setDraft((current) => (current.trim() === q.text.trim() ? "" : current));
+        }
+      }
+      ownQueueRef.current = waiting;
     }
     if (!own && added <= 0) return;
     if (open && (pinnedRef.current || own)) {
@@ -605,14 +690,16 @@ export function EventFeed({
     [setUnread],
   );
 
-  const send = (raw: string) => {
+  const send = (raw: string, clearDraft = true) => {
     const text = raw.trim();
-    if (!text || !onSend) return;
+    if (!text || !onSend || useGameStore.getState().net?.sending) return;
     onSend(text);
-    setDraft("");
-    // Держим текст в очереди, пока сервер не вернёт его в ленте: по нему
-    // лента узнает своё сообщение и прокрутит список вниз в любом случае.
-    ownQueueRef.current = [...ownQueueRef.current.slice(-4), { text, at: Date.now() }];
+    // До ACK поле не очищаем: обрыв или серверный отказ не должны уничтожить
+    // текст. После появления реплики эффект выше снимет только тот же draft.
+    ownQueueRef.current = [
+      ...ownQueueRef.current.slice(-4),
+      { text, at: Date.now(), clearDraft },
+    ];
   };
 
   const last = items.length ? items[items.length - 1] : undefined;
@@ -670,7 +757,8 @@ export function EventFeed({
             <button
               key={phrase}
               type="button"
-              onClick={() => send(phrase)}
+              onClick={() => send(phrase, false)}
+              disabled={chatSending}
               className="min-h-11 min-w-11 rounded-full border border-border bg-surface px-3 py-1 text-[10px] text-muted transition-colors duration-[var(--motion-fast)] hover:bg-surface-2 hover:text-fg xl:min-h-7 xl:min-w-0 xl:px-2 xl:py-0.5"
             >
               {phrase}
@@ -678,6 +766,12 @@ export function EventFeed({
           ))}
         </div>
       ) : null}
+      <div
+        data-chat-counter
+        className="mb-1 px-1 text-right text-[10px] leading-3 tabular-nums text-subtle"
+      >
+        {draft.length}/{CHAT_MAX_LENGTH}
+      </div>
       <form
         className="flex items-end gap-1.5"
         onSubmit={(event) => {
@@ -693,7 +787,8 @@ export function EventFeed({
           className="max-xl:size-11"
           aria-label={t("feed.diceButton")}
           title={t("feed.diceButton")}
-          onClick={() => send(`🎲 ${1 + Math.floor(Math.random() * 6)}`)}
+          onClick={() => send(`🎲 ${1 + Math.floor(Math.random() * 6)}`, false)}
+          disabled={chatSending}
         >
           <Dices className="size-4" />
         </Button>
@@ -720,11 +815,12 @@ export function EventFeed({
             }
           }}
           rows={1}
+          maxLength={CHAT_MAX_LENGTH}
           placeholder={t("feed.placeholder")}
           aria-label={t("feed.messageAria")}
-          className="max-h-20 min-h-11 flex-1 resize-none rounded-[var(--radius-sm)] border border-border bg-bg/60 px-2.5 py-1.5 text-xs leading-5 text-fg placeholder:text-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring xl:min-h-9"
+          className="max-h-20 min-h-11 flex-1 resize-none rounded-[var(--radius-sm)] border border-border bg-bg/60 px-2.5 py-1.5 text-xs leading-5 text-fg placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring xl:min-h-9"
         />
-        <Button type="submit" variant="secondary" size="iconSm" className="max-xl:size-11" aria-label={t("feed.send")} disabled={!draft.trim()}>
+        <Button type="submit" variant="secondary" size="iconSm" className="max-xl:size-11" aria-label={t("feed.send")} disabled={!draft.trim() || chatSending}>
           <Send className="size-4" />
         </Button>
       </form>
@@ -749,6 +845,7 @@ export function EventFeed({
               item={item}
               grouped={grouped}
               tail={tail}
+              reactionFailure={reactionFailure}
               onReact={onReact ? (emoji) => onReact(item, emoji) : undefined}
             />
           ))
@@ -867,22 +964,28 @@ export function EventFeed({
         )}
       </aside>
 
-      {/* ── Планшет и телефон: раскрыто — на <sm весь экран («мессенджер»),
+      {/* ── Планшет и телефон: на телефоне журнал занимает место после стола,
           на sm…xl — панель справа. Свёрнутой плашки нет: журнал открывается
           кнопкой в шапке (там же счётчик непрочитанного), а лишняя пилюля
           поверх стола только мешала. ── */}
-      <div className="xl:hidden">
+      <div className="relative z-30 xl:hidden">
         {open ? (
-          <div
-            role="dialog"
+          <section
+            ref={mobileSheetRef}
             aria-label={titleText}
-            style={{ "--feed-dock": `${dockInset}px` } as CSSProperties}
+            data-feed-mobile
+            style={
+              {
+                "--feed-dock": `${dockInset}px`,
+                "--feed-gap": `${Math.max(16, dockInset)}px`,
+              } as CSSProperties
+            }
             className={cn(
-              // Телефон (<sm): полноэкранный «мессенджер» во весь вьюпорт.
-              // Планшет (sm…xl): панель справа, снизу упирается в док игры —
-              // карта руки в развитии остаётся доступной, а чат не растёт
-              // за пределы экрана (max-h-dvh + список со своим скроллом).
-              "fixed inset-x-0 bottom-0 top-0 z-50 flex max-h-dvh flex-col bg-surface sm:left-auto sm:right-0 sm:w-[380px] sm:bottom-[var(--feed-dock,0px)] sm:border-l sm:border-border sm:shadow-[var(--shadow-card)]",
+              // Телефон: шторка занимает отдельное место после игрового стола,
+              // поэтому не закрывает табло; финальный экран (z-40) остаётся
+              // над ней. Планшет: привычная правая панель над доком.
+              "relative z-30 mx-2 mt-2 mb-[var(--feed-gap)] flex h-[min(58dvh,32rem)] max-h-[calc(100dvh-6rem)] min-h-[22rem] flex-col overflow-hidden rounded-[var(--radius-lg)] border border-border bg-surface shadow-[var(--shadow-card)]",
+              "sm:fixed sm:top-0 sm:right-0 sm:bottom-[var(--feed-dock,0px)] sm:left-auto sm:z-50 sm:mx-0 sm:mt-0 sm:h-auto sm:max-h-dvh sm:min-h-0 sm:w-[380px] sm:rounded-none sm:border-y-0 sm:border-r-0 sm:border-l",
               "animate-[fade-in_.2s_var(--ease-out)]",
             )}
           >
@@ -900,7 +1003,7 @@ export function EventFeed({
             </header>
             {list("text-sm", listSheetRef)}
             {composer}
-          </div>
+          </section>
         ) : null}
       </div>
     </>
