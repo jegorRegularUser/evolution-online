@@ -73,6 +73,21 @@ export interface PlayOptions {
   gain?: number;
 }
 
+interface PendingCue {
+  id: SfxId;
+  delay: number;
+  scale: number;
+  /** Гарантирует, что rate-limiter не съел слот до постановки в очередь. */
+  rateReserved: boolean;
+}
+
+interface VoiceLease {
+  token: number;
+  id: SfxId;
+  sources: Set<AudioScheduledSourceNode>;
+  released: boolean;
+}
+
 const STORAGE_KEY = "evo-sound"; // «on»/«off» — старый формат, не меняем
 const VOLUME_KEY = "evo-sound-volume"; // JSON { sfxVolume, ambientVolume }
 const MASTER_GAIN = 0.4; // общий предохранитель поверх обеих шин
@@ -95,6 +110,12 @@ const AMBIENT_FADE = 1;
 /** Длительность рампы master-mute: без неё слышен щелчок на границе. */
 const MUTE_FADE = 0.12;
 
+/** Не больше двух одновременных событий одного id и восьми событий всего. */
+const MAX_VOICES_PER_ID = 2;
+const MAX_VOICES = 8;
+/** Дополнительный предохранитель на уровне реальных Web Audio источников. */
+const MAX_ACTIVE_SOURCES = 32;
+
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
 /**
@@ -109,6 +130,15 @@ let noiseBuf: AudioBuffer | null = null;
 let enabled = loadEnabled();
 let volume = loadVolume();
 
+/** Флаг настоящего пользовательского жеста: без него AudioContext не создаём. */
+let userGesture = false;
+/** Контекст уже создавался, но браузер усыпил его после ухода со страницы. */
+let contextWasSuspended = false;
+/** После suspend нужно не просто вернуть gain, а заново собрать активный слой. */
+let ambientResumeRequested = false;
+let resumePromise: Promise<boolean> | null = null;
+let pendingCue: PendingCue | null = null;
+
 /** Времена последних запланированных проигрываний по каждому id (секунды). */
 const recent = new Map<SfxId, number[]>();
 
@@ -118,6 +148,13 @@ const recent = new Map<SfxId, number[]>();
  * фактическое состояние шины, а не своё локальное.
  */
 const listeners = new Set<() => void>();
+
+/** Реестр событийных голосов: lease живёт до `ended` последнего источника. */
+let nextVoiceToken = 1;
+const activeVoices = new Map<number, VoiceLease>();
+let activeVoiceCount = 0;
+let activeSourceCount = 0;
+const sourceCleanup = new Map<AudioScheduledSourceNode, () => void>();
 
 /** Текущее настроение эмбиента (запоминается, даже если контекста ещё нет). */
 let ambientMood: AmbientMood | null = null;
@@ -145,6 +182,9 @@ const TRACK_LEVEL = 0.55;
 
 /** Декодированные треки и признак «файлы недоступны — играем процедурные дроны». */
 const trackBufs = new Map<number, AudioBuffer>();
+/** Незавершённый (или уже неуспешный) decode дедуплицируется по индексу. */
+const trackLoads = new Map<number, Promise<AudioBuffer | null>>();
+const trackFailures = new Set<number>();
 let trackFailed = false;
 /** Какой трек плейлиста играет сейчас (сдвигается на стыке треков). */
 let trackIndex = 0;
@@ -181,11 +221,9 @@ function readVolume(raw: unknown, fallback: number): number {
   return typeof raw === "number" && Number.isFinite(raw) ? clamp01(raw) : fallback;
 }
 
-function loadVolume(): SfxSettings {
-  if (typeof window === "undefined") return { ...DEFAULT_VOLUME };
+function parseVolume(raw: string | null): SfxSettings {
+  if (!raw) return { ...DEFAULT_VOLUME };
   try {
-    const raw = localStorage.getItem(VOLUME_KEY);
-    if (!raw) return { ...DEFAULT_VOLUME };
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return {
       sfxVolume: readVolume(parsed.sfxVolume ?? parsed.sfx, DEFAULT_VOLUME.sfxVolume),
@@ -196,6 +234,16 @@ function loadVolume(): SfxSettings {
     };
   } catch {
     // Битую запись игнорируем — вернём значения по умолчанию.
+    return { ...DEFAULT_VOLUME };
+  }
+}
+
+function loadVolume(): SfxSettings {
+  if (typeof window === "undefined") return { ...DEFAULT_VOLUME };
+  try {
+    return parseVolume(localStorage.getItem(VOLUME_KEY));
+  } catch {
+    // localStorage может быть недоступен — возвращаем значения по умолчанию.
     return { ...DEFAULT_VOLUME };
   }
 }
@@ -234,31 +282,112 @@ function applyVolume(fade = 0.03) {
   rampParam(ambientBus.gain, volume.ambientVolume, t, fade);
 }
 
-/** Контекст создаётся только на клиенте и по мере надобности. */
+function pageIsVisible(): boolean {
+  return typeof document === "undefined" || document.visibilityState !== "hidden";
+}
+
+function onContextStateChange(c: AudioContext) {
+  if (ctx !== c || c.state !== "suspended") return;
+  // Источники, запланированные до suspend, не должны проснуться позже и обойти
+  // лимит: освобождаем их, а новый первый cue ставим в очередь.
+  stopEventSources();
+  recent.clear();
+  contextWasSuspended = true;
+  if (ambient !== null || ambientMood !== null) ambientResumeRequested = true;
+}
+
+/** Контекст создаётся только на клиенте и только после жеста пользователя. */
 function ensureCtx(): AudioContext | null {
-  if (typeof window === "undefined") return null;
+  if (typeof window === "undefined" || !userGesture) return null;
   if (!ctx) {
     const AC =
       window.AudioContext ??
       (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AC) return null;
-    ctx = new AC();
-    master = ctx.createGain();
+    const c = new AC();
+    ctx = c;
+    master = c.createGain();
     master.gain.value = MASTER_GAIN;
     // master → muteGain → destination: последний рубильник, который гасит
     // сразу весь тракт (и эффекты, и дроны, и музыку).
-    muteGain = ctx.createGain();
+    muteGain = c.createGain();
     muteGain.gain.value = enabled ? 1 : 0;
     master.connect(muteGain);
-    muteGain.connect(ctx.destination);
-    sfxBus = ctx.createGain();
-    ambientBus = ctx.createGain();
+    muteGain.connect(c.destination);
+    sfxBus = c.createGain();
+    ambientBus = c.createGain();
     sfxBus.connect(master);
     ambientBus.connect(master);
+    contextWasSuspended = c.state === "suspended";
+    if (contextWasSuspended && ambientMood !== null) ambientResumeRequested = true;
+    c.addEventListener("statechange", () => onContextStateChange(c));
     applyVolume(0);
   }
-  if (ctx.state === "suspended") void ctx.resume();
   return ctx;
+}
+
+/** Первый cue после системного suspend не теряем, а ставим в короткую очередь. */
+function queueCue(id: SfxId, delay: number, scale: number, rateReserved = false) {
+  if (pendingCue) return;
+  pendingCue = { id, delay: Math.max(0, delay), scale, rateReserved };
+}
+
+function flushPendingCue() {
+  const cue = pendingCue;
+  const c = ctx;
+  if (!cue || !c || c.state !== "running" || !enabled || !pageIsVisible()) return;
+  pendingCue = null;
+  if (!cue.rateReserved && !allowPlay(cue.id, c.currentTime + cue.delay)) return;
+  playEffect(c, cue.id, cue.delay, cue.scale);
+}
+
+/**
+ * Вернуть контекст из suspended и продолжить то, что было разрешено до ухода.
+ * Повторные вызовы дедуплицируются одним promise.
+ */
+function resumeAudio(): Promise<boolean> {
+  const c = ctx;
+  if (!c || !userGesture || !pageIsVisible() || c.state === "closed") {
+    return Promise.resolve(false);
+  }
+  if (resumePromise) return resumePromise;
+  const needsRestart = c.state !== "running" || contextWasSuspended || ambientResumeRequested;
+  const promise = (async () => {
+    if (c.state !== "running") {
+      try {
+        await c.resume();
+      } catch {
+        return false;
+      }
+    }
+    if (c.state !== "running") return false;
+    contextWasSuspended = false;
+    const restart = needsRestart || ambientResumeRequested;
+    ambientResumeRequested = false;
+    if (ambientShouldRun() && (restart || ambient === null)) maybeStartAmbient(restart);
+    flushPendingCue();
+    return true;
+  })();
+  resumePromise = promise;
+  void promise.then(
+    () => {
+      if (resumePromise === promise) resumePromise = null;
+    },
+    () => {
+      if (resumePromise === promise) resumePromise = null;
+    },
+  );
+  return promise;
+}
+
+/** Восстановление после BFCache/возврата со suspend без создания контекста. */
+function recoverAudio() {
+  if (!ctx || !userGesture || !pageIsVisible()) return;
+  if (ctx.state !== "running" || contextWasSuspended || ambientResumeRequested || pendingCue) {
+    void resumeAudio();
+    return;
+  }
+  if (ambientShouldRun() && ambient === null) maybeStartAmbient(false);
 }
 
 /** Общий буфер белого шума — источник для щелчков и шелестов. */
@@ -275,10 +404,146 @@ function noise(c: AudioContext): AudioBuffer {
 interface Out {
   node: AudioNode;
   scale: number;
+  voice?: VoiceLease;
 }
 
-function effectsOut(c: AudioContext, scale = 1): Out {
-  return { node: sfxBus ?? c.destination, scale: clamp01(scale) };
+function effectsOut(c: AudioContext, scale = 1, voice?: VoiceLease): Out {
+  return { node: sfxBus ?? c.destination, scale: clamp01(scale), voice };
+}
+
+/** Сколько реальных источников создаёт каждый рецепт — для общего предохранителя. */
+function recipeSourceCount(id: SfxId): number {
+  const counts: Record<SfxId, number> = {
+    roll: 5,
+    hunt: 5,
+    kill: 3,
+    food: 2,
+    foodBlue: 2,
+    fat: 1,
+    defense: 2,
+    dodge: 1,
+    death: 3,
+    draw: 3,
+    card: 2,
+    flip: 2,
+    phase: 1,
+    mark: 2,
+    plant: 2,
+    win: 9,
+    lose: 3,
+    pass: 2,
+    endTurn: 3,
+    migrate: 3,
+    grow: 3,
+    wither: 2,
+    burn: 3,
+    join: 2,
+    leave: 1,
+    yourTurn: 5,
+    click: 2,
+    modal: 2,
+    chat: 2,
+    reaction: 2,
+    cheer: 8,
+    crack: 3,
+  };
+  return counts[id];
+}
+
+function releaseVoice(voice: VoiceLease) {
+  if (voice.released) return;
+  voice.released = true;
+  activeVoices.delete(voice.token);
+  activeVoiceCount = Math.max(0, activeVoiceCount - 1);
+}
+
+/**
+ * Зарезервировать один cue целиком. Лишние события отбрасываются, а не
+ * уменьшаются по громкости: уже выбранные уровни остаются неизменными.
+ */
+function reserveVoice(c: AudioContext, id: SfxId, sourceCount: number): VoiceLease | null {
+  if (!c || sourceCount <= 0) return null;
+  let sameId = 0;
+  for (const voice of activeVoices.values()) {
+    if (voice.id === id) sameId += 1;
+  }
+  if (
+    sameId >= MAX_VOICES_PER_ID ||
+    activeVoiceCount >= MAX_VOICES ||
+    activeSourceCount + sourceCount > MAX_ACTIVE_SOURCES
+  ) {
+    return null;
+  }
+  const voice: VoiceLease = {
+    token: nextVoiceToken++,
+    id,
+    sources: new Set(),
+    released: false,
+  };
+  activeVoices.set(voice.token, voice);
+  activeVoiceCount += 1;
+  return voice;
+}
+
+/** Привязать Web Audio источник к lease и освободить его по `ended`. */
+function trackSource(voice: VoiceLease | undefined, source: AudioScheduledSourceNode, dur: number, delay: number) {
+  if (!voice) return;
+  if (voice.released) {
+    try {
+      source.stop();
+    } catch {
+      // Источник мог быть уже остановлен.
+    }
+    return;
+  }
+
+  voice.sources.add(source);
+  activeSourceCount += 1;
+  let done = false;
+  const cleanup = () => {
+    if (done) return;
+    done = true;
+    window.clearTimeout(timer);
+    sourceCleanup.delete(source);
+    if (voice.sources.delete(source)) activeSourceCount = Math.max(0, activeSourceCount - 1);
+    if (voice.sources.size === 0) releaseVoice(voice);
+  };
+  sourceCleanup.set(source, cleanup);
+  source.addEventListener("ended", cleanup, { once: true });
+  const timer = window.setTimeout(() => {
+    try {
+      source.stop();
+    } catch {
+      // Уже остановлен браузером — cleanup всё равно нужен.
+    }
+    cleanup();
+  }, Math.max(0, delay + dur + 0.1) * 1000);
+}
+
+/** Немедленно снять событийные источники при mute и сбросить их учёт. */
+function stopEventSources() {
+  for (const [source, cleanup] of Array.from(sourceCleanup.entries())) {
+    try {
+      source.stop();
+    } catch {
+      // Источник уже завершён.
+    }
+    cleanup();
+  }
+  for (const voice of activeVoices.values()) voice.released = true;
+  activeVoices.clear();
+  activeVoiceCount = 0;
+  activeSourceCount = 0;
+  sourceCleanup.clear();
+}
+
+/** Выполнить рецепт через общий лимит голосов. */
+function playEffect(c: AudioContext, id: SfxId, delay: number, scale: number): boolean {
+  const voice = reserveVoice(c, id, recipeSourceCount(id));
+  if (!voice) return false;
+  perform(c, id, delay, effectsOut(c, scale, voice));
+  if (voice.sources.size === 0) releaseVoice(voice);
+  return true;
 }
 
 interface ToneOpts {
@@ -308,6 +573,7 @@ function tone(c: AudioContext, o: ToneOpts, out: Out) {
   g.gain.exponentialRampToValueAtTime(0.0001, t0 + o.dur);
   osc.connect(g).connect(out.node);
   osc.start(t0);
+  trackSource(out.voice, osc, o.dur + 0.05, o.delay ?? 0);
   osc.stop(t0 + o.dur + 0.05);
 }
 
@@ -349,6 +615,7 @@ function burst(c: AudioContext, o: BurstOpts, out: Out) {
   g.gain.exponentialRampToValueAtTime(0.0001, t0 + o.dur);
   src.connect(filter).connect(g).connect(out.node);
   src.start(t0, Math.random() * 0.5);
+  trackSource(out.voice, src, o.dur + 0.05, o.delay ?? 0);
   src.stop(t0 + o.dur + 0.05);
 }
 
@@ -372,6 +639,7 @@ function sweep(c: AudioContext, o: BurstOpts & { to?: number }, out: Out) {
   g.gain.exponentialRampToValueAtTime(0.0001, t0 + o.dur);
   src.connect(filter).connect(g).connect(out.node);
   src.start(t0, Math.random() * 0.5);
+  trackSource(out.voice, src, o.dur + 0.05, o.delay ?? 0);
   src.stop(t0 + o.dur + 0.05);
 }
 
@@ -583,20 +851,34 @@ function stopAmbient(fade = AMBIENT_FADE) {
   );
 }
 
-/** Декодировать трек (кэш по индексу); false — файл недоступен. */
-async function loadTrack(c: AudioContext, index: number): Promise<boolean> {
-  if (trackBufs.has(index)) return true;
-  try {
-    const res = await fetch(TRACKS[index]);
-    if (!res.ok) throw new Error(String(res.status));
-    const raw = await res.arrayBuffer();
-    trackBufs.set(index, await c.decodeAudioData(raw));
-    return true;
-  } catch {
-    // Треки не отдались (деплой без файлов, сбой сети) — фолбэк на дроны.
-    trackFailed = true;
-    return false;
-  }
+/** Загрузить и декодировать трек ровно один раз на индекс, включая гонку. */
+function loadTrack(c: AudioContext, index: number): Promise<AudioBuffer | null> {
+  const cached = trackBufs.get(index);
+  if (cached) return Promise.resolve(cached);
+  if (trackFailures.has(index)) return Promise.resolve(null);
+  const pending = trackLoads.get(index);
+  if (pending) return pending;
+
+  const promise = (async () => {
+    try {
+      const res = await fetch(TRACKS[index]);
+      if (!res.ok) throw new Error(String(res.status));
+      const raw = await res.arrayBuffer();
+      const decoded = await c.decodeAudioData(raw);
+      trackBufs.set(index, decoded);
+      return decoded;
+    } catch {
+      // Треки не отдались (деплой без файлов, сбой сети) — фолбэк на дроны.
+      trackFailed = true;
+      trackFailures.add(index);
+      return null;
+    } finally {
+      // Неудачный результат оставляем в map, чтобы следующий mood не перезапрашивал URL.
+      if (!trackFailures.has(index) && !trackBufs.has(index)) trackLoads.delete(index);
+    }
+  })();
+  trackLoads.set(index, promise);
+  return promise;
 }
 
 /**
@@ -633,22 +915,24 @@ function buildTrackLayer(
 /** Загрузить текущий trackIndex и включить слой музыки; гонки гасит seq. */
 function beginTrack(c: AudioContext, mood: AmbientMood) {
   const seq = ++trackLoadSeq;
-  void loadTrack(c, trackIndex).then((ok) => {
+  const index = trackIndex;
+  void loadTrack(c, index).then((buf) => {
     if (seq !== trackLoadSeq || ambientMood !== mood || !enabled || !ambientBus) return;
-    if (!ok) {
+    if (!buf) {
       ambient = buildAmbient(c, mood, ambientBus, c.currentTime, AMBIENT_FADE);
       return;
     }
+    if (trackIndex !== index) return;
     const layer = buildTrackLayer(c, mood, c.currentTime, AMBIENT_FADE);
     ambient = layer ?? buildAmbient(c, mood, ambientBus, c.currentTime, AMBIENT_FADE);
   });
 }
 
 /** Запустить настроение с кроссфейдом, если это возможно прямо сейчас. */
-function startAmbient(mood: AmbientMood) {
+function startAmbient(mood: AmbientMood, force = false) {
   const c = ctx;
-  if (!c || c.state !== "running" || !ambientBus) return;
-  if (ambient?.mood === mood) return;
+  if (!c || c.state !== "running" || !ambientBus || !pageIsVisible()) return;
+  if (!force && ambient?.mood === mood) return;
   stopAmbient(AMBIENT_FADE);
   if (trackFailed) {
     ambient = buildAmbient(c, mood, ambientBus, c.currentTime, AMBIENT_FADE);
@@ -660,10 +944,20 @@ function startAmbient(mood: AmbientMood) {
   beginTrack(c, mood);
 }
 
+function ambientShouldRun(): boolean {
+  return enabled && ambientMood !== null && volume.ambientVolume > 0;
+}
+
 /** Включить эмбиент, если он разрешён и контекст уже проснулся. */
-function maybeStartAmbient() {
-  if (!enabled || !ambientMood || volume.ambientVolume <= 0) return;
-  startAmbient(ambientMood);
+function maybeStartAmbient(force = false) {
+  if (!ambientShouldRun()) return;
+  const c = ctx;
+  if (!c || !userGesture) return;
+  if (c.state !== "running") {
+    void resumeAudio();
+    return;
+  }
+  startAmbient(ambientMood!, force);
 }
 
 /**
@@ -680,7 +974,10 @@ function applyEnabledAudio() {
   }
   // Выключено: обесцениваем незавершённые загрузки трека (декодирование
   // может доехать уже после mute и запустить музыку) и гасим текущий слой.
+  pendingCue = null;
+  ambientResumeRequested = false;
   trackLoadSeq++;
+  stopEventSources();
   if (ctx && muteGain) rampParam(muteGain.gain, 0, ctx.currentTime, MUTE_FADE);
   stopAmbient(0.2);
 }
@@ -691,17 +988,47 @@ function applyEnabledAudio() {
  * Только pagehide — сворачивание вкладки музыку не глушит.
  */
 if (typeof window !== "undefined") {
-  window.addEventListener("pagehide", () => stopAmbient(0.3));
+  const onVisibilityChange = () => {
+    if (document.visibilityState === "hidden") {
+      if (ambient !== null || ambientMood !== null) ambientResumeRequested = true;
+      return;
+    }
+    recoverAudio();
+  };
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  window.addEventListener("pageshow", () => recoverAudio());
 
-  // Другая вкладка переключила звук: подхватываем её значение, чтобы иконки
-  // и фактическая тишина не расходились. Контекст не создаём — если его тут
-  // ещё нет, звучит и нечего, а эмбиент стартует после первого жеста.
+  // BFCache/pagehide: запоминаем намерение и глушим слой, чтобы pageshow мог
+  // собрать его заново уже после успешного resume.
+  window.addEventListener("pagehide", () => {
+    if (ambient !== null || ambientMood !== null) ambientResumeRequested = true;
+    stopAmbient(0.3);
+  });
+
+  // Другая вкладка переключила звук или громкость: подхватываем её значение,
+  // чтобы иконки, ползунки и фактическая тишина не расходились. Контекст не
+  // создаём — если его тут ещё нет, звучит и нечего, а эмбиент стартует после
+  // первого жеста.
   window.addEventListener("storage", (e: StorageEvent) => {
-    if (e.key !== STORAGE_KEY) return;
-    const next = e.newValue !== "off";
-    if (next === enabled) return;
-    enabled = next;
-    applyEnabledAudio();
+    if (e.key === STORAGE_KEY) {
+      const next = e.newValue !== "off";
+      if (next === enabled) return;
+      enabled = next;
+      applyEnabledAudio();
+      notify();
+      return;
+    }
+    if (e.key !== VOLUME_KEY) return;
+    const next = e.newValue === null ? loadVolume() : parseVolume(e.newValue);
+    if (next.sfxVolume === volume.sfxVolume && next.ambientVolume === volume.ambientVolume) return;
+    volume = next;
+    applyVolume(0.03);
+    if (volume.ambientVolume <= 0) {
+      ambientResumeRequested = false;
+      stopAmbient(0.15);
+    } else {
+      maybeStartAmbient();
+    }
     notify();
   });
 }
@@ -1077,30 +1404,26 @@ export const sfx = {
     const changed = next !== enabled;
     enabled = next;
     saveEnabled();
-    // Включение приходит от жеста пользователя — можно и контекст разбудить.
+    // Контекст создаётся только после отдельного unlock() из UI-жеста.
     const c = next ? ensureCtx() : null;
     applyEnabledAudio();
     if (next && c) {
-      perform(c, "food", 0, effectsOut(c)); // слышимая отбивка «звук вернулся»
-      if (c.state !== "running")
-        void c
-          .resume()
-          .then(maybeStartAmbient)
-          .catch(() => {});
+      if (c.state === "running") {
+        playEffect(c, "food", 0, 1); // слышимая отбивка «звук вернулся»
+      } else if (c.state !== "closed") {
+        queueCue("food", 0, 1);
+      }
+      void resumeAudio();
     }
     if (changed) notify();
   },
 
   /** Разбудить AudioContext по пользовательскому жесту (политики автоплея). */
   unlock() {
+    userGesture = true;
     const c = ensureCtx();
     if (!c) return;
-    if (c.state === "running") maybeStartAmbient();
-    else
-      void c
-        .resume()
-        .then(maybeStartAmbient)
-        .catch(() => {});
+    void resumeAudio();
   },
 
   /**
@@ -1113,10 +1436,17 @@ export const sfx = {
     const scale = clamp01(opts?.gain ?? 1);
     if (scale <= 0) return;
     const c = ensureCtx();
-    if (!c || c.state !== "running") return;
-    const at = c.currentTime + Math.max(0, delay);
+    if (!c) return;
+    const normalizedDelay = Math.max(0, delay);
+    const at = c.currentTime + normalizedDelay;
+    if (c.state !== "running") {
+      if (c.state === "closed" || !allowPlay(id, at)) return;
+      queueCue(id, normalizedDelay, scale, true);
+      void resumeAudio();
+      return;
+    }
     if (!allowPlay(id, at)) return;
-    perform(c, id, Math.max(0, delay), effectsOut(c, scale));
+    playEffect(c, id, normalizedDelay, scale);
   },
 
   /** Текущие громкости шин: { sfxVolume, ambientVolume, sfx, ambient }. */
@@ -1143,8 +1473,9 @@ export const sfx = {
   /**
    * Диагностика для QA: тишину проверяют по `masterGain` — итоговому
    * коэффициенту перед `destination`, а не по одному флагу `enabled`.
-   * `trackLoadSeq` растёт на каждом выключении: по нему видно, что висящая
-   * загрузка трека обесценена и музыку после mute не запустит.
+   * `activeSources`/`activeVoices` показывают, что лимитер действительно
+   * освобождает рецепты после `ended`, а `trackLoadSeq` — что висящая
+   * загрузка обесценена и музыку после mute не запустит.
    */
   debugState(): {
     enabled: boolean;
@@ -1152,7 +1483,15 @@ export const sfx = {
     masterGain: number;
     muteGain: number;
     contextState: AudioContextState | "none";
+    contextCount: number;
+    activeSources: number;
+    activeVoices: number;
+    maxVoices: number;
+    maxSources: number;
+    pendingCue: boolean;
+    userGesture: boolean;
     trackLoadSeq: number;
+    trackCacheSize: number;
   } {
     const mute = muteGain ? muteGain.gain.value : enabled ? 1 : 0;
     return {
@@ -1161,7 +1500,15 @@ export const sfx = {
       masterGain: (master ? master.gain.value : MASTER_GAIN) * mute,
       muteGain: mute,
       contextState: ctx ? ctx.state : "none",
+      contextCount: ctx ? 1 : 0,
+      activeSources: activeSourceCount,
+      activeVoices: activeVoiceCount,
+      maxVoices: MAX_VOICES,
+      maxSources: MAX_ACTIVE_SOURCES,
+      pendingCue: pendingCue !== null,
+      userGesture,
       trackLoadSeq,
+      trackCacheSize: trackBufs.size,
     };
   },
 
@@ -1178,6 +1525,7 @@ export const sfx = {
     applyVolume(0.03);
     if (volume.ambientVolume <= 0) {
       // Громкость фона в нуле — слой не держим вообще.
+      ambientResumeRequested = false;
       stopAmbient(0.15);
     } else {
       maybeStartAmbient();
@@ -1193,6 +1541,7 @@ export const sfx = {
   setAmbient(mood: AmbientMood | null) {
     ambientMood = mood;
     if (mood === null) {
+      ambientResumeRequested = false;
       stopAmbient(AMBIENT_FADE);
       return;
     }

@@ -63,7 +63,12 @@ export function SoundToggle() {
   // Клик по иконке не глушит, а открывает панель: выключение и громкости
   // живут внутри неё. Состояние берём из шины, а не из локальной копии,
   // иначе несколько тумблеров разъезжаются.
-  const toggleSound = () => sfx.setEnabled(!sfx.enabled);
+  const toggleSound = () => {
+    // Явный unlock сохраняет autoplay-политику: сам setEnabled не создаёт
+    // AudioContext из фонового эффекта или сетевого события.
+    if (!sfx.enabled) sfx.unlock();
+    sfx.setEnabled(!sfx.enabled);
+  };
 
   const changeSfxVolume = (percent: number) => {
     const value = percent / 100;
@@ -80,6 +85,7 @@ export function SoundToggle() {
   // Проверить эффекты: если звук был выключен, setEnabled сам проиграет «food».
   const testSound = () => {
     if (!sfx.enabled) {
+      sfx.unlock();
       sfx.setEnabled(true);
       return;
     }
@@ -100,7 +106,10 @@ export function SoundToggle() {
         aria-pressed={on}
         data-sound={soundState}
         title={hint}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          sfx.unlock();
+          setOpen((v) => !v);
+        }}
       >
         <SoundIcon className="size-4" />
       </Button>

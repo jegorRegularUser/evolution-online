@@ -233,6 +233,29 @@ export default defineConfig(({ command, isPreview }) => ({
     allowedHosts,
   },
   resolve: { tsconfigPaths: true },
+  // Vite 8 использует Rolldown; manualChunks оставляет входной маршрут
+  // компактным и не даёт Three/cannon/Recharts слипться с общим route-кодом.
+  // Импорты остаются статическими (Dice3D/StatsScreen — чужие файлы), поэтому
+  // это разделение само по себе не превращает тяжёлые чанки в lazy: браузер
+  // всё равно загрузит их вместе с зависимыми модулями маршрута.
+  build: {
+    rolldownOptions: {
+      output: {
+        manualChunks(id) {
+          const normalized = id.replaceAll("\\", "/");
+          if (normalized.includes("/node_modules/three/")) return "vendor-three";
+          if (normalized.includes("/node_modules/cannon-es/")) return "vendor-cannon";
+          if (
+            normalized.includes("/node_modules/recharts/") ||
+            normalized.includes("/node_modules/victory-vendor/") ||
+            normalized.includes("/node_modules/d3-")
+          ) {
+            return "vendor-charts";
+          }
+        },
+      },
+    },
+  },
   // Прогреваем тяжёлые зависимости на старте дев-сервера: без этого Vite
   // обнаруживает их лениво уже во время партии и делает full-reload страницы
   // (соло-партия на секунду «выбрасывается» в меню и восстанавливается из сейва).

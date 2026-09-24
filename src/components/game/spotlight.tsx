@@ -75,6 +75,9 @@ const TONE_BORDER: Record<SpotlightItem["tone"], string> = {
  */
 const QUEUE_CAP = 12;
 
+/** Больше истории животных, чем нужно для отложенного показа, не держим. */
+const ANIMAL_REGISTRY_CAP = 256;
+
 function animalInfo(state: GameState, id: string): AnimalInfo | null {
   const a = findAnimal(state, id);
   if (!a) return null;
@@ -89,6 +92,34 @@ function animalInfo(state: GameState, id: string): AnimalInfo | null {
       bulky: hasTrait(a, "highBodyWeight"),
     }),
   };
+}
+
+/**
+ * Запомнить животных, ограничив историю по размеру. Сначала вытесняем старые
+ * записи, которых уже нет в живом состоянии; только если живых животных самих
+ * больше лимита, удаляем самые старые из них.
+ */
+export function rememberAnimals(registry: Map<string, AnimalInfo>, state: GameState): void {
+  const liveIds = new Set<string>();
+  for (const p of state.players) {
+    p.animals.forEach((a) => {
+      liveIds.add(a.id);
+      const info = animalInfo(state, a.id);
+      if (!info) return;
+      // Обновляем позицию записи в порядке Map: это и есть её возраст.
+      registry.delete(a.id);
+      registry.set(a.id, info);
+    });
+  }
+  for (const id of registry.keys()) {
+    if (registry.size <= ANIMAL_REGISTRY_CAP) break;
+    if (!liveIds.has(id)) registry.delete(id);
+  }
+  while (registry.size > ANIMAL_REGISTRY_CAP) {
+    const oldest = registry.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    registry.delete(oldest);
+  }
 }
 
 function labelOf(info: AnimalInfo | null): string {
@@ -247,20 +278,11 @@ export function EventSpotlight({ replayEvents, onActiveChange }: EventSpotlightP
 
   // Пополняем память о животных на каждом состоянии (до разбора событий).
   useEffect(() => {
-    if (!state) return;
-    for (const p of state.players) {
-      p.animals.forEach((a, i) => {
-        registryRef.current.set(a.id, {
-          owner: p.name,
-          no: i + 1,
-          art: speciesArt({
-            swimming: hasTrait(a, "swimming"),
-            carnivore: hasTrait(a, "carnivore"),
-            bulky: hasTrait(a, "highBodyWeight"),
-          }),
-        });
-      });
+    if (!state) {
+      registryRef.current.clear();
+      return;
     }
+    rememberAnimals(registryRef.current, state);
   }, [state]);
 
   // Пропущенные сетевые батчи: тот же показ, тем же темпом, по порядку.
