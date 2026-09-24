@@ -135,4 +135,18 @@ describe("viewFor", () => {
     assert.ok(legalDevActions(v, 0).length > 0);
     assert.ok((v.players[0]!.blindDeckCount ?? 0) > 0);
   });
+
+  it("rngSeed и rngState не попадают ни в player-, ни в spectator-view", () => {
+    const full = seeded();
+    for (const seat of [0, -1]) {
+      const view = viewFor(full, seat);
+      assert.equal("rngSeed" in view, false, `rngSeed утекает для seat=${seat}`);
+      assert.equal("rngState" in view, false, `rngState утекает для seat=${seat}`);
+      assert.equal(JSON.stringify(view).includes("rngSeed"), false);
+      assert.equal(JSON.stringify(view).includes("rngState"), false);
+    }
+    // Оригинал остаётся детерминированным: redaction не мутирует источник.
+    assert.equal(typeof full.rngSeed, "number");
+    assert.equal(typeof full.rngState, "number");
+  });
 });

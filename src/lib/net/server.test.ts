@@ -38,6 +38,8 @@ before(async () => {
     "0006_resign.sql",
     "0007_room_privacy_color.sql",
     "0008_chat_reactions_typing.sql",
+    "0009_net_turn_deadline.sql",
+    "0010_net_action_ids.sql",
   ]) {
     const ddl = readFileSync(
       fileURLToPath(new URL(`../../../migrations/${f}`, import.meta.url)),
@@ -45,9 +47,6 @@ before(async () => {
     );
     await pg.exec(ddl);
   }
-  // Рантайм-схема добирает то, чего нет в отыгранных миграциях (M10:
-  // turn_deadline_at добавляется идемпотентным alter из NET_TABLES_DDL).
-  for (const statement of splitStatements(NET_TABLES_DDL)) await pg.exec(statement);
   // Сервис использует только sql.query(text, params) — этого достаточно.
   const run = async <T>(text: string, params: unknown[] = []): Promise<T[]> =>
     (await pg.query<T>(text, params)).rows as T[];
@@ -133,10 +132,27 @@ describe("лобби", () => {
     );
   });
 
-  it("join по чужому коду — ошибка", async () => {
+  it("старт отклоняет офлайн-игрока с понятным кодом", async () => {
+    fixedNow = Date.now();
     const s = svc();
-    await assert.rejects(() => s.join({ code: "ZZZZ", name: "Кто" }), NetError);
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    const guest = await s.join({ code: host.code, name: "Боря" });
+    await sql.query(
+      `update evo_seats set last_seen_at = now() - interval '1 minute'
+        where room_code = $1 and seat = $2`,
+      [host.code, guest.seat],
+    );
+    await assert.rejects(
+      () => s.start(host.code, host.token),
+      (e: unknown) => e instanceof NetError && e.code === "players-offline",
+    );
+    await sql.query(
+      `update evo_seats set last_seen_at = now() where room_code = $1 and seat = $2`,
+      [host.code, guest.seat],
+    );
+    assert.equal((await s.start(host.code, host.token)).room.status, "playing");
   });
+
 
   it("create с ботами на все места — ошибка, комната не создаётся", async () => {
     const s = svc();
@@ -611,6 +627,60 @@ describe("партия", () => {
     assert.equal(ok2, false);
   });
 
+  it("гонка действия и сдачи: retry не затирает свежий state", async () => {
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    const guest = await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const state = structuredClone(room.state!);
+    state.phase = "development";
+    state.pendingAttack = null;
+    state.currentPlayerId = 0;
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state }), true);
+
+    // Первый read уже вернул старый снимок, затем второй игрок сдался и увеличил
+    // version. Старый CAS обязан пересчитать действие от свежего состояния.
+    let injected = false;
+    const faultSql: SqlLike = {
+      query: async <T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]> => {
+        const stale = await sql.query<T>(text, params);
+        if (!injected && text.includes("from evo_rooms where code = $1")) {
+          injected = true;
+          await s.resign(host.code, guest.token);
+        }
+        return stale;
+      },
+    } as SqlLike;
+    const actionService = createRoomService(faultSql, { now: () => fixedNow });
+    await actionService.action(host.code, host.token, { type: "devPass" });
+    const after = (await _internals.readRoom(sql, host.code))!.state!;
+    assert.equal(after.players[guest.seat]!.resigned, true, "сдача не должна затираться retry");
+  });
+
+  it("один actionId применяется один раз и повтор возвращает ACK", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const state = structuredClone(room.state!);
+    state.phase = "development";
+    state.pendingAttack = null;
+    state.currentPlayerId = 0;
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state }), true);
+    const actionId = "11111111-1111-4111-8111-111111111111";
+    const first = await s.action(host.code, host.token, { type: "devPass" }, actionId);
+    const version = (await _internals.readRoom(sql, host.code))!.version;
+    const second = await s.action(host.code, host.token, { type: "devPass" }, actionId);
+    assert.equal((await _internals.readRoom(sql, host.code))!.version, version);
+    assert.equal(first.actionId, actionId);
+    assert.equal(second.actionId, actionId);
+    assert.equal(second.state!.currentPlayerId, first.state!.currentPlayerId);
+  });
+
+
   it("одно действие = один инкремент версии (шаг бота отложен)", async () => {
     const { s, host, g } = await startedTable();
     await s.start(host.code, host.token);
@@ -849,6 +919,31 @@ describe("журнал событий", () => {
       versions,
       [...versions].sort((a, b) => a - b),
     );
+  });
+
+  it("переполненное окно отдаёт свежий хвост и сообщает skipped", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 1, difficulty: "normal" });
+    await s.start(host.code, host.token);
+    for (let i = 0; i < 45; i++) {
+      const room = await _internals.readRoom(sql, host.code);
+      await _internals.casUpdate(sql, host.code, room!.version, {
+        eventsAppend: [{ kind: "passed", playerId: 0 }],
+      });
+    }
+    await _internals.casUpdate(sql, host.code, (await _internals.readRoom(sql, host.code))!.version, {
+      autoStepAt: fixedNow + 60 * 60 * 1000,
+    });
+    const snap = full(await s.poll(host.code, host.token, 0));
+    assert.equal(snap.events.length, 30);
+    const stored = (await _internals.readRoom(sql, host.code))!.events;
+    assert.equal(snap.events.at(-1)!.version, stored.at(-1)!.version, "свежий хвост не теряется");
+    assert.equal(snap.eventsFrom, snap.events[0]!.version);
+    assert.equal(snap.eventsTo, snap.version);
+    assert.ok(snap.skipped);
+    assert.equal(snap.skipped!.from, 1);
+    assert.equal(snap.skipped!.to, snap.events[0]!.version - 1);
   });
 });
 
@@ -1903,6 +1998,46 @@ describe("цвета игроков", () => {
   });
 });
 
+describe("janitor: TTL от активности, playing неприкосновенен", () => {
+  it("старая партия остаётся, а lobby удаляется только после простоя", async () => {
+    const s = svc();
+    const playing = await s.create({ name: "Хост", capacity: 2, botSeats: 1, difficulty: "normal" });
+    await s.start(playing.code, playing.token);
+    await sql.query(
+      `update evo_rooms set created_at = now() - interval '13 hours',
+                         updated_at = now() - interval '13 hours' where code = $1`,
+      [playing.code],
+    );
+    await sql.query(
+      `update evo_seats set last_seen_at = now() - interval '13 hours' where room_code = $1`,
+      [playing.code],
+    );
+    await _internals.janitor(sql);
+    assert.equal((await _internals.readRoom(sql, playing.code))?.status, "playing");
+
+    const lobby = await s.create({ name: "Лобби", capacity: 2, botSeats: 0, difficulty: "normal" });
+    await sql.query(
+      `update evo_rooms set created_at = now() - interval '13 hours',
+                         updated_at = now() - interval '13 hours' where code = $1`,
+      [lobby.code],
+    );
+    await sql.query(
+      `update evo_seats set last_seen_at = now() - interval '13 hours' where room_code = $1`,
+      [lobby.code],
+    );
+    // Свежий heartbeat продлевает жизнь даже при старом created_at.
+    await sql.query(`update evo_seats set last_seen_at = now() where room_code = $1`, [lobby.code]);
+    await _internals.janitor(sql);
+    assert.ok(await _internals.readRoom(sql, lobby.code));
+    await sql.query(
+      `update evo_seats set last_seen_at = now() - interval '13 hours' where room_code = $1`,
+      [lobby.code],
+    );
+    await _internals.janitor(sql);
+    assert.equal(await _internals.readRoom(sql, lobby.code), null);
+  });
+});
+
 describe("кэш сервиса комнат", () => {
   it("объект без новых методов считается устаревшим (s.setName is not a function)", () => {
     const s = svc();
@@ -2564,6 +2699,54 @@ describe("M10: ход человека без действий закрывае�
     assert.deepEqual(nextAutoStep(resigned), { type: "feedSkip" });
   });
 
+  it("AFK: ход с действиями получает 60-секундный дедлайн и завершается", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const state = structuredClone(room.state!);
+    state.phase = "development";
+    state.pendingAttack = null;
+    state.currentPlayerId = 0;
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state }), true);
+
+    const planned = full(await s.poll(host.code, host.token));
+    assert.equal(planned.turnDeadlineAt, fixedNow + PACE.afkTurnMs);
+    fixedNow += PACE.afkTurnMs + 1;
+    const after = full(await s.poll(host.code, host.token));
+    assert.notEqual(after.state!.currentPlayerId, 0, "AFK-ход должен завершиться");
+    assert.ok(
+      after.turnDeadlineAt === null || after.turnDeadlineAt === fixedNow + PACE.afkTurnMs,
+      "следующий ход получает свой абсолютный дедлайн",
+    );
+  });
+
+  it("хост может заменить отключённого игрока ботом, а online — не может", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    const guest = await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const before = full(await s.poll(host.code, host.token));
+    assert.equal(before.seats[guest.seat]!.disconnected, false);
+    await assert.rejects(
+      () => s.replaceWithBot(host.code, host.token, guest.seat),
+      (e: unknown) => e instanceof NetError && e.code === "player-online",
+    );
+    await sql.query(
+      `update evo_seats set last_seen_at = now() - interval '1 minute' where room_code = $1 and seat = $2`,
+      [host.code, guest.seat],
+    );
+    const offline = full(await s.poll(host.code, host.token));
+    assert.equal(offline.seats[guest.seat]!.disconnected, true);
+    await s.replaceWithBot(host.code, host.token, guest.seat);
+    const after = full(await s.poll(host.code, host.token));
+    assert.equal(after.seats[guest.seat]!.isAI, true);
+    assert.equal(after.state!.players[guest.seat]!.isAI, true);
+  });
+
   it("дедлайн виден в кадре, через 30 с ход уходит дальше, метка снимается", async () => {
     const s = svc();
     const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
@@ -2597,7 +2780,7 @@ describe("M10: ход человека без действий закрывае�
       after.state!.currentPlayerId !== 0 ||
       after.state!.players[0]!.passedFeed;
     assert.ok(moved, "через 30 с ход должен уйти дальше");
-    // Ход человека снова с действиями: метки нет вовсе (и старую сняли).
+    // Ход человека с действиями получает отдельный AFK-дедлайн, не 30-секундный idle.
     const busy = feedingForHuman(after.state!, { animal: true, foodBank: 3 });
     assert.equal(
       await _internals.casUpdate(sql, host.code, (await _internals.readRoom(sql, host.code))!.version, {
@@ -2606,6 +2789,6 @@ describe("M10: ход человека без действий закрывае�
       true,
     );
     const fresh = full(await s.poll(host.code, host.token));
-    assert.equal(fresh.turnDeadlineAt, null);
+    assert.equal(fresh.turnDeadlineAt, fixedNow + PACE.afkTurnMs);
   });
 });

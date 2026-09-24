@@ -1,8 +1,8 @@
 import { create } from "zustand";
 import { legalDefenseActions, legalDevActions, legalFeedActions } from "@/game/engine";
 import type { Difficulty, GameAction, GameSpeed, GameState, ModuleId } from "@/game/types";
-import { t, type TParams, type TKey } from "@/lib/i18n";
-import { NetClientError, NetSession, fetchRoomList, forgetSession, hasStoredSession, loadName, type NetHooks, type NetStatus } from "@/lib/net/session";
+import { currentLang, t, type TParams, type TKey } from "@/lib/i18n";
+import { NetClientError, NetSession, fetchRoomList, forgetSession, hasStoredSeatSession, hasStoredSession, loadName, type NetHooks, type NetStatus, type PendingNetItem } from "@/lib/net/session";
 import type {
   ChatMessage,
   EventBatch,
@@ -62,6 +62,13 @@ export interface TableNote {
   params?: TParams;
 }
 
+/** Отклонённая оптимистичная реакция: лента должна вернуть исходный вид. */
+export interface ReactionFailure {
+  chatId: number | null;
+  emoji: ReactionEmoji;
+  at: number;
+}
+
 // ── локализация сетевых сообщений стора ─────────────────────────────────────
 
 /**
@@ -107,12 +114,51 @@ const NET_ERR_KEYS: Record<string, TKey> = {
   retry: "netErr.retry",
   "not-in-queue": "netErr.notInQueue",
   "started-without-you": "netErr.startedWithoutYou",
+  "too-many-bots": "netErr.tooManyBots",
+  "code-failed": "netErr.codeFailed",
+  "kick-self": "netErr.kickSelf",
+  "seat-free": "netErr.seatFree",
+  "kick-bot": "netErr.kickBot",
+  "bad-color": "netErr.badColor",
+  "color-seat": "netErr.colorSeat",
+  "bot-color": "netErr.botColor",
+  "host-human": "netErr.hostHuman",
+  "waiter-gone": "netErr.waiterGone",
+  "players-offline": "netErr.playersOffline",
+  "player-online": "netErr.playerOnline",
+  "bot-chat": "netErr.botChat",
+  "bot-resign": "netErr.botResign",
+  "bot-rename": "netErr.botRename",
+  "empty-name": "netErr.emptyName",
+  "seat-missing": "netErr.seatMissing",
+  "modules-incompatible": "netErr.modulesIncompatible",
+  generic: "netErr.generic",
+  offline: "netErr.offline",
+  invalidResponse: "netErr.invalidResponse",
 };
 
-/** Текст ошибки для показа: знакомый код переводим, прочее — как есть. */
-function netErrorText(error: string, code?: string): string {
+/** Текст ошибки для показа: известный код переводим, неизвестный не пропускаем игроку. */
+function netErrorText(_error: string, code?: string): string {
   const key = code ? NET_ERR_KEYS[code] : undefined;
-  return key ? t(key) : error;
+  if (key) return t(key);
+  return code ? t("netErr.generic") : t("netErr.invalidResponse");
+}
+
+/** Исключение клиентского сетевого слоя → безопасный текст без stack/Zod. */
+function caughtNetErrorText(e: unknown): string {
+  if (e instanceof NetClientError) return netErrorText(e.message, e.code);
+  return netErrorText("", e instanceof TypeError ? "offline" : "invalidResponse");
+}
+
+/** Повтор неотправленного хода обязан сохранить actionId для идемпотентности. */
+function sameNetAction(left: GameAction | undefined, right: GameAction): boolean {
+  return Boolean(left && JSON.stringify(left) === JSON.stringify(right));
+}
+
+/** Тост именно про потерю отправки, а не только про состояние соединения. */
+function unsentNetErrorText(): string {
+  const prefix = currentLang() === "en" ? "Not sent — try again." : "Не отправлено — повторите.";
+  return `${prefix} ${t("netErr.offline")}`;
 }
 
 /** Пояснение экрана ожидания по коду из сессии. */
@@ -189,6 +235,10 @@ export interface NetUiState {
   name: string;
   status: NetStatus;
   error: string | null;
+  /** Последний action/chat без ACK; после transport-error остаётся для повтора. */
+  pending: PendingNetItem | null;
+  /** Что сейчас реально ждёт сервер; pending после ошибки уже не «в полёте». */
+  sending: "action" | "chat" | "reaction" | null;
   seats: SeatInfo[];
   hostSeat: number;
   capacity: number;
@@ -220,6 +270,8 @@ export interface NetUiState {
   spectators: SpectatorInfo[];
   /** Последние реакции (буфер для всплывающих пузырей и чипов под репликами). */
   reactions: ReactionMessage[];
+  /** Последний отказ сервера: optimistic-реакция под этой репликой откатывается. */
+  reactionFailure: ReactionFailure | null;
   /**
    * M10: когда сервер сам закончит ход человека без действий (epoch ms по
    * серверным часам) или null — таймера нет. Круговой отсчёт у имени ходящего.
@@ -230,6 +282,46 @@ export interface NetUiState {
    * отсчёт считается по серверной метке, а не по часам устройства.
    */
   serverOffsetMs: number;
+}
+
+/**
+ * Сравнить два значения сетевого среза по содержимому, а не по ссылке.
+ * Сервер отдаёт новый массив даже для неизменившегося кадра; глубокое
+ * сравнение здесь дешевле лишнего рендера стола и не меняет публичные поля.
+ */
+function netValueEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") {
+    return false;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => netValueEqual(value, right[index]));
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord);
+  const rightKeys = Object.keys(rightRecord);
+  if (leftKeys.length !== rightKeys.length) return false;
+  return leftKeys.every(
+    (key) => Object.prototype.hasOwnProperty.call(rightRecord, key) && netValueEqual(leftRecord[key], rightRecord[key]),
+  );
+}
+
+/**
+ * Наложить патч на срез стола, сохранив ссылку, если логических изменений
+ * нет. Это защищает подписчиков `s.net` от каждого unchanged-кадра.
+ */
+export function mergeNetState(current: NetUiState, patch: Partial<NetUiState>): NetUiState {
+  let next: NetUiState | null = null;
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    const typedKey = key as keyof NetUiState;
+    if (netValueEqual(current[typedKey], value)) continue;
+    next ??= { ...current };
+    (next as unknown as Record<string, unknown>)[key] = value;
+  }
+  return next ?? current;
 }
 
 /**
@@ -272,6 +364,8 @@ function netStartState(patch: Partial<NetUiState> = {}): NetUiState {
     name: loadName(),
     status: "connecting",
     error: null,
+    pending: null,
+    sending: null,
     seats: [],
     // -1, а не 0: до первого кадра место/хост неизвестны, и «я хост» не
     // должно мелькать у гостя (хостом он станет только по кадру сервера).
@@ -291,6 +385,7 @@ function netStartState(patch: Partial<NetUiState> = {}): NetUiState {
     spectating: false,
     spectators: [],
     reactions: [],
+    reactionFailure: null,
     turnDeadlineAt: null,
     serverOffsetMs: 0,
     ...patch,
@@ -367,7 +462,11 @@ interface GameStore {
     targetSeat?: number | null,
     chatId?: number | null,
   ) => Promise<void>;
-  leaveNet: () => void;
+  /**
+   * Выйти в меню. `soft` сохраняет player-token и ?room для возврата;
+   * обычный выход и выход после сдачи удаляют сохранённую сессию.
+   */
+  leaveNet: (mode?: unknown) => void;
   /** Погасить сетевую ошибку после показа тостом (чтобы не мигала повторно). */
   clearNetError: () => void;
   /** Погасить текст фатальной ошибки после показа. */
@@ -399,6 +498,13 @@ function netHooks(
   gen: number,
 ): NetHooks {
   const stale = () => gen !== netGeneration;
+  const updateNet = (patch: Partial<NetUiState>): NetUiState | null => {
+    const current = get().net;
+    if (!current) return null;
+    const next = mergeNetState(current, patch);
+    if (next !== current) set({ net: next });
+    return next;
+  };
   return {
     onSnapshot: (snap) => {
       if (stale()) return;
@@ -411,34 +517,33 @@ function netHooks(
       const cur = get().net;
       if (!cur) return;
       const own = snap.seats.find((x) => x.seat === snap.seat);
-      set({
-        state: snap.state,
-        net: {
-          ...cur,
-          code: snap.room.code,
-          seat: snap.seat,
-          name: own?.name ?? cur.name,
-          resigned: snap.state?.players[snap.seat]?.resigned ?? false,
-          capacity: snap.room.capacity,
-          seats: snap.seats,
-          hostSeat: snap.room.hostSeat,
-          settings: snap.room.settings,
-          isPrivate: snap.room.isPrivate,
-          // Пароль приходит только хосту; остальным сервер отдаёт null.
-          password: snap.room.password,
-          waiters: snap.waiters,
-          // Зрители — из полного кадра: по ним игроки видят, кто наблюдает,
-          // и «печатает…» зрителя (SpectatorInfo.typing).
-          spectators: snap.spectators,
-          // Отсчёт авто-конца хода (M10) и смещение часов: кадр несёт метку
-          // сервера, поэтому устройство с ушедшими часами не соврёт.
-          turnDeadlineAt: snap.turnDeadlineAt,
-          serverOffsetMs: snap.serverNow - Date.now(),
-          waiting: false,
-          waiterPosition: null,
-          waitNote: null,
-        },
+      const nextNet = mergeNetState(cur, {
+        code: snap.room.code,
+        seat: snap.seat,
+        name: own?.name ?? cur.name,
+        resigned: snap.state?.players[snap.seat]?.resigned ?? false,
+        capacity: snap.room.capacity,
+        seats: snap.seats,
+        hostSeat: snap.room.hostSeat,
+        settings: snap.room.settings,
+        isPrivate: snap.room.isPrivate,
+        // Пароль приходит только хосту; остальным сервер отдаёт null.
+        password: snap.room.password,
+        waiters: snap.waiters,
+        // Зрители — из полного кадра: по ним игроки видят, кто наблюдает,
+        // и «печатает…» зрителя (SpectatorInfo.typing).
+        spectators: snap.spectators,
+        // Отсчёт авто-конца хода (M10) и смещение часов: кадр несёт метку
+        // сервера, поэтому устройство с ушедшими часами не соврёт.
+        turnDeadlineAt: snap.turnDeadlineAt,
+        serverOffsetMs: snap.serverNow - Date.now(),
+        waiting: false,
+        waiterPosition: null,
+        waitNote: null,
       });
+      if (nextNet !== cur || get().state !== snap.state) {
+        set({ state: snap.state, net: nextNet });
+      }
     },
     onSeats: (seats, hostSeat, capacity, waiters, spectators) => {
       if (stale()) return;
@@ -446,31 +551,26 @@ function netHooks(
       if (!cur) return;
       const notes = diffTableNotes(prevTable, { seats, waiters, spectators }, cur.seat);
       prevTable = { seats, waiters, spectators };
-      set({
-        net: {
-          ...cur,
-          seats,
-          hostSeat,
-          capacity,
-          waiters,
-          // Зрители едут и в unchanged-кадре: без этого игроки не видели
-          // ни «Наблюдают · N», ни «печатает…» зрителя.
-          spectators,
-          system: notes.length ? [...cur.system, ...notes].slice(-60) : cur.system,
-        },
+      updateNet({
+        seats,
+        hostSeat,
+        capacity,
+        waiters,
+        // Зрители едут и в unchanged-кадре: без этого игроки не видели
+        // ни «Наблюдают · N», ни «печатает…» зрителя.
+        spectators,
+        system: notes.length ? [...cur.system, ...notes].slice(-60) : cur.system,
       });
     },
     onStatus: (status) => {
       if (stale()) return;
-      const cur = get().net;
-      if (!cur) return;
-      set({ net: { ...cur, status, error: status === "reconnecting" ? cur.error : null } });
+      updateNet({ status, error: status === "reconnecting" ? get().net?.error ?? null : null });
     },
     onEvents: (batches) => {
       if (stale()) return;
       const cur = get().net;
       if (!cur || !batches.length) return;
-      set({ net: { ...cur, events: [...cur.events, ...batches].slice(-40) } });
+      updateNet({ events: [...cur.events, ...batches].slice(-40) });
     },
     onChat: (messages) => {
       if (stale()) return;
@@ -480,7 +580,7 @@ function netHooks(
       const seen = new Set(cur.chat.map((m) => m.id));
       const fresh = messages.filter((m) => !seen.has(m.id));
       if (!fresh.length) return;
-      set({ net: { ...cur, chat: [...cur.chat, ...fresh].slice(-200) } });
+      updateNet({ chat: [...cur.chat, ...fresh].slice(-200) });
     },
     onReactions: (messages) => {
       if (stale()) return;
@@ -492,75 +592,75 @@ function netHooks(
       // Реакции — поток: здесь он хранится целиком, а лента сама собирает из
       // него агрегат по сообщению (chatId). Хвост щедрый: первый кадр отдаёт
       // последние 60 реакций, и по ним чипы должны появиться у вошедшего.
-      set({ net: { ...cur, reactions: [...cur.reactions, ...fresh].slice(-200) } });
+      updateNet({ reactions: [...cur.reactions, ...fresh].slice(-200) });
     },
     onSpectatorSnapshot: (snap) => {
       if (stale()) return;
       // Кадр зрителя: публичный вид без прав. state.feedActions и т.п. пусты.
       const cur = get().net;
       if (!cur) return;
-      set({
-        state: snap.state,
-        net: {
-          ...cur,
-          code: snap.room.code,
-          // Место зрителя — сентинел -2 (как при входе по кнопке «Смотреть»):
-          // после F5 здесь оставался -1 от ожидающего, и UI путался в режимах.
-          seat: -2,
-          // Из ожидающего стали зрителем: очередь больше не ждём.
-          waiting: false,
-          waiterPosition: null,
-          waitNote: null,
-          resigned: false,
-          capacity: snap.room.capacity,
-          seats: snap.seats,
-          hostSeat: snap.room.hostSeat,
-          settings: snap.room.settings,
-          isPrivate: snap.room.isPrivate,
-          spectators: snap.spectators,
-          turnDeadlineAt: snap.turnDeadlineAt,
-          serverOffsetMs: snap.serverNow - Date.now(),
-          status: get().net?.status === "reconnecting" ? "reconnecting" : statusOfNet(snap.room.status),
-        },
+      const nextNet = mergeNetState(cur, {
+        code: snap.room.code,
+        // Место зрителя — сентинел -2 (как при входе по кнопке «Смотреть»):
+        // после F5 здесь оставался -1 от ожидающего, и UI путался в режимах.
+        seat: -2,
+        // Из ожидающего стали зрителем: очередь больше не ждём.
+        waiting: false,
+        waiterPosition: null,
+        waitNote: null,
+        resigned: false,
+        capacity: snap.room.capacity,
+        seats: snap.seats,
+        hostSeat: snap.room.hostSeat,
+        settings: snap.room.settings,
+        isPrivate: snap.room.isPrivate,
+        spectators: snap.spectators,
+        turnDeadlineAt: snap.turnDeadlineAt,
+        serverOffsetMs: snap.serverNow - Date.now(),
+        status: get().net?.status === "reconnecting" ? "reconnecting" : statusOfNet(snap.room.status),
       });
+      if (nextNet !== cur || get().state !== snap.state) {
+        set({ state: snap.state, net: nextNet });
+      }
     },
     onSpectators: (spectators) => {
       if (stale()) return;
       const cur = get().net;
       if (!cur) return;
-      set({ net: { ...cur, spectators } });
+      updateNet({ spectators });
     },
     onSpectating: (on) => {
       if (stale()) return;
       const cur = get().net;
       if (!cur) return;
-      set({ net: { ...cur, spectating: on } });
+      updateNet({ spectating: on });
     },
     onWaiting: (info, note) => {
       if (stale()) return;
       const cur = get().net;
       if (!cur) return;
       if (!info) {
-        set({ net: { ...cur, waiting: false, waiterPosition: null, waitNote: null } });
+        updateNet({ waiting: false, waiterPosition: null, waitNote: null });
         return;
       }
-      set({
-        net: {
-          ...cur,
-          // У ожидающего места нет: старый номер места остался бы от лобби, и
-          // SeatList пометил бы «это вы» чужую строку после уплотнения.
-          seat: -1,
-          waiting: true,
-          waiterPosition: info.position,
-          waitNote: note ? waitNoteText(note) : null,
-          capacity: info.room.capacity,
-          seats: info.seats,
-          hostSeat: info.room.hostSeat,
-          settings: info.room.settings,
-          isPrivate: info.room.isPrivate,
-          waiters: info.waiters,
-        },
+      updateNet({
+        // У ожидающего места нет: старый номер места остался бы от лобби, и
+        // SeatList пометил бы «это вы» чужую строку после уплотнения.
+        seat: -1,
+        waiting: true,
+        waiterPosition: info.position,
+        waitNote: note ? waitNoteText(note) : null,
+        capacity: info.room.capacity,
+        seats: info.seats,
+        hostSeat: info.room.hostSeat,
+        settings: info.room.settings,
+        isPrivate: info.room.isPrivate,
+        waiters: info.waiters,
       });
+    },
+    onPending: (pending) => {
+      if (stale()) return;
+      updateNet({ pending });
     },
     onFatal: (code) => {
       if (stale()) return;
@@ -593,12 +693,7 @@ function runNet(
   if (!session) return Promise.resolve();
   return fn(session).catch((e: unknown) => {
     const cur = get().net;
-    const message =
-      e instanceof NetClientError
-        ? netErrorText(e.message, e.code)
-        : e instanceof Error
-          ? e.message
-          : String(e);
+    const message = caughtNetErrorText(e);
     if (cur) set({ net: { ...cur, error: message } });
   });
 }
@@ -694,15 +789,36 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   dispatch: (action) => {
     const cur = get().net;
-    // Меню (стола нет) и зритель (стол read-only) ходов не делают.
-    if (!cur || cur.spectating) return;
+    // Меню (стола нет), зритель (стол read-only) и предыдущий запрос хода.
+    if (!cur || cur.spectating || cur.sending) return;
     const s = netSession;
     if (!s) return;
+    const generation = netGeneration;
+    const retryId =
+      cur.pending?.kind === "action" && sameNetAction(cur.pending.action, action)
+        ? cur.pending.id
+        : undefined;
     set({ intent: { kind: "none" } });
-    void s.act(action).then((err) => {
-      const after = get().net;
-      if (err && after) set({ net: { ...after, error: netErrorText(err.error, err.code) } });
-    });
+    set({ net: { ...cur, sending: "action" } });
+    void s
+      .act(action, retryId)
+      .then((err) => {
+        if (generation !== netGeneration) return;
+        const after = get().net;
+        if (err && after) set({ net: { ...after, error: netErrorText(err.error, err.code) } });
+      })
+      .catch(() => {
+        if (generation !== netGeneration) return;
+        const after = get().net;
+        // pending намеренно не очищаем: следующий такой же клик повторит
+        // действие с тем же actionId, не создавая вторую серверную операцию.
+        if (after) set({ net: { ...after, error: unsentNetErrorText() } });
+      })
+      .finally(() => {
+        if (generation !== netGeneration) return;
+        const after = get().net;
+        if (after?.sending === "action") set({ net: { ...after, sending: null } });
+      });
   },
 
   setIntent: (intent) => set({ intent }),
@@ -869,10 +985,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!netSession) return;
     await netSession.start().catch((e: unknown) => {
       const cur = get().net;
-      const message =
-        e instanceof NetClientError
-          ? netErrorText(e.message, e.code)
-          : String((e as Error)?.message ?? e);
+      const message = caughtNetErrorText(e);
       if (cur) set({ net: { ...cur, error: message } });
     });
     // Хост запустил партию — запоминаем настройки стола: следующее создание
@@ -913,12 +1026,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (cur) set({ net: { ...cur, isPrivate: r.isPrivate, password: r.password, error: null } });
     } catch (e) {
       const cur = get().net;
-      const message =
-        e instanceof NetClientError
-          ? netErrorText(e.message, e.code)
-          : e instanceof Error
-            ? e.message
-            : String(e);
+      const message = caughtNetErrorText(e);
       if (cur) set({ net: { ...cur, error: message } });
     }
   },
@@ -937,12 +1045,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (cur) set({ net: { ...cur, password: r.password, error: null } });
       return { ok: true };
     } catch (e) {
-      const message =
-        e instanceof NetClientError
-          ? netErrorText(e.message, e.code)
-          : e instanceof Error
-            ? e.message
-            : String(e);
+      const message = caughtNetErrorText(e);
       const cur = get().net;
       if (cur) set({ net: { ...cur, error: message } });
       return { ok: false, error: message };
@@ -957,12 +1060,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       // Свежие места придут первым же кадром после refresh() в NetSession.
     } catch (e) {
       const cur = get().net;
-      const message =
-        e instanceof NetClientError
-          ? netErrorText(e.message, e.code)
-          : e instanceof Error
-            ? e.message
-            : String(e);
+      const message = caughtNetErrorText(e);
       if (cur) set({ net: { ...cur, error: message } });
     }
   },
@@ -976,7 +1074,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
       await s.claimSeat();
     }),
 
-  netResign: () => runNet(netSession, set, get, (s) => s.resign()),
+  netResign: async () => {
+    const code = get().net?.code ?? "";
+    await runNet(netSession, set, get, (s) => s.resign());
+    // Сдача — явное намерение покинуть место: даже если UI затем вызовет
+    // leaveNet(), player-token не должен выглядеть как сохранённый для возврата.
+    if (code) forgetSession(code);
+  },
 
   netSetName: async (name) => {
     const s = netSession;
@@ -988,12 +1092,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (cur) set({ net: { ...cur, name: final, error: null } });
     } catch (e) {
       const cur = get().net;
-      const message =
-        e instanceof NetClientError
-          ? netErrorText(e.message, e.code)
-          : e instanceof Error
-            ? e.message
-            : String(e);
+      const message = caughtNetErrorText(e);
       if (cur) set({ net: { ...cur, error: message } });
     }
   },
@@ -1018,11 +1117,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   sendChat: async (text) => {
     const s = netSession;
-    if (!s) return;
-    const err = await s.sendChat(text);
-    if (err) {
-      const cur = get().net;
-      if (cur) set({ net: { ...cur, error: netErrorText(err.error, err.code) } });
+    const cur = get().net;
+    if (!s || !cur || cur.sending) return;
+    const generation = netGeneration;
+    set({ net: { ...cur, sending: "chat" } });
+    try {
+      const err = await s.sendChat(text);
+      if (generation !== netGeneration) return;
+      const after = get().net;
+      if (err && after) set({ net: { ...after, error: netErrorText(err.error, err.code) } });
+    } catch {
+      if (generation !== netGeneration) return;
+      const after = get().net;
+      // Черновик остаётся в EventFeed, а pending — маркер для явного повтора.
+      if (after) set({ net: { ...after, error: unsentNetErrorText() } });
+    } finally {
+      if (generation === netGeneration) {
+        const after = get().net;
+        if (after?.sending === "chat") set({ net: { ...after, sending: null } });
+      }
     }
   },
 
@@ -1056,35 +1169,86 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   sendReaction: async (emoji, kind, targetSeat, chatId) => {
     const s = netSession;
-    if (!s) return;
-    const err = await s.sendReaction(emoji, kind, targetSeat, chatId);
-    if (err) {
-      const cur = get().net;
-      if (cur) set({ net: { ...cur, error: netErrorText(err.error, err.code) } });
+    const cur = get().net;
+    if (!s || !cur || cur.sending) return;
+    const generation = netGeneration;
+    set({ net: { ...cur, sending: "reaction" } });
+    try {
+      const err = await s.sendReaction(emoji, kind, targetSeat, chatId);
+      if (generation !== netGeneration) return;
+      const after = get().net;
+      if (!after) return;
+      if (err) {
+        set({
+          net: {
+            ...after,
+            error: netErrorText(err.error, err.code),
+            reactionFailure: { chatId: chatId ?? null, emoji, at: Date.now() },
+          },
+        });
+      } else {
+        set({ net: { ...after, reactionFailure: null } });
+      }
+    } catch {
+      if (generation !== netGeneration) return;
+      const after = get().net;
+      if (after) {
+        set({
+          net: {
+            ...after,
+            error: unsentNetErrorText(),
+            reactionFailure: { chatId: chatId ?? null, emoji, at: Date.now() },
+          },
+        });
+      }
+    } finally {
+      if (generation === netGeneration) {
+        const after = get().net;
+        if (after?.sending === "reaction") set({ net: { ...after, sending: null } });
+      }
     }
   },
 
-  leaveNet: () => {
+  leaveNet: (mode = "hard") => {
     const s = netSession;
     const cur = get().net;
     const wasWaiting = cur?.waiting ?? false;
     const code = cur?.code ?? "";
+    const soft = mode === "soft";
     netSession = null;
     // Поколение растёт: поздние кадры закрытой сессии стор не трогают.
     netGeneration += 1;
     syncedRoomCode = null;
     // События состава забываем: за новым столом лог начнётся с чистого листа.
     resetTableNotes();
-    // Осадок от прошлого захода по ссылке не должен блокировать новый.
-    urlResumeTried = null;
-    syncRoomUrl(null);
-    // Добровольный выход («Покинуть стол», «Сдаться и выйти», «Выйти из
-    // очереди») отзывает сохранённую сессию устройства: место, очередь и
-    // зрительский токен. Перезагрузка и закрытие вкладки сюда не попадают —
-    // там восстановление партии обязано работать (S9).
-    if (code) forgetSession(code);
-    // Ожидающий при уходе освобождает своё место в очереди.
-    if (s && wasWaiting) void s.leaveQueue().catch(() => {});
+    // Пока меню текущего монтирования не должно автоматически вернуть нас
+    // за только что закрытый стол. F5 снимет этот запрет — и ?room снова
+    // выполнит обещанный возврат по player-token.
+    urlResumeTried = code || null;
+    if (!soft && code) forgetSession(code);
+    if (soft && code) syncRoomUrl(code);
+
+    if (!soft && code) {
+      // Совместимость с текущим экраном партии: он ещё не умеет передавать
+      // режим в leaveNet(), но синхронно восстанавливает player-token после
+      // вызова, сохраняя копию для мягкого выхода. Проверяем результат после
+      // возврата управления: восстановленный токен означает именно soft-exit.
+      queueMicrotask(() => {
+        if (hasStoredSeatSession(code)) {
+          syncRoomUrl(code);
+          return;
+        }
+        urlResumeTried = null;
+        syncRoomUrl(null);
+      });
+    } else if (!code) {
+      urlResumeTried = null;
+      syncRoomUrl(null);
+    }
+
+    // Ожидающий при явном уходе освобождает место в очереди. Мягкий выход из
+    // партии этим путём не используется, но очередь не должна оставаться занята.
+    if (s && wasWaiting && !soft) void s.leaveQueue().catch(() => {});
     s?.stop();
     set({
       net: null,

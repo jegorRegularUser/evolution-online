@@ -19,6 +19,7 @@ import {
   listRoomsInput,
   pollInput,
   reactionInput,
+  replaceWithBotInput,
   roomInfoInput,
   setColorInput,
   setPasswordInput,
@@ -46,15 +47,19 @@ function isNetErrorLike(e: unknown): e is { message: string; code: string } {
   );
 }
 
-const fail = (e: unknown) => ({
-  ok: false as const,
-  error:
-    e instanceof Error ? e.message : "Сеть недоступна, попробуйте ещё раз",
-  // Код обязателен даже у не-NetError: сериализатор serverFn выбрасывает поля
-  // со значением undefined, и клиент терял код ошибки — не мог перевести её
-  // на свой язык («generic» просто покажет исходный текст, как и раньше).
-  code: isNetErrorLike(e) ? e.code : ("generic" as const),
-});
+const fail = (e: unknown) => {
+  if (isNetErrorLike(e)) {
+    // Несовместимость дополнений приходит из движка как обычный NetError без
+    // отдельного кода. Клиенту нужен код, а не длинный текст режима сервера.
+    if (e.code === "generic" && /несовместим|cannot be combined/i.test(e.message)) {
+      return { ok: false as const, error: "modules-incompatible", code: "modules-incompatible" as const };
+    }
+    return { ok: false as const, error: e.message, code: e.code };
+  }
+  // Zod-дампы, stack и сообщения runtime-ошибок не показываем игроку: у них
+  // нет безопасного кода. Наличие кода позволяет локализовать и различать сбой.
+  return { ok: false as const, error: "invalidResponse", code: "invalidResponse" as const };
+};
 
 /**
  * S10: тот же same-site сторож, что у auth-middleware
@@ -67,7 +72,13 @@ const fail = (e: unknown) => ({
 const sameSiteGuard = createMiddleware({ type: "function" }).server(async ({ next }) => {
   const { assertSameSiteRequest } = await import("../auth/isolation.server");
   assertSameSiteRequest();
-  return next();
+  try {
+    return await next();
+  } catch (e) {
+    // Схема входных данных и handler лежат после middleware. Ловим их здесь,
+    // чтобы Zod/runtime не покидали сервер с текстом, который увидит игрок.
+    return fail(e) as never;
+  }
 });
 
 /**
@@ -164,6 +175,20 @@ export const netKick = createServerFn({ method: "POST" })
     try {
       const s = await getRoomService();
       await s.kick(data.code, data.token, data.seat);
+      return { ok: true as const };
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+/** Хост заменяет отключённого игрока ботом прямо во время партии. */
+export const netReplaceWithBot = createServerFn({ method: "POST" })
+  .middleware([sameSiteGuard])
+  .validator(replaceWithBotInput)
+  .handler(async ({ data }) => {
+    try {
+      const s = await getRoomService();
+      await s.replaceWithBot(data.code, data.token, data.seat);
       return { ok: true as const };
     } catch (e) {
       return fail(e);
@@ -439,7 +464,7 @@ export const netAction = createServerFn({ method: "POST" })
       const s = await getRoomService();
       return {
         ok: true as const,
-        snapshot: await s.action(data.code, data.token, data.action),
+        snapshot: await s.action(data.code, data.token, data.action, data.actionId),
       };
     } catch (e) {
       return fail(e);

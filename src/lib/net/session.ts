@@ -21,6 +21,7 @@ import {
   netPoll,
   netReaction,
   netRejoin,
+  netReplaceWithBot,
   netResign,
   netRoomInfo,
   netSetBots,
@@ -68,6 +69,8 @@ export interface NetHooks {
   onStatus: (status: NetStatus) => void;
   /** Батчи событий с version > sinceVersion; вызывается ДО onSnapshot. */
   onEvents: (batches: EventBatch[]) => void;
+  /** Метаданные пропущенных батчей: UI может показать replay-gap. */
+  onEventsSkipped?: (range: { from: number; to: number }) => void;
   /** Новые сообщения чата (могут приходить и в unchanged-кадре). */
   onChat: (messages: ChatMessage[]) => void;
   /** Новые реакции/поощрения (могут приходить и в unchanged-кадре). */
@@ -88,6 +91,16 @@ export interface NetHooks {
    * стор сам переводит его в текст на языке клиента.
    */
   onFatal: (code: string) => void;
+  /** Неотправленное действие/чат после обрыва; null — ACK/ошибка сервера. */
+  onPending?: (pending: PendingNetItem | null) => void;
+}
+
+/** Неотправленное действие/сообщение после transport-error: UI может показать pending. */
+export interface PendingNetItem {
+  kind: "action" | "chat";
+  id: string;
+  action?: GameAction;
+  text?: string;
 }
 
 /** Серверный сбой-ответ: code машиночитаем, error — уже готовый текст. */
@@ -113,6 +126,27 @@ export class NetClientError extends Error {
   }
 }
 
+/** Сетевой обрыв не должен выдавать наружу `Failed to fetch`/Zod-дамп. */
+async function request<T>(pending: Promise<T>): Promise<T> {
+  try {
+    return await pending;
+  } catch {
+    throw new NetClientError("Нет связи со столом — проверьте интернет и попробуйте ещё раз", "offline");
+  }
+}
+
+/** Ответ серверного слоя с безопасным кодом → понятная клиентская ошибка. */
+function clientError(message: string, code?: string): NetClientError {
+  if (code === "invalidResponse") {
+    return new NetClientError("Стол вернул неожиданный ответ. Обновите страницу и попробуйте снова", code);
+  }
+  if (code === "generic") return new NetClientError("Не удалось выполнить действие. Попробуйте ещё раз", code);
+  if (code === "modules-incompatible") {
+    return new NetClientError("Выбранные дополнения несовместимы. Отключите лишнее и попробуйте снова", code);
+  }
+  return new NetClientError(message, code);
+}
+
 const NAME_KEY = "evo-net-name";
 const tokKey = (code: string) => `evo-seat-${code}`;
 const queueKey = (code: string) => `evo-queue-${code}`;
@@ -125,6 +159,15 @@ const WATCH_CODE_KEY = "evo-net-watch-code";
  * своей рукой троттлит пинги (раза в секунду хватает — метка живёт ~4 с).
  */
 const TYPING_THROTTLE_MS = 1500;
+
+/** UUID для повторяемого POST; старые transport-клиенты без него допустимы. */
+function newActionId(): string | undefined {
+  try {
+    return globalThis.crypto?.randomUUID?.();
+  } catch {
+    return undefined;
+  }
+}
 
 /** Коды, после которых переподключение не поможет (см. fatal()). */
 const FATAL_CODES = new Set(["kicked", "seat-taken", "room-gone"]);
@@ -222,6 +265,14 @@ export function hasStoredSession(code: string): boolean {
 }
 
 /**
+ * Сохранён ли именно player-token стола. Отдельная проверка нужна мягкому
+ * выходу: очередь и зрительский токен не дают права продолжить партию за место.
+ */
+export function hasStoredSeatSession(code: string): boolean {
+  return Boolean(loadToken(code));
+}
+
+/**
  * Добровольный уход со стола: забыть и место, и очередь, и зрительский токен
  * (S9). Иначе на общем устройстве следующий человек по `?room=CODE` молча
  * входил бы за ушедшего — пока комната жива. Перезагрузка страницы и закрытие
@@ -246,8 +297,12 @@ export function forgetSession(code: string): void {
  * ошибка — null, чтобы стор оставил прошлый список вместо пустого экрана.
  */
 export async function fetchRoomList(): Promise<RoomSummary[] | null> {
-  const r = await netListRooms({ data: {} });
-  return r.ok ? r.rooms : null;
+  try {
+    const r = await request(netListRooms({ data: {} }));
+    return r.ok ? r.rooms : null;
+  } catch {
+    return null;
+  }
 }
 
 export class NetSession {
@@ -276,6 +331,10 @@ export class NetSession {
    * Хранится, пока клиент в очереди, и едет в каждый кадр ожидающего.
    */
   private waitNote: string | null = null;
+  /** Последний transport-pending; ACK/известная ошибка снимают его. */
+  private pending: PendingNetItem | null = null;
+  /** Не запускаем второй poll поверх ещё не завершившегося. */
+  private pollInFlight = false;
 
   constructor(private hooks: NetHooks) {}
 
@@ -287,8 +346,8 @@ export class NetSession {
     input: CreateRoomInput,
   ): Promise<{ code: string; seat: number; isPrivate: boolean; password: string | null }> {
     saveName(input.name);
-    const r = await netCreateRoom({ data: input });
-    if (!r.ok) throw new NetClientError(r.error, r.code);
+    const r = await request(netCreateRoom({ data: input }));
+    if (!r.ok) throw clientError(r.error, r.code);
     this.attach(r.code, r.token);
     this.hooks.onStatus("connecting");
     this.schedule(0);
@@ -303,10 +362,14 @@ export class NetSession {
   async join(code: string, name: string, password?: string): Promise<void> {
     saveName(name);
     const codeUp = code.toUpperCase();
+    // Повторный вход с того же профиля — это возвращение, а не новое место.
+    // Сначала пробуем player-token, затем queue-token; watch-token намеренно
+    // не имеет приоритета: явный «войти» должен создавать/возвращать игрока.
+    if (await this.resumeStoredForJoin(codeUp)) return;
     const data: { code: string; name: string; password?: string } = { code: codeUp, name };
     if (password?.trim()) data.password = password.trim();
-    const r = await netJoinRoom({ data });
-    if (!r.ok) throw new NetClientError(r.error, r.code);
+    const r = await request(netJoinRoom({ data }));
+    if (!r.ok) throw clientError(r.error, r.code);
     if (r.waiting) {
       // Мест нет — встаём в очередь; первый кадр очереди придёт из tick.
       this.attachWaiting(codeUp, r.token);
@@ -317,15 +380,41 @@ export class NetSession {
     this.schedule(0);
   }
 
+  private async resumeStoredForJoin(code: string): Promise<boolean> {
+    const seatToken = loadToken(code);
+    if (seatToken) {
+      const r = await request(netRejoin({ data: { code, token: seatToken } }));
+      if (r.ok) {
+        this.attach(code, seatToken);
+        this.accept(r.snapshot);
+        this.schedule(0);
+        return true;
+      }
+      // Токен мог быть удалён хостом или старой сборкой: не оставляем его
+      // приоритетным перед новым join, но и не показываем фатальную плашку.
+      removeToken(code);
+    }
+    const queueToken = loadQueueToken(code);
+    if (queueToken) {
+      const r = await request(netRoomInfo({ data: { code, token: queueToken } }));
+      if (r.ok && r.info.queued) {
+        this.attachWaiting(code, queueToken, r.info);
+        return true;
+      }
+      clearQueueToken(code);
+    }
+    return false;
+  }
+
   /** Вернуться на стол по сохранённому токену (F5, обрыв, закрытая вкладка). */
   async resume(code: string): Promise<void> {
     const codeUp = code.toUpperCase();
-    // Режим зрителя восстанавливается первым: у него свой токен и поллинг.
-    if (await this.resumeWatch(codeUp)) return;
+    // Player-token всегда важнее watch-token: один профиль не должен терять
+    // место из-за того, что когда-то нажимал «Смотреть».
     const seatToken = loadToken(codeUp);
     let failure: ApiFail | null = null;
     if (seatToken) {
-      const r = await netRejoin({ data: { code: codeUp, token: seatToken } });
+      const r = await request(netRejoin({ data: { code: codeUp, token: seatToken } }));
       if (r.ok) {
         this.attach(codeUp, seatToken);
         this.accept(r.snapshot);
@@ -338,7 +427,7 @@ export class NetSession {
     // Может, мы ждали в очереди — тогда возвращаемся ожидающим.
     const queueToken = loadQueueToken(codeUp);
     if (queueToken) {
-      const r = await netRoomInfo({ data: { code: codeUp, token: queueToken } });
+      const r = await request(netRoomInfo({ data: { code: codeUp, token: queueToken } }));
       if (r.ok && r.info.queued) {
         this.attachWaiting(codeUp, queueToken, r.info);
         return;
@@ -346,14 +435,14 @@ export class NetSession {
       // Партия началась без нас — сервер перенёс очередь в зрители с тем же
       // токеном: возвращаемся зрителем, а не теряем стол после F5.
       if (r.ok && r.info.room.status !== "lobby") {
-        const watch = await netSpectatorPoll({
+        const watch = await request(netSpectatorPoll({
           data: {
             code: codeUp,
             token: queueToken,
             sinceChatId: this.lastChatId,
             sinceReactionId: this.lastReactionId,
           },
-        });
+        }));
         if (watch.ok) {
           clearQueueToken(codeUp);
           this.saveWatchToken(codeUp, queueToken);
@@ -369,6 +458,8 @@ export class NetSession {
         throw new Error(r.error);
       }
     }
+    // Только теперь watch: player/queue имели приоритет, но не подошли.
+    if (await this.resumeWatch(codeUp)) return;
     if (failure && isFatalCode(failure.code)) {
       this.fatal(failure.code!);
       throw new Error(failure.error);
@@ -380,6 +471,11 @@ export class NetSession {
   /** Ожидающий ли сейчас клиент (мест не хватило). */
   isWaiting(): boolean {
     return this.waiting;
+  }
+
+  /** UI читает pending после F5/transport-error и может повторить тот же id. */
+  getPending(): PendingNetItem | null {
+    return this.pending;
   }
 
   /** Зрительский токен — рядом с местом, чтобы F5 возвращал в тот же режим. */
@@ -396,8 +492,8 @@ export class NetSession {
   async watch(code: string, name: string): Promise<void> {
     saveName(name);
     const codeUp = code.toUpperCase();
-    const r = await netSpectate({ data: { code: codeUp, name } });
-    if (!r.ok) throw new NetClientError(r.error, r.code);
+    const r = await request(netSpectate({ data: { code: codeUp, name } }));
+    if (!r.ok) throw clientError(r.error, r.code);
     // Зрительский токен — рядом с местом, чтобы F5 возвращал в тот же режим.
     this.saveWatchToken(codeUp, r.token);
     this.attachSpectator(codeUp, r.token);
@@ -415,9 +511,9 @@ export class NetSession {
       token = null;
     }
     if (!token) return false;
-    const r = await netSpectatorPoll({
+    const r = await request(netSpectatorPoll({
       data: { code, token, sinceChatId: this.lastChatId, sinceReactionId: this.lastReactionId },
-    });
+    }));
     if (!r.ok) {
       try {
         localStorage.removeItem(watchKey(code));
@@ -432,12 +528,39 @@ export class NetSession {
     return true;
   }
 
+  private setPending(pending: PendingNetItem): void {
+    this.pending = pending;
+    this.hooks.onPending?.(pending);
+  }
+
+  private clearPending(id: string): void {
+    if (this.pending?.id !== id) return;
+    this.pending = null;
+    this.hooks.onPending?.(null);
+  }
+
   /**
    * Ход: сервер проверяет и применяет, свежий кадр приходит в ответе.
    * Ошибка приходит с кодом — стор переводит её на язык клиента.
    */
-  async act(action: GameAction): Promise<NetFail | null> {
-    const r = await netAction({ data: { code: this.code, token: this.token, action } });
+  async act(action: GameAction, actionId = newActionId()): Promise<NetFail | null> {
+    const pendingId = actionId ?? `${Date.now()}-${Math.random()}`;
+    this.setPending({ kind: "action", id: pendingId, action });
+    let r: Awaited<ReturnType<typeof netAction>>;
+    try {
+      r = await request(netAction({
+        data: {
+          code: this.code,
+          token: this.token,
+          action,
+          ...(actionId ? { actionId } : {}),
+        },
+      }));
+    } catch (error) {
+      // Transport-error: pending остаётся, чтобы UI не стирал действие до ACK.
+      throw error;
+    }
+    this.clearPending(pendingId);
     if (!r.ok) {
       if (isFatalCode(r.code)) this.fatal(r.code!);
       return { error: r.error, code: r.code };
@@ -480,6 +603,12 @@ export class NetSession {
 
   async kick(seat: number): Promise<void> {
     await this.call(netKick({ data: { code: this.code, token: this.token, seat } }));
+    this.refresh();
+  }
+
+  /** Заменить офлайн-игрока ботом; UI вызывает только для playing и host-only. */
+  async replaceWithBot(seat: number): Promise<void> {
+    await this.call(netReplaceWithBot({ data: { code: this.code, token: this.token, seat } }));
     this.refresh();
   }
 
@@ -541,7 +670,7 @@ export class NetSession {
     if (this.claiming || this.stopped) return false;
     this.claiming = true;
     try {
-      const r = await netClaimSeat({ data: { code: this.code, token: this.token } });
+      const r = await request(netClaimSeat({ data: { code: this.code, token: this.token } }));
       if (!r.ok) {
         if (isFatalCode(r.code)) {
           this.fatal(r.code!);
@@ -572,7 +701,10 @@ export class NetSession {
 
   /** Отправка в чат; возвращает ошибку с кодом или null. */
   async sendChat(text: string): Promise<NetFail | null> {
-    const r = await netChat({ data: { code: this.code, token: this.token, text } });
+    const pendingId = `chat-${Date.now()}-${Math.random()}`;
+    this.setPending({ kind: "chat", id: pendingId, text });
+    const r = await request(netChat({ data: { code: this.code, token: this.token, text } }));
+    this.clearPending(pendingId);
     if (!r.ok) {
       if (isFatalCode(r.code)) this.fatal(r.code!);
       return { error: r.error, code: r.code };
@@ -602,12 +734,12 @@ export class NetSession {
   private async call<R extends { ok: true } | ApiFail>(
     p: Promise<R>,
   ): Promise<Extract<R, { ok: true }>> {
-    const r = await p;
+    const r = await request(p);
     if (!r.ok) {
       const fail = r as ApiFail;
       if (isFatalCode(fail.code)) this.fatal(fail.code!);
       // Код ошибки сохраняем в исключении: стор переводит текст на язык клиента.
-      throw new NetClientError(fail.error, fail.code);
+      throw clientError(fail.error, fail.code);
     }
     return r as Extract<R, { ok: true }>;
   }
@@ -690,12 +822,14 @@ export class NetSession {
 
   private accept(snap: PollResult): void {
     if (this.stopped) return; // сессию заменили/остановили — кадр не наш
+    if (snap.version < (this.lastVersion ?? -1)) return; // запоздал ответ не откатывает кадр
     this.waiting = false;
-    this.lastVersion = snap.version;
+    this.lastVersion = Math.max(this.lastVersion ?? -1, snap.eventsTo ?? snap.version);
     this.failCount = 0;
     this.seenStatus = statusOf(snap.room.status);
     this.wasReconnecting = false;
     // События — до снапшота: UI успевает поставить их в очередь воспроизведения.
+    if (snap.skipped) this.hooks.onEventsSkipped?.(snap.skipped);
     if (snap.events.length) this.hooks.onEvents(snap.events);
     this.trackChat(snap.chat);
     // Реакции из полного кадра: без этого чужие реакции пропадали совсем —
@@ -719,16 +853,17 @@ export class NetSession {
   }
 
   private async tick(): Promise<void> {
-    if (this.stopped) return;
-    if (this.spectating) {
-      await this.tickSpectator();
-      return;
-    }
-    if (this.waiting) {
-      await this.tickWaiting();
-      return;
-    }
+    if (this.stopped || this.pollInFlight) return;
+    this.pollInFlight = true;
     try {
+      if (this.spectating) {
+        await this.tickSpectator();
+        return;
+      }
+      if (this.waiting) {
+        await this.tickWaiting();
+        return;
+      }
       const r = await netPoll({
         data: {
           code: this.code,
@@ -757,7 +892,7 @@ export class NetSession {
       }
       if ("unchanged" in r) {
         // Онлайн-метки обновились без смены версии партии; чат и реакции
-        // доезжают и здесь — иначе они «залипают» при паузе партии. Зрители
+        // доезжают и здесь — иначе они «залипают» на паузе партии. Зрители
         // нужны игрокам для «печатает…» и списка наблюдателей.
         this.failCount = 0;
         this.hooks.onSeats(r.seats, r.hostSeat, r.capacity, r.waiters, r.spectators);
@@ -779,8 +914,11 @@ export class NetSession {
         this.hooks.onStatus("reconnecting");
       }
       this.schedule();
+    } finally {
+      this.pollInFlight = false;
     }
   }
+
 
   /** Поллинг зрителя: публичный вид стола, чат и реакции. */
   private async tickSpectator(): Promise<void> {

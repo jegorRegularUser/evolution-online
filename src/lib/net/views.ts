@@ -25,6 +25,10 @@ export function redactEvents(events: GameEvent[], seat: number, full: GameState)
 
 export function viewFor(full: GameState, seat: number): GameState {
   const v: GameState = structuredClone(full);
+  // ГПСЧ нужен движку на сервере, но seed/state позволяют клиенту восстановить
+  // будущую случайную последовательность и чужую руку. В wire-виде их нет.
+  delete (v as Partial<GameState>).rngSeed;
+  delete (v as Partial<GameState>).rngState;
   v.humanId = seat;
   v.deckCount = full.deck.length;
   // Растения и флора публичны; прячем только содержимое колод.

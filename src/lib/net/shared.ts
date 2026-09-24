@@ -85,6 +85,8 @@ export interface SeatInfo {
   isAI: boolean;
   /** Активен за последнюю минуту (last_seen_at обновляется poll'ом). */
   online: boolean;
+  /** Heartbeat старше disconnectedMs: сервер явно считает место отключённым. */
+  disconnected: boolean;
   /** Игрок сдался: место занято до конца партии, ходы пропускаются. */
   resigned: boolean;
   /** CSS-цвет места (hex): публичный, клиент красит имена и чат. */
@@ -197,6 +199,8 @@ export interface ReactionMessage {
 export interface SpectatorInfo {
   name: string;
   online: boolean;
+  /** Heartbeat старше disconnectedMs: зритель отключён. */
+  disconnected: boolean;
   /** Свежая отметка набора текста (netTyping): тот же смысл, что у SeatInfo. */
   typing: boolean;
 }
@@ -211,6 +215,11 @@ export interface PollResult {
   seat: number;
   /** Батчи событий с version > sinceVersion; без sinceVersion — пусто. */
   events: EventBatch[];
+  /** Границы окна событий; eventsTo — версия, до которой клиент может догнать. */
+  eventsFrom?: number;
+  eventsTo?: number;
+  /** Внутри окна пропущены батчи [from..to], если клиент отстал. */
+  skipped?: { from: number; to: number };
   /** Сообщения чата: id > sinceChatId либо последние 50 при подключении. */
   chat: ChatMessage[];
   /** Очередь ожидающих (виден всем в лобби, токенов здесь нет). */
@@ -230,6 +239,8 @@ export interface PollResult {
    * часов, чтобы отсчёт не зависел от неточных часов устройства.
    */
   serverNow: number;
+  /** ACK применённого/повторённого действия; отсутствует у обычного poll. */
+  actionId?: string;
 }
 
 /** Ответ poll'а «ничего не изменилось»: онлайны обновляются без смены версии. */
@@ -305,6 +316,10 @@ export const PACE = {
   initialMs: 600,
   maxStepsPerTick: 8,
   onlineMs: 10_000,
+  /** Явный порог disconnected для heartbeat: не путаем короткий jitter с уходом. */
+  disconnectedMs: 30_000,
+  /** Сторож раз в 10 с держит AFK и автошаги без зависимости от браузера. */
+  watchdogMs: 10_000,
   roomTtlHours: 12,
   /**
    * M10: ход человека без действий (остался только пас/завершение хода)
@@ -313,6 +328,13 @@ export const PACE = {
    * клиент считает долю кругового индикатора.
    */
   idleTurnMs: 30_000,
+  /**
+   * AFK-ход игрока в фазе: 60 секунд с последнего heartbeat. Это не «время на
+   * чтение карточки» (для пустого хода действует idleTurnMs), а предохранитель
+   * от вечно висящего хода с доступными действиями. Число фиксировано здесь,
+   * чтобы сервер и UI считали одинаковый дедлайн.
+   */
+  afkTurnMs: 60_000,
 } as const;
 
 const NAME = z.string().trim().min(1).max(16);
@@ -393,6 +415,8 @@ export const actionInput = z.object({
   code: CODE,
   token: z.string().min(10),
   action: z.custom<GameAction>((v) => typeof v === "object" && v !== null && "type" in v),
+  /** Необязательный UUID: старые клиенты продолжают работать без него. */
+  actionId: z.string().uuid().optional(),
 });
 export const pollInput = codeTokenInput.extend({
   sinceVersion: z.number().int().optional(),
@@ -429,6 +453,8 @@ export const reactionInput = codeTokenInput.extend({
 /** Сигнал «печатает…»: только факт свежести, самого текста сервер не видит. */
 export const typingInput = codeTokenInput;
 export const kickInput = codeTokenInput.extend({ seat: z.number().int().min(0).max(7) });
+/** Замена офлайн-места ботом в идущей партии (host-only). */
+export const replaceWithBotInput = kickInput;
 export const capacityInput = codeTokenInput.extend({
   capacity: z.number().int().min(2).max(8),
 });
