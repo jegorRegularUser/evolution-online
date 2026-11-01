@@ -1,9 +1,13 @@
 import type { ErrorComponentProps } from "@tanstack/react-router";
 import { TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/lib/i18n";
 import { useGameStore } from "@/store/game-store";
 
 export function AppErrorComponent({ error, info, reset }: ErrorComponentProps) {
+  // Экран ошибки рендерится внутри дерева роутера, а стор языка — глобальный
+  // zustand-модуль без провайдеров: useT безопасен и для SSR (снапшот «ru»).
+  const t = useT();
   const goToMenu = () => {
     // Сначала закрываем сетевую сессию штатным путём. Если ошибка задела сам
     // стор, ссылка на меню всё равно должна быть доступна пользователю.
@@ -31,22 +35,20 @@ export function AppErrorComponent({ error, info, reset }: ErrorComponentProps) {
         <TriangleAlert className="size-10" strokeWidth={2} />
       </span>
       <div className="space-y-2">
-        <h1 className="text-xl font-semibold">Что-то пошло не так</h1>
-        <p className="max-w-md text-sm leading-snug text-muted">
-          Не удалось открыть игру. Попробуйте ещё раз — если ошибка повторится, вернитесь в меню.
-        </p>
+        <h1 className="text-xl font-semibold">{t("error.title")}</h1>
+        <p className="max-w-md text-sm leading-snug text-muted">{t("error.body")}</p>
       </div>
       <div className="flex flex-wrap justify-center gap-2">
         <Button type="button" onClick={reset}>
-          Попробовать снова
+          {t("error.retry")}
         </Button>
         <Button type="button" variant="secondary" onClick={goToMenu}>
-          В меню
+          {t("error.menu")}
         </Button>
       </div>
       {import.meta.env.DEV ? (
         <details className="mt-2 max-w-xl text-left text-xs text-muted">
-          <summary className="cursor-pointer">Подробности ошибки</summary>
+          <summary className="cursor-pointer">{t("error.details")}</summary>
           <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-sm)] bg-surface-2 p-3">
             {error instanceof Error ? error.message : String(error)}
             {info?.componentStack ? `\n${info.componentStack}` : ""}

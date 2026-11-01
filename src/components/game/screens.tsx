@@ -775,6 +775,16 @@ function formatDate(ms: number, lang: "ru" | "en"): string {
 }
 
 /**
+ * Имя строки финального счёта: у флоры («Трава и грибы») имя лежит в данных
+ * движка по-русски, поэтому при lang=en показываем словарное имя дополнения
+ * (module.fungi). Флора опознаётся по playerId === -1 — как в sourceLabels.
+ * Остальные строки — имена игроков (боты-учёные переводятся, люди — как есть).
+ */
+export function scoreRowName(row: ScoreBreakdown, lang: Lang): string {
+  return row.playerId === -1 ? translate(lang, "module.fungi") : scientistName(row.name, lang);
+}
+
+/**
  * Подписи слагаемых в компактной формуле счёта. Строчные — так формула
  * читается как строка данных: «животные 8 · свойства 3 · бонус 2 · сброс 1».
  * У флоры за «животными» стоят карты, за «бонусом» — фишки на картах.
@@ -853,7 +863,7 @@ function explainDefeat(scores: ScoreBreakdown[], winnerIds: number[], humanId: n
     return translate(lang, "final.defeat.flora", {
       gap,
       points: pw,
-      name: scientistName(leader.name, lang),
+      name: scoreRowName(leader, lang),
       leader: leader.total,
       human: human.total,
     });
@@ -933,7 +943,7 @@ function ScoreRow({
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate font-medium">
-            {place}. {scientistName(row.name, lang)}
+            {place}. {scoreRowName(row, lang)}
           </p>
           {winner ? <p className="mt-0.5 text-[10px] uppercase tracking-wide text-accent">{tt("final.best")}</p> : null}
         </div>

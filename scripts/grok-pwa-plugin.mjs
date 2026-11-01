@@ -14,6 +14,7 @@ import {
   injectGrokPwaHead,
   isDocumentPath,
   isInstallQuery,
+  langFromAcceptLanguage,
   renderInstallPageHtml,
   renderWebManifest,
   snapshotOgIdentity,
@@ -30,9 +31,9 @@ function requestHost(req) {
   return Array.isArray(host) ? host[0] : host;
 }
 
-export function renderInstallPage(hostHeader, url = "/") {
+export function renderInstallPage(hostHeader, url = "/", options = {}) {
   const template = readFileSync(INSTALL_PAGE_PATH, "utf8");
-  return renderInstallPageHtml(template, { host: hostHeader, url });
+  return renderInstallPageHtml(template, { host: hostHeader, url, ...options });
 }
 
 function sendHtml(res, html) {
@@ -73,7 +74,11 @@ function serveGrokPwa(middlewares) {
     }
 
     if (pathOnly === "/__grok/manifest.webmanifest" || pathOnly === "/__grok/manifest.json") {
-      const body = Buffer.from(renderWebManifest(requestHost(req)), "utf8");
+      // Язык манифеста — по Accept-Language браузера (ru по умолчанию),
+      // тот же контракт, что у Nitro-middleware в deployed-приложении.
+      const acceptLanguage = req.headers["accept-language"];
+      const lang = langFromAcceptLanguage(Array.isArray(acceptLanguage) ? acceptLanguage[0] : acceptLanguage);
+      const body = Buffer.from(renderWebManifest(requestHost(req), lang), "utf8");
       res.statusCode = 200;
       res.setHeader("content-type", "application/manifest+json; charset=utf-8");
       res.setHeader("cache-control", "no-cache");
@@ -84,7 +89,13 @@ function serveGrokPwa(middlewares) {
 
     if (isInstallQuery(rawUrl) && isDocumentPath(pathOnly) && acceptsHtml(req.headers.accept)) {
       try {
-        sendHtml(res, renderInstallPage(requestHost(req), rawUrl));
+        const acceptLanguage = req.headers["accept-language"];
+        sendHtml(
+          res,
+          renderInstallPage(requestHost(req), rawUrl, {
+            lang: langFromAcceptLanguage(Array.isArray(acceptLanguage) ? acceptLanguage[0] : acceptLanguage),
+          }),
+        );
       } catch (err) {
         console.error("[app-builder] install page missing:", err);
         res.statusCode = 500;

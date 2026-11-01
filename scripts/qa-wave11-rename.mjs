@@ -501,7 +501,7 @@ async function enLocaleScenario(browser) {
     const errEn = await waitUntil(
       () =>
         guest
-          .getByText("This color is already taken — choose another one")
+          .getByText("This color is already taken. Choose another one")
           .count()
           .then((n) => n > 0)
           .catch(() => false),

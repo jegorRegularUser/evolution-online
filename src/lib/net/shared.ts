@@ -166,12 +166,20 @@ export interface EventBatch {
   events: GameEvent[];
 }
 
-/** Сообщение чата; seat = -1 у ожидающего места. */
+/** Сообщение чата; seat = -1 у ожидающего места и у системных реплик «Стола». */
 export interface ChatMessage {
   id: number;
   seat: number;
   name: string;
   text: string;
+  /**
+   * Ключ словаря (ru.ts/en.ts) системной реплики: клиент при lang=en собирает
+   * текст по ключу, русский text остаётся фолбэком (контракт журнала движка).
+   * У реплик людей ключа нет.
+   */
+  key?: string;
+  /** Параметры подстановки к `key` (числа, имена). */
+  params?: Record<string, string | number>;
   /** Время отправки (мс эпохи). */
   at: number;
 }

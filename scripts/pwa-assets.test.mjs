@@ -38,7 +38,10 @@ test("страница установки локализована и не по�
   const template = readFileSync(join(ROOT, "scripts/install-page.html"), "utf8");
   const html = renderInstallPageHtml(template, { url: "/?install=1&room=FVWG" });
   assert.match(html, /lang="ru"/);
-  assert.match(html, /Добавить Эволюция/);
+  // Имя после глагола — в винительном падеже («Добавить Эволюцию», не «Эволюция»).
+  assert.match(html, /Добавить Эволюцию/);
+  assert.match(html, /Открыть Эволюцию/);
+  assert.doesNotMatch(html, /Добавить Эволюция/);
   assert.match(html, /На экран «Домой»/);
   assert.match(html, /href="\/\?room=FVWG"/);
   assert.doesNotMatch(html, />Grok</);

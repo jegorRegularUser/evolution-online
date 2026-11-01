@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { legalDefenseActions, legalDevActions, legalFeedActions } from "@/game/engine";
 import type { Difficulty, GameAction, GameSpeed, GameState, ModuleId } from "@/game/types";
-import { currentLang, t, type TParams, type TKey } from "@/lib/i18n";
+import { t, type TParams, type TKey } from "@/lib/i18n";
 import { NetClientError, NetSession, fetchRoomList, forgetSession, hasStoredSeatSession, hasStoredSession, loadName, type NetHooks, type NetStatus, type PendingNetItem } from "@/lib/net/session";
 import type {
   ChatMessage,
@@ -144,10 +144,15 @@ function netErrorText(_error: string, code?: string): string {
   return code ? t("netErr.generic") : t("netErr.invalidResponse");
 }
 
-/** Исключение клиентского сетевого слоя → безопасный текст без stack/Zod. */
-function caughtNetErrorText(e: unknown): string {
-  if (e instanceof NetClientError) return netErrorText(e.message, e.code);
-  return netErrorText("", e instanceof TypeError ? "offline" : "invalidResponse");
+/**
+ * Исключение клиентского сетевого слоя → безопасный текст без stack/Zod плюс
+ * машинный код ошибки. Код нужен веткам UI (например, плашке «игроки не в
+ * сети» в лобби): они не должны парсить локализованный текст.
+ */
+function caughtNetError(e: unknown): { text: string; code: string | null } {
+  if (e instanceof NetClientError) return { text: netErrorText(e.message, e.code), code: e.code ?? null };
+  const code = e instanceof TypeError ? "offline" : "invalidResponse";
+  return { text: netErrorText("", code), code };
 }
 
 /** Повтор неотправленного хода обязан сохранить actionId для идемпотентности. */
@@ -157,8 +162,7 @@ function sameNetAction(left: GameAction | undefined, right: GameAction): boolean
 
 /** Тост именно про потерю отправки, а не только про состояние соединения. */
 function unsentNetErrorText(): string {
-  const prefix = currentLang() === "en" ? "Not sent — try again." : "Не отправлено — повторите.";
-  return `${prefix} ${t("netErr.offline")}`;
+  return `${t("net.unsent")} ${t("netErr.offline")}`;
 }
 
 /** Пояснение экрана ожидания по коду из сессии. */
@@ -235,6 +239,8 @@ export interface NetUiState {
   name: string;
   status: NetStatus;
   error: string | null;
+  /** Машинный код той же ошибки (players-offline, player-online, offline…): UI ветвит по нему, не по тексту. */
+  errorCode: string | null;
   /** Последний action/chat без ACK; после transport-error остаётся для повтора. */
   pending: PendingNetItem | null;
   /** Что сейчас реально ждёт сервер; pending после ошибки уже не «в полёте». */
@@ -364,6 +370,7 @@ function netStartState(patch: Partial<NetUiState> = {}): NetUiState {
     name: loadName(),
     status: "connecting",
     error: null,
+    errorCode: null,
     pending: null,
     sending: null,
     seats: [],
@@ -564,7 +571,11 @@ function netHooks(
     },
     onStatus: (status) => {
       if (stale()) return;
-      updateNet({ status, error: status === "reconnecting" ? get().net?.error ?? null : null });
+      updateNet({
+        status,
+        error: status === "reconnecting" ? get().net?.error ?? null : null,
+        errorCode: status === "reconnecting" ? get().net?.errorCode ?? null : null,
+      });
     },
     onEvents: (batches) => {
       if (stale()) return;
@@ -693,8 +704,8 @@ function runNet(
   if (!session) return Promise.resolve();
   return fn(session).catch((e: unknown) => {
     const cur = get().net;
-    const message = caughtNetErrorText(e);
-    if (cur) set({ net: { ...cur, error: message } });
+    const { text, code } = caughtNetError(e);
+    if (cur) set({ net: { ...cur, error: text, errorCode: code } });
   });
 }
 
@@ -805,14 +816,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       .then((err) => {
         if (generation !== netGeneration) return;
         const after = get().net;
-        if (err && after) set({ net: { ...after, error: netErrorText(err.error, err.code) } });
+        if (err && after) set({ net: { ...after, error: netErrorText(err.error, err.code), errorCode: err.code ?? null } });
       })
       .catch(() => {
         if (generation !== netGeneration) return;
         const after = get().net;
         // pending намеренно не очищаем: следующий такой же клик повторит
         // действие с тем же actionId, не создавая вторую серверную операцию.
-        if (after) set({ net: { ...after, error: unsentNetErrorText() } });
+        if (after) set({ net: { ...after, error: unsentNetErrorText(), errorCode: "offline" } });
       })
       .finally(() => {
         if (generation !== netGeneration) return;
@@ -985,8 +996,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!netSession) return;
     await netSession.start().catch((e: unknown) => {
       const cur = get().net;
-      const message = caughtNetErrorText(e);
-      if (cur) set({ net: { ...cur, error: message } });
+      const { text, code } = caughtNetError(e);
+      if (cur) set({ net: { ...cur, error: text, errorCode: code } });
     });
     // Хост запустил партию — запоминаем настройки стола: следующее создание
     // откроется с ними же (вместимость, сложность, колода, дополнения).
@@ -1023,11 +1034,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const cur = get().net;
       // Пароль возвращает сам вызов: хосту не нужно ждать кадра, чтобы
       // показать/переслать новый пароль гостям.
-      if (cur) set({ net: { ...cur, isPrivate: r.isPrivate, password: r.password, error: null } });
+      if (cur) set({ net: { ...cur, isPrivate: r.isPrivate, password: r.password, error: null, errorCode: null } });
     } catch (e) {
       const cur = get().net;
-      const message = caughtNetErrorText(e);
-      if (cur) set({ net: { ...cur, error: message } });
+      const { text, code } = caughtNetError(e);
+      if (cur) set({ net: { ...cur, error: text, errorCode: code } });
     }
   },
 
@@ -1042,13 +1053,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const r = await s.setPassword(password);
       const cur = get().net;
       // Сервер вернул принятый пароль: показываем его хосту сразу, не ждём кадра.
-      if (cur) set({ net: { ...cur, password: r.password, error: null } });
+      if (cur) set({ net: { ...cur, password: r.password, error: null, errorCode: null } });
       return { ok: true };
     } catch (e) {
-      const message = caughtNetErrorText(e);
+      const { text, code } = caughtNetError(e);
       const cur = get().net;
-      if (cur) set({ net: { ...cur, error: message } });
-      return { ok: false, error: message };
+      if (cur) set({ net: { ...cur, error: text, errorCode: code } });
+      return { ok: false, error: text };
     }
   },
 
@@ -1060,8 +1071,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       // Свежие места придут первым же кадром после refresh() в NetSession.
     } catch (e) {
       const cur = get().net;
-      const message = caughtNetErrorText(e);
-      if (cur) set({ net: { ...cur, error: message } });
+      const { text, code } = caughtNetError(e);
+      if (cur) set({ net: { ...cur, error: text, errorCode: code } });
     }
   },
 
@@ -1089,11 +1100,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const final = await s.setName(name);
       const cur = get().net;
       // Сервер мог добавить номер (тёзка) — показываем именно итоговое имя.
-      if (cur) set({ net: { ...cur, name: final, error: null } });
+      if (cur) set({ net: { ...cur, name: final, error: null, errorCode: null } });
     } catch (e) {
       const cur = get().net;
-      const message = caughtNetErrorText(e);
-      if (cur) set({ net: { ...cur, error: message } });
+      const { text, code } = caughtNetError(e);
+      if (cur) set({ net: { ...cur, error: text, errorCode: code } });
     }
   },
 
@@ -1183,6 +1194,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           net: {
             ...after,
             error: netErrorText(err.error, err.code),
+            errorCode: err.code ?? null,
             reactionFailure: { chatId: chatId ?? null, emoji, at: Date.now() },
           },
         });
@@ -1197,6 +1209,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           net: {
             ...after,
             error: unsentNetErrorText(),
+            errorCode: "offline",
             reactionFailure: { chatId: chatId ?? null, emoji, at: Date.now() },
           },
         });
@@ -1259,7 +1272,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   clearNetError: () => {
     const cur = get().net;
-    if (cur?.error) set({ net: { ...cur, error: null } });
+    if (cur?.error) set({ net: { ...cur, error: null, errorCode: null } });
   },
 
   clearNetFatal: () => {

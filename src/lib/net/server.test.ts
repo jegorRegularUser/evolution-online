@@ -40,6 +40,9 @@ before(async () => {
     "0008_chat_reactions_typing.sql",
     "0009_net_turn_deadline.sql",
     "0010_net_action_ids.sql",
+    // 0011: key/params у системных реплик чата — setCapacity пишет их наравне
+    // с русским текстом, колонки должны существовать и в тестовой базе.
+    "0011_chat_key_params.sql",
   ]) {
     const ddl = readFileSync(
       fileURLToPath(new URL(`../../../migrations/${f}`, import.meta.url)),
@@ -322,6 +325,11 @@ describe("хост-контроль", () => {
       true,
       "система пишет в чат",
     );
+    // Локализация системных реплик: рядом с русским текстом едут key+params
+    // (клиент при lang=en собирает реплику по ключу, ru-текст — фолбэк).
+    const systemRow = chat.find((m) => m.text.includes("Мест стало 3"));
+    assert.equal(systemRow?.key, "chat.capacityBots");
+    assert.deepEqual(systemRow?.params, { capacity: 3, bots: 2 });
 
     Math.random = () => 0.999_999;
     try {

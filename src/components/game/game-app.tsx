@@ -59,7 +59,7 @@ import type { PendingNetItem } from "@/lib/net/session";
 import { HintNote } from "./hint-note";
 import { FoodCube } from "./icons";
 import { LobbyScreen } from "./net-screens";
-import { GameOverScreen, MenuScreen, RulesPanel } from "./screens";
+import { GameOverScreen, MenuScreen, RulesPanel, scoreRowName } from "./screens";
 import { EventSpotlight } from "./spotlight";
 import { SoundToggle } from "./sound-toggle";
 import { TopBar } from "./top-bar";
@@ -1050,19 +1050,18 @@ function TableBanners({ state }: { state: GameState }) {
 /** Понятный текст для сетевого отказа замены игрока ботом. */
 function replaceBotErrorText(lang: Lang, error: string, code?: string): string {
   if (code === "player-online") {
-    return lang === "en"
-      ? "The player is still online. Try again after the connection has been offline for 30 seconds."
-      : "Игрок ещё в сети. Попробуйте снова, когда связь пропадёт на 30 секунд.";
+    return translate(lang, "netBot.playerOnline");
   }
   if (code === "host-only") {
-    return lang === "en" ? "Only the host can replace a player with a bot." : "Заменять игрока ботом может только хост.";
+    return translate(lang, "netBot.hostOnly");
   }
   if (code === "game-finished") {
-    return lang === "en" ? "The game has already finished." : "Партия уже закончена.";
+    return translate(lang, "netBot.gameFinished");
   }
   if (code === "player-online" || code === "kick-self" || code === "kick-bot") return error;
+  // Текст ошибки транспорта у браузера машинный («Failed to fetch»), не локализованный.
   if (/failed to fetch|network|load failed/i.test(error)) {
-    return lang === "en" ? "No connection — the replacement was not sent." : "Нет связи — замена не отправлена.";
+    return translate(lang, "netBot.noConnection");
   }
   return error;
 }
@@ -1075,9 +1074,7 @@ async function requestOfflineBotReplacement(
 ): Promise<string | null> {
   const token = readSeatToken(net.code);
   if (!token) {
-    return lang === "en"
-      ? "This browser no longer has the host seat token."
-      : "В этом браузере больше нет токена места хоста.";
+    return translate(lang, "netBot.noHostToken");
   }
   try {
     // В лобби replaceWithBot намеренно отвергает статус playing. Поэтому
@@ -1120,9 +1117,7 @@ function useOfflineBotReplacement(net: NetUiState | null) {
         if (error) {
           toast.error(error);
         } else {
-          toast.success(
-            lang === "en" ? `${seat.name} is now played by a bot.` : `${seat.name} теперь играет бот.`,
-          );
+          toast.success(translate(lang, "netBot.replaced", { name: seat.name }));
           // Старый текст отказа старта относился к уже исправленному составу.
           useGameStore.getState().clearNetError();
         }
@@ -1140,32 +1135,27 @@ function OfflineStartNotice({
   net,
   busySeat,
   onReplace,
-  error,
 }: {
   net: NetUiState;
   busySeat: number | null;
   onReplace: (seat: SeatInfo) => void;
-  error?: string | null;
 }) {
-  const lang = useLang();
+  const t = useT();
   const offline = net.seats.filter((seat) => !seat.isAI && !seat.resigned && !seat.online);
-  const hasOfflineError = Boolean(
-    error && (/не в сети|offline|игрок.*сети/i.test(error)),
-  );
+  // Причина «кто-то не в сети» приходит машинным кодом ошибки (стор хранит его
+  // рядом с текстом): players-offline — старт с офлайн-игроками, player-online —
+  // отказ замены ещё онлайн-игрока. По локализованному тексту не ветвимся.
+  const hasOfflineError = net.errorCode === "players-offline" || net.errorCode === "player-online";
   if (!offline.length && !hasOfflineError) return null;
   const replaceable = offline.filter((seat) => seat.disconnected);
   return (
     <div
       data-offline-start-notice
       role="region"
-      aria-label={lang === "en" ? "Offline players" : "Игроки не в сети"}
+      aria-label={t("netBot.offlineAria")}
       className="fixed inset-x-3 top-20 z-50 mx-auto flex max-w-xl flex-col gap-2 rounded-[var(--radius-lg)] border border-clay/40 bg-surface/95 p-3 text-sm shadow-[var(--shadow-card)] backdrop-blur-sm"
     >
-      <p className="text-muted">
-        {lang === "en"
-          ? "Someone is currently offline. Wait for them to return or replace the player with a bot before starting the year."
-          : "Кто-то сейчас не в сети. Дождитесь возвращения или замените игрока ботом, чтобы начать год."}
-      </p>
+      <p className="text-muted">{t("netBot.offlineNotice")}</p>
       <div className="flex flex-wrap gap-2">
         {offline.map((seat) => (
           <Button
@@ -1175,25 +1165,15 @@ function OfflineStartNotice({
             className="max-sm:min-h-11"
             data-replace-bot-lobby={seat.seat}
             disabled={!seat.disconnected || busySeat !== null}
-            title={
-              seat.disconnected
-                ? undefined
-                : lang === "en"
-                  ? "Available after 30 seconds without a heartbeat"
-                  : "Доступно после 30 секунд без связи"
-            }
+            title={seat.disconnected ? undefined : t("netBot.replaceWaitTitle")}
             onClick={() => onReplace(seat)}
           >
-            {lang === "en" ? `Replace ${seat.name} with a bot` : `Заменить ${seat.name} ботом`}
+            {t("netBot.replaceSeat", { name: seat.name })}
           </Button>
         ))}
       </div>
       {replaceable.length === 0 ? (
-        <p className="text-xs text-subtle">
-          {lang === "en"
-            ? "The replacement button will be available after the offline threshold."
-            : "Кнопка замены станет доступна после порога отсутствия связи."}
-        </p>
+        <p className="text-xs text-subtle">{t("netBot.replaceThresholdHint")}</p>
       ) : null}
     </div>
   );
@@ -1201,6 +1181,7 @@ function OfflineStartNotice({
 
 /** Тихая плашка ожидания ходящего игрока без намёка на его вину. */
 function WaitingPlayerNotice({ actor, net }: { actor: Player | null; net: NetUiState | null }) {
+  const t = useT();
   const lang = useLang();
   const [, setTick] = useState(0);
   const seat = actor && net ? net.seats.find((item) => item.seat === actor.id) : undefined;
@@ -1224,14 +1205,10 @@ function WaitingPlayerNotice({ actor, net }: { actor: Player | null; net: NetUiS
     >
       <span className="size-1.5 shrink-0 rounded-full bg-muted/70" aria-hidden />
       <span>
-        {lang === "en" ? `Waiting for ${name}` : `Ждём игрока ${name}`}
+        {t("netBot.waitingPlayer", { name })}
         {remaining !== null
-          ? lang === "en"
-            ? ` · turn ends in ${remaining}s`
-            : ` · ход завершится через ${remaining} с`
-          : lang === "en"
-            ? " · the table is reconnecting"
-            : " · стол ждёт возвращения"}
+          ? t("netBot.waitingTurnEnds", { n: remaining })
+          : t("netBot.waitingReconnecting")}
       </span>
     </div>
   );
@@ -1245,7 +1222,6 @@ export function GameApp() {
   const netAgain = useGameStore((s) => s.netAgain);
   const leaveNet = useGameStore((s) => s.leaveNet);
   const t = useT();
-  const lang = useLang();
   const [confirmAgain, setConfirmAgain] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [lobbyReplaceTarget, setLobbyReplaceTarget] = useState<SeatInfo | null>(null);
@@ -1260,13 +1236,9 @@ export function GameApp() {
     setTutorialOpen(false);
     setLobbyReplaceTarget(null);
   }, [net?.code]);
-  const againBody = lang === "en"
-    ? "The final score will close for everyone and the table will return to the lobby."
-    : "Финальный счёт закроется для всех, а стол вернётся в лобби.";
-  const againConfirm = lang === "en" ? "Return to lobby" : "Вернуться в лобби";
-  const waitingForHost = lang === "en"
-    ? "Waiting for the host to return the table to the lobby."
-    : "Ждём, пока хост вернёт стол в лобби.";
+  const againBody = t("final.againBody");
+  const againConfirm = t("final.againConfirm");
+  const waitingForHost = t("final.waitingHost");
 
   // Модалки (правила, статистика, обучение) звучат тихим свушем на вход и выход.
   const openRules = useCallback(() => {
@@ -1321,19 +1293,14 @@ export function GameApp() {
           <OfflineStartNotice
             net={net}
             busySeat={lobbyBusySeat}
-            error={net.error}
             onReplace={(seat) => setLobbyReplaceTarget(seat)}
           />
         ) : null}
         {lobbyReplaceTarget ? (
           <ConfirmDialog
-            title={lang === "en" ? "Replace player with a bot?" : "Заменить игрока ботом?"}
-            body={
-              lang === "en"
-                ? `${lobbyReplaceTarget.name} is currently offline. The bot will continue this seat.`
-                : `${lobbyReplaceTarget.name} сейчас не в сети. За это место будет играть бот.`
-            }
-            confirmLabel={lang === "en" ? "Replace with bot" : "Заменить ботом"}
+            title={t("netBot.confirmTitle")}
+            body={t("netBot.confirmBody", { name: lobbyReplaceTarget.name })}
+            confirmLabel={t("netBot.confirm")}
             cancelLabel={t("common.cancel")}
             tone="danger"
             onConfirm={() => {
@@ -1377,7 +1344,7 @@ export function GameApp() {
           {t("game.reconnecting")}
         </div>
       ) : null}
-      <Table onTutorial={openTutorial} tutorialLabel={lang === "en" ? "Tutorial" : "Обучение"} />
+      <Table onTutorial={openTutorial} />
       {state.phase === "gameOver" && state.scores ? (
         spectator ? (
           <SpectatorGameOver state={state} onMenu={leaveNet} />
@@ -1430,8 +1397,8 @@ function SpectatorGameOver({ state, onMenu }: { state: GameState; onMenu: () => 
   const lang = useLang();
   const rows = [...(state.scores ?? [])].sort((a, b) => b.total - a.total || b.discard - a.discard);
   const winners = new Set(state.winnerIds ?? []);
-  const title = lang === "en" ? "Game result" : "Итог партии";
-  const subtitle = lang === "en" ? "You are watching this game." : "Вы смотрите эту партию.";
+  const title = t("final.spectatorTitle");
+  const subtitle = t("final.spectatorSubtitle");
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-3 sm:p-4">
@@ -1444,7 +1411,7 @@ function SpectatorGameOver({ state, onMenu }: { state: GameState; onMenu: () => 
             {rows.map((row, index) => (
               <li key={row.playerId} className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-border bg-surface-2/50 px-3 py-2 text-sm">
                 <span className="font-medium text-fg">
-                  {index + 1}. {row.name}
+                  {index + 1}. {scoreRowName(row, lang)}
                   {winners.has(row.playerId) ? <span className="ml-2 text-xs text-accent">★</span> : null}
                 </span>
                 <span className="font-display tabular-nums text-fg">{row.total}</span>
@@ -1538,13 +1505,18 @@ function useFeedItems(state: GameState, net: NetUiState | null): FeedItem[] {
       // нет, но ник должен читаться — тот же нейтральный тон, что в лобби.
       const color = colorOfSeat.get(m.seat) ?? colorOfName(m.name) ?? NEUTRAL_AUTHOR_COLOR;
       const rs = byChat.get(m.id);
+      // Системная реплика «Стола» (key+params от сервера): текст собирается
+      // по ключу на языке рендера, русский text — фолбэк для старых строк;
+      // ник системной реплики — по ключу, обычные ники — как есть.
+      const text = m.key ? translate(lang, m.key as TKey, m.params ?? undefined) : m.text;
+      const playerName = m.key ? translate(lang, "chat.table") : scientistName(m.name, lang);
       rows.push({
         sortAt: m.at,
         item: {
           id: `chat-${m.id}`,
           kind: "chat",
-          text: m.text,
-          playerName: m.name,
+          text,
+          playerName,
           at: m.at,
           // Место автора: 0..7 — игроки, -1 — ожидающие, -2 — зрители.
           // Нужно вкладке «Зрители» в журнале.
@@ -1579,7 +1551,6 @@ function usePendingAction(
   net: NetUiState | null,
   storeDispatch: (action: GameAction) => void,
 ): { dispatch: (action: GameAction) => void; pending: PendingNetItem | null } {
-  const lang = useLang();
   const [pending, setPending] = useState<PendingNetItem | null>(null);
   const pendingRef = useRef<PendingNetItem | null>(null);
   const stateAtSubmitRef = useRef<GameState | null>(null);
@@ -1598,12 +1569,9 @@ function usePendingAction(
   const fail = useCallback(() => {
     if (!pendingRef.current) return;
     clear();
-    toast.error(
-      lang === "en"
-        ? "The action was not sent — check your connection and try again."
-        : "Действие не отправлено — проверьте связь и попробуйте ещё раз.",
-    );
-  }, [clear, lang]);
+    // Тост собирается в момент события (не рендера) — живой язык честный.
+    toast.error(liveT("net.actionFailed"));
+  }, [clear]);
 
   useEffect(() => {
     if (!pending) return;
@@ -1662,7 +1630,7 @@ function usePendingAction(
 }
 
 function PendingActionHint({ pending }: { pending: PendingNetItem | null }) {
-  const lang = useLang();
+  const t = useT();
   if (!pending) return null;
   return (
     <span
@@ -1672,7 +1640,7 @@ function PendingActionHint({ pending }: { pending: PendingNetItem | null }) {
       className="mr-auto inline-flex items-center gap-1.5 text-xs text-muted"
     >
       <span className="size-2 animate-pulse rounded-full bg-accent" aria-hidden />
-      {lang === "en" ? "Sending…" : "Отправляется…"}
+      {t("net.sending")}
     </span>
   );
 }
@@ -1682,7 +1650,8 @@ function Table({
   tutorialLabel,
 }: {
   onTutorial: () => void;
-  tutorialLabel: string;
+  /** Явная подпись кнопки обучения; без пропа TopBar берёт словарную. */
+  tutorialLabel?: string;
 }) {
   const state = useGameStore((s) => s.state)!;
   const intent = useGameStore((s) => s.intent);
@@ -3142,13 +3111,9 @@ function Table({
 
       {replaceTarget ? (
         <ConfirmDialog
-          title={lang === "en" ? "Replace player with a bot?" : "Заменить игрока ботом?"}
-          body={
-            lang === "en"
-              ? `${replaceTarget.name} is currently offline. The bot will continue this seat.`
-              : `${replaceTarget.name} сейчас не в сети. За это место будет играть бот.`
-          }
-          confirmLabel={lang === "en" ? "Replace with bot" : "Заменить ботом"}
+          title={t("netBot.confirmTitle")}
+          body={t("netBot.confirmBody", { name: replaceTarget.name })}
+          confirmLabel={t("netBot.confirm")}
           cancelLabel={t("common.cancel")}
           tone="danger"
           onConfirm={() => {
@@ -3168,9 +3133,7 @@ function Table({
               ? t("leave.bodySpectator")
               : canResumeSoftExit
                 ? t("leave.bodyPlayer")
-                : lang === "en"
-                  ? "This browser cannot preserve a return link. Leaving now will not offer a way back to this seat."
-                  : "Этот браузер не сохранил ссылку возврата. При выходе вернуться за этот стол уже не получится."
+                : t("leave.bodyNoResume")
           }
           confirmLabel={net?.spectating ? t("leave.confirmSpectator") : t("leave.confirmPlayer")}
           cancelLabel={t("leave.stay")}
@@ -3865,7 +3828,7 @@ const PlayerSection = memo(function PlayerSection({
               data-player-offline={p.id}
               className="rounded-full bg-ink/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
             >
-              {lang === "en" ? "offline" : "офлайн"}
+              {t("game.offline")}
             </span>
           ) : null}
           {canManage && seatInfo?.disconnected && !isHuman ? (
@@ -3876,24 +3839,14 @@ const PlayerSection = memo(function PlayerSection({
               className="min-h-9 px-2 text-xs"
               data-replace-bot-party={p.id}
               disabled={replaceBusySeat !== null}
-              aria-label={
-                lang === "en"
-                  ? `Replace ${p.name} with a bot`
-                  : `Заменить ${p.name} ботом`
-              }
-              title={lang === "en" ? "Replace with a bot" : "Заменить ботом"}
+              aria-label={t("netBot.replaceSeat", { name: p.name })}
+              title={t("netBot.confirm")}
               onClick={(event) => {
                 event.stopPropagation();
                 if (seatInfo) onReplaceSeat?.(seatInfo);
               }}
             >
-              {replaceBusySeat === p.id
-                ? lang === "en"
-                  ? "…"
-                  : "…"
-                : lang === "en"
-                  ? "Replace with bot"
-                  : "Заменить ботом"}
+              {replaceBusySeat === p.id ? "…" : t("netBot.confirm")}
             </Button>
           ) : null}
           {active ? (
@@ -5446,14 +5399,9 @@ function FeedDock({
 }
 
 function defenseOutcome(lang: Lang, kind: "running" | "tail" | "none"): string {
-  if (lang === "en") {
-    if (kind === "running") return "Roll 4 or higher to escape";
-    if (kind === "tail") return "The animal survives; the attacker gets 1 food";
-    return "The animal dies; the attacker gets 2 food";
-  }
-  if (kind === "running") return "Бросок 4+ спасает животное";
-  if (kind === "tail") return "Животное выживет, хищник получит 1 фишку";
-  return "Животное погибнет, хищник получит 2 фишки";
+  if (kind === "running") return translate(lang, "defense.outcomeRunning");
+  if (kind === "tail") return translate(lang, "defense.outcomeTail");
+  return translate(lang, "defense.outcomeNone");
 }
 
 function DefenseDock({
@@ -5485,9 +5433,7 @@ function DefenseDock({
     }, 1000);
     return () => window.clearInterval(timer);
   }, [atk.carnivoreId, atk.preyId, atk.plantId]);
-  const waitLabel = lang === "en"
-    ? `The table is waiting for your decision · ${waitSeconds}s`
-    : `Стол ждёт вашего решения · ${waitSeconds} с`;
+  const waitLabel = t("defense.waitDecision", { n: waitSeconds });
   const running = acts.find((a) => a.type === "chooseDefense" && a.kind === "running");
   const none = acts.find((a) => a.type === "chooseDefense" && a.kind === "none");
   const mimics = acts.filter((a) => a.type === "chooseDefense" && a.kind === "mimicry");
@@ -5521,7 +5467,7 @@ function DefenseDock({
               {!prey.traits.length ? <span className="text-xs text-muted">{t("card.noTraits")}</span> : null}
             </div>
             {prey.traits.length ? (
-              <div className="mt-2 flex flex-wrap gap-1.5" aria-label={lang === "en" ? "Target traits" : "Свойства атакованного животного"}>
+              <div className="mt-2 flex flex-wrap gap-1.5" aria-label={t("defense.targetTraitsAria")}>
                 {prey.traits.map((trait) => (
                   <span key={trait.id} className="rounded-full border border-border bg-surface px-2 py-0.5 text-[11px] text-muted">
                     {traitName(trait.type, lang)}

@@ -10,6 +10,12 @@ export const APP_NAME = "Эволюция";
 export const APP_SHORT_NAME = "Эволюция";
 export const APP_DESCRIPTION =
   "Происхождение видов — создавайте животных, играйте свойства, охотьтесь и выживайте.";
+// Английские варианты манифеста: выбираются по Accept-Language запроса
+// (ru — дефолт и фолбэк), сама сборка остаётся без участия языка.
+export const APP_NAME_EN = "Evolution";
+export const APP_SHORT_NAME_EN = "Evolution";
+export const APP_DESCRIPTION_EN =
+  "Origin of species — create animals, play traits, hunt and survive.";
 export const APP_THEME_COLOR = "#111410";
 export const APP_BACKGROUND_COLOR = "#111410";
 // Пустой query-параметр сохраняет тот же deep-link контракт, что и
@@ -189,19 +195,58 @@ function localizeInstallMarkup(markup) {
   );
 }
 
-export function renderInstallPageHtml(template, { host: _host, url } = {}) {
-  return localizeInstallMarkup(String(template))
+export function renderInstallPageHtml(template, { host: _host, url, lang = "ru" } = {}) {
+  const markup = String(template);
+  if (lang === "en") {
+    // EN-вариант: шаблон уже английский, перевод не применяется — сохраняем
+    // только брендинг (цвет, иконка, имя вместо «Grok»), как это делает ru-путь.
+    return markup
+      .replaceAll('content="#000000"', 'content="#111410"')
+      .replaceAll("/__grok/install/assets/homescreen/logo-grok.svg", "/img/meta/app-icon.png")
+      .replaceAll("Powered by Grok", "Powered by Evolution")
+      .replaceAll(">Grok<", ">Evolution<")
+      .replaceAll("{{APP_NAME}}", escapeHtml(APP_NAME_EN))
+      .replaceAll("{{APP_URL}}", escapeHtml(stripInstallParams(url)));
+  }
+  return localizeInstallMarkup(markup)
     .replaceAll("{{APP_NAME}}", escapeHtml(APP_NAME))
+    // Имя после глагола нужно в винительном падеже; в meta apple-title
+    // остаётся именительный — эти три пары его не задевают.
+    .replaceAll("Добавить Эволюция", "Добавить Эволюцию")
+    .replaceAll("добавить Эволюция", "добавить Эволюцию")
+    .replaceAll("Открыть Эволюция", "Открыть Эволюцию")
     .replaceAll("{{APP_URL}}", escapeHtml(stripInstallParams(url)));
 }
 
-export function renderWebManifest(_hostHeader) {
+/**
+ * Язык ответа по Accept-Language: основной тег запроса `en*` → "en", иначе
+ * "ru" — тот же контракт, что у detectLang на клиенте (смотрим только первый
+ * по приоритету тег: хвост почти всегда содержит en и ввёл бы в заблуждение).
+ */
+export function langFromAcceptLanguage(acceptHeader) {
+  const pairs = String(acceptHeader ?? "")
+    .split(",")
+    .map((part) => {
+      const [tag = "", ...params] = part.trim().split(";");
+      const q = params.find((p) => p.trim().startsWith("q="));
+      const weight = q ? Number.parseFloat(q.split("=")[1] ?? "") : 1;
+      return { tag: tag.trim().toLowerCase(), weight: Number.isFinite(weight) ? weight : 0 };
+    })
+    .filter((p) => p.tag)
+    .sort((a, b) => b.weight - a.weight);
+  const primary = pairs[0]?.tag ?? "";
+  return primary.startsWith("en") ? "en" : "ru";
+}
+
+/** Манифест PWA на языке запроса: ru по умолчанию, en — по Accept-Language. */
+export function renderWebManifest(_hostHeader, lang = "ru") {
+  const en = lang === "en";
   return JSON.stringify(
     {
-      name: APP_NAME,
-      short_name: APP_SHORT_NAME,
-      description: APP_DESCRIPTION,
-      lang: "ru",
+      name: en ? APP_NAME_EN : APP_NAME,
+      short_name: en ? APP_SHORT_NAME_EN : APP_SHORT_NAME,
+      description: en ? APP_DESCRIPTION_EN : APP_DESCRIPTION,
+      lang: en ? "en" : "ru",
       id: "/",
       // `room=` оставлен в start_url намеренно: существующий вход `?room=CODE`
       // остаётся deep-link совместимым, а нестандартный literal-код не подставляется.

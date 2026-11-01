@@ -22,6 +22,7 @@ import {
   createHeadInjector,
   isDocumentPath,
   isInstallQuery,
+  langFromAcceptLanguage,
   renderInstallPageHtml,
   renderWebManifest,
 } from "../../scripts/grok-pwa-shared.mjs";
@@ -83,7 +84,9 @@ export default async function grokPwaMiddleware(
   }
 
   if (path === "/__grok/manifest.webmanifest" || path === "/__grok/manifest.json") {
-    return new Response(renderWebManifest(requestHost(event)), {
+    // Язык манифеста — по Accept-Language браузера (ru по умолчанию); ответ
+    // без кэша, как и раньше: заголовок запроса не участвует в ключе CDN.
+    return new Response(renderWebManifest(requestHost(event), langFromAcceptLanguage(event.req.headers.get("accept-language"))), {
       headers: {
         "content-type": "application/manifest+json; charset=utf-8",
         "cache-control": "no-cache",
@@ -99,6 +102,7 @@ export default async function grokPwaMiddleware(
     const html = renderInstallPageHtml(installPageTemplate, {
       host: requestHost(event),
       url: urlWithQuery,
+      lang: langFromAcceptLanguage(event.req.headers.get("accept-language")),
     });
     return new Response(html, {
       headers: {

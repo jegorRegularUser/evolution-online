@@ -594,9 +594,12 @@ function viewEventBatches(batches: EventBatch[], seat: number, full: GameState):
 
 /** sinceId не задан — последние сообщения (подключение/возврат за стол). */
 async function readChat(sql: SqlLike, code: string, sinceId?: number): Promise<ChatMessage[]> {
+  // «key»/params — локализация системных реплик (см. 0011_chat_key_params.sql):
+  // у реплик людей оба поля пустые, клиент показывает русский text как есть.
   if (sinceId === undefined) {
     const rows = await sql.query<ChatMessage>(
       `select id::int as id, seat, name, text,
+              "key" as key, params,
               (extract(epoch from created_at) * 1000)::float8 as at
          from evo_chat where room_code = $1 order by id desc limit ${CHAT_HISTORY}`,
       [code],
@@ -605,6 +608,7 @@ async function readChat(sql: SqlLike, code: string, sinceId?: number): Promise<C
   }
   return sql.query<ChatMessage>(
     `select id::int as id, seat, name, text,
+            "key" as key, params,
             (extract(epoch from created_at) * 1000)::float8 as at
        from evo_chat where room_code = $1 and id > $2 order by id limit ${CHAT_POLL_LIMIT}`,
     [code, sinceId],
@@ -1909,17 +1913,29 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       if (hostSeat !== room.host_seat) patch.hostSeat = hostSeat;
       await casUpdateStrict(sql, code, room.version, patch);
 
-      // Системное сообщение: состав изменился не по своей воле.
+      // Системное сообщение: состав изменился не по своей воле. Русский text —
+      // источник правды (старые клиенты и фолбэк); рядом едут key+params, чтобы
+      // клиент собрал реплику на своём языке (контракт журнала движка).
       if (victims.length) {
         const movedHumans = victims.filter((v) => !v.is_ai).map((v) => v.name);
+        const bots = victims.length - movedHumans.length;
         const parts: string[] = [];
-        if (victims.length - movedHumans.length) {
-          parts.push(`убраны боты: ${victims.length - movedHumans.length}`);
-        }
+        if (bots) parts.push(`убраны боты: ${bots}`);
         if (movedHumans.length) parts.push(`в очередь ожидающих: ${movedHumans.join(", ")}`);
+        // Вариант формулировки — по составу жертв: боты, люди или и те и другие.
+        const key =
+          bots && movedHumans.length
+            ? "chat.capacityBotsQueue"
+            : bots
+              ? "chat.capacityBots"
+              : "chat.capacityQueue";
+        const params: Record<string, string | number> = { capacity };
+        if (bots) params.bots = bots;
+        if (movedHumans.length) params.names = movedHumans.join(", ");
         await sql.query(
-          `insert into evo_chat (room_code, seat, name, text) values ($1, -1, $2, $3)`,
-          [code, "Стол", `Мест стало ${capacity}: ${parts.join("; ")}`],
+          `insert into evo_chat (room_code, seat, name, text, "key", params)
+           values ($1, -1, $2, $3, $4, $5)`,
+          [code, "Стол", `Мест стало ${capacity}: ${parts.join("; ")}`, key, JSON.stringify(params)],
         );
       }
     },
@@ -2660,6 +2676,10 @@ alter table evo_seats add column if not exists typing_at timestamptz;
 alter table evo_waiters add column if not exists typing_at timestamptz;
 alter table evo_spectators add column if not exists typing_at timestamptz;
 alter table evo_reactions add column if not exists chat_id integer references evo_chat(id) on delete cascade;
+-- Локализация системных реплик чата (migrations/0011): ключ словаря и параметры
+-- подстановки рядом с русским текстом, у реплик людей оба поля пустые.
+alter table evo_chat add column if not exists "key" text;
+alter table evo_chat add column if not exists params jsonb;
 `;
 
 /**

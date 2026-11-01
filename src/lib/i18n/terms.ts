@@ -50,15 +50,15 @@ export const TRAIT_EN: Record<string, TermEn> = {
   },
   swimming: {
     name: "Swimming",
-    desc: "Only a swimming carnivore can eat this animal — and a swimming carnivore can only hunt swimming prey. With “Continents”, the animal moves to the Ocean right away.",
+    desc: "Only a swimming carnivore can eat this animal, and a swimming carnivore can only hunt swimming prey. With \"Continents\", the animal moves to the Ocean right away.",
   },
   camouflage: {
     name: "Camouflage",
-    desc: "A carnivore cannot see this animal: only a carnivore with “Sharp Vision” can attack it.",
+    desc: "A carnivore cannot see this animal: only a carnivore with \"Sharp Vision\" can attack it.",
   },
   sharpVision: {
     name: "Sharp Vision",
-    desc: "Spots the hidden: a carnivore with sharp vision can attack animals with “Camouflage”.",
+    desc: "Spots the hidden: a carnivore with sharp vision can attack animals with \"Camouflage\".",
   },
   burrowing: {
     name: "Burrowing",
@@ -66,7 +66,7 @@ export const TRAIT_EN: Record<string, TermEn> = {
   },
   scavenger: {
     name: "Scavenger",
-    desc: "Whenever any carnivore eats an animal whole, one scavenger on the table gets 1 blue token: searched in turn order starting from the carnivore's owner. Can't be combined with “Carnivorous” or “Obligate Carnivore”.",
+    desc: "Whenever any carnivore eats an animal whole, one scavenger on the table gets 1 blue token: searched in turn order starting from the carnivore's owner. Can't be combined with \"Carnivorous\" or \"Obligate Carnivore\".",
   },
   symbiosis: {
     name: "Symbiosis",
@@ -94,7 +94,7 @@ export const TRAIT_EN: Record<string, TermEn> = {
   },
   highBodyWeight: {
     name: "High Body Weight",
-    desc: "Only a carnivore that also has “High Body Weight” can eat this animal. Food requirement +1.",
+    desc: "Only a carnivore that also has \"High Body Weight\" can eat this animal. Food requirement +1.",
   },
   parasite: {
     name: "Parasite",
@@ -106,11 +106,11 @@ export const TRAIT_EN: Record<string, TermEn> = {
   },
   communication: {
     name: "Communication",
-    desc: "A card between two animals: when one takes a red token from the food bank, the other immediately takes one too. With “Plants” and “Grass and Mushrooms” the partner takes a token from the same plant or flora card.",
+    desc: "A card between two animals: when one takes a red token from the food bank, the other immediately takes one too. With \"Plants\" and \"Grass and Mushrooms\" the partner takes a token from the same plant or flora card.",
   },
   poisonous: {
     name: "Poisonous",
-    desc: "A carnivore that eats this animal whole is poisoned and dies in the extinction phase. A mere tail or prey of an “Insectivore” doesn't poison the carnivore.",
+    desc: "A carnivore that eats this animal whole is poisoned and dies in the extinction phase. A mere tail or prey of an \"Insectivore\" doesn't poison the carnivore.",
   },
   hibernation: {
     name: "Hibernation",
@@ -124,7 +124,7 @@ export const TRAIT_EN: Record<string, TermEn> = {
   // ── «Континенты» ────────────────────────────────────────────────────────
   migration: {
     name: "Migration",
-    desc: "Declared instead of a normal turn: this turn is only travel — no food, no hunting. Your animals with this trait travel from the Ocean to any continent, and from a continent to the Ocean (swimmers only). There's no direct route between continents; each animal migrates once per feeding phase.",
+    desc: "Declared instead of a normal turn: this turn is only travel, no food, no hunting. Your animals with this trait travel from the Ocean to any continent, and from a continent to the Ocean (swimmers only). There's no direct route between continents; each animal migrates once per feeding phase.",
   },
   remora: {
     name: "Remora",
@@ -144,15 +144,15 @@ export const TRAIT_EN: Record<string, TermEn> = {
   },
   recombination: {
     name: "Recombination",
-    desc: "A pair card between two animals of the same territory. Once per year, during its owner's feeding turn, each partner gives the other one unpaired trait. A duplicate goes to the discard; a one-shot trait already used by its previous owner (hibernation this year, piracy/grazing this turn) stays spent. A swimmer that loses “Swimming” in the Ocean moves to a continent.",
+    desc: "A pair card between two animals of the same territory. Once per year, during its owner's feeding turn, each partner gives the other one unpaired trait. A duplicate goes to the discard; a one-shot trait already used by its previous owner (hibernation this year, piracy/grazing this turn) stays spent. A swimmer that loses \"Swimming\" in the Ocean moves to a continent.",
   },
   edificator: {
     name: "Edificator",
-    desc: "Every year each edificator adds 2 food tokens to the bank of the continent it stands on; one standing in the Ocean feeds the Ocean bank. With “Plants” and “Grass and Mushrooms”, continental edificators fertilize the plants and flora of their area instead: 1 token to each card. A sleeping edificator adds nothing.",
+    desc: "Every year each edificator adds 2 food tokens to the bank of the continent it stands on; one standing in the Ocean feeds the Ocean bank. With \"Plants\" and \"Grass and Mushrooms\", continental edificators fertilize the plants and flora of their area instead: 1 token to each card. A sleeping edificator adds nothing.",
   },
   neoplasia: {
     name: "Neoplasia",
-    desc: "A virus: placed under all traits of an opponent's animal. Every year at food supply determination it rises and disables another unpaired trait (paired ones are untouched). A disabled trait doesn't work and gives no points; when there's nothing left to disable, the animal dies immediately. “Swimming” in the Ocean is untouched by the virus.",
+    desc: "A virus: placed under all traits of an opponent's animal. Every year at food supply determination it rises and disables another unpaired trait (paired ones are untouched). A disabled trait doesn't work and gives no points; when there's nothing left to disable, the animal dies immediately. \"Swimming\" in the Ocean is untouched by the virus.",
   },
 
   // ── «Растения»: свойства растений ────────────────────────────────────────
@@ -200,17 +200,17 @@ export const TRAIT_EN: Record<string, TermEn> = {
   },
   insectivore: {
     name: "Insectivore",
-    desc: "Small prey: for an animal without traits (including one with the “Sleep” mark) the carnivore gets 1 blue token instead of two.",
+    desc: "Small prey: for an animal without traits (including one with the \"Sleep\" mark) the carnivore gets 1 blue token instead of two.",
   },
 
   // ── «Случайные мутации» ─────────────────────────────────────────────────
   obligateCarnivore: {
     name: "Obligate Carnivore",
-    desc: "Hunts once per turn and feeds only on prey: it takes no food from the bank, plants or other players' traits, but a successful attack fills it up completely. Food requirement +1. Can't be combined with “Carnivorous” or “Scavenger”.",
+    desc: "Hunts once per turn and feeds only on prey: it takes no food from the bank, plants or other players' traits, but a successful attack fills it up completely. Food requirement +1. Can't be combined with \"Carnivorous\" or \"Scavenger\".",
   },
   budding: {
     name: "Budding",
-    desc: "Once per year, at the start of your development turn the species buds one more animal: its card comes from your personal deck. Budding bypasses the usual population limit of “no more than the number of your species”.",
+    desc: "Once per year, at the start of your development turn the species buds one more animal: its card comes from your personal deck. Budding bypasses the usual population limit of \"no more than the number of your species\".",
   },
   metabolicSyndrome: {
     name: "Metabolic Syndrome",
@@ -230,7 +230,7 @@ export const TRAIT_EN: Record<string, TermEn> = {
   },
   simplification: {
     name: "Simplification",
-    desc: "A harmful mutation. The last trait played on the species separates and becomes a new mutant species, and the “Simplification” card itself becomes yet another species.",
+    desc: "A harmful mutation. The last trait played on the species separates and becomes a new mutant species, and the \"Simplification\" card itself becomes yet another species.",
   },
 };
 
@@ -240,19 +240,19 @@ export const TRAIT_EN: Record<string, TermEn> = {
 export const FLORA_EN: Record<string, TermEn> = {
   toadstool: {
     name: "Death Cap",
-    desc: "The animal that takes a token gets the “Poison” mark (when the “Poison” mark is received, this animal's “Parasite” trait is discarded). In the extinction phase an animal with the “Poison” mark dies unless it has an “Antidote”.",
+    desc: "The animal that takes a token gets the \"Poison\" mark (when the \"Poison\" mark is received, this animal's \"Parasite\" trait is discarded). In the extinction phase an animal with the \"Poison\" mark dies unless it has an \"Antidote\".",
   },
   mold: {
     name: "Mold",
-    desc: "The animal that takes a token gets the “Antidote” mark: it doesn't die in extinction from the “Poison” mark or from eating an animal with the “Poisonous” trait.",
+    desc: "The animal that takes a token gets the \"Antidote\" mark: it doesn't die in extinction from the \"Poison\" mark or from eating an animal with the \"Poisonous\" trait.",
   },
   madCap: {
     name: "Mad Cap",
-    desc: "The animal that takes a token gets the “Madness” mark: at the start of the next round of the feeding phase its owner removes the mark. A bot controls their animals for that round; the neighbor does not participate — control by the right-hand neighbor is not yet implemented in the online version.",
+    desc: "The animal that takes a token gets the \"Madness\" mark: at the start of the next round of the feeding phase its owner removes the mark. A bot controls their animals for that round; the neighbor does not participate — control by the right-hand neighbor is not yet implemented in the online version.",
   },
   flyAgaric: {
     name: "Fly Agaric",
-    desc: "The animal that takes a token gets the “Rage” mark: at the start of the next round of the feeding phase its owner removes the mark and must attack another animal with it, as a carnivore — even a fed one. The enraged animal doesn't eat its prey and gets no tokens; whatever the outcome, the round ends.",
+    desc: "The animal that takes a token gets the \"Rage\" mark: at the start of the next round of the feeding phase its owner removes the mark and must attack another animal with it, as a carnivore — even a fed one. The enraged animal doesn't eat its prey and gets no tokens; whatever the outcome, the round ends.",
   },
   insight: {
     name: "Mushroom of Insight",
@@ -264,19 +264,19 @@ export const FLORA_EN: Record<string, TermEn> = {
   },
   sleepGrass: {
     name: "Sleep Grass",
-    desc: "The animal that takes a token gets the “Sleep” mark: it counts as an animal without traits (all traits, including paired ones, don't work) and its food requirement is 1. Marks on it keep working. “Insectivore” triggers when eating an animal with “Sleep”.",
+    desc: "The animal that takes a token gets the \"Sleep\" mark: it counts as an animal without traits (all traits, including paired ones, don't work) and its food requirement is 1. Marks on it keep working. \"Insectivore\" triggers when eating an animal with \"Sleep\".",
   },
   thryn: {
     name: "Tryn-Grass",
-    desc: "The animal that takes a token gets the “Tryn” mark: it receives no marks when taking tokens from any grass or fungi, and a carnivore with “Tryn” receives no marks from eaten prey. A carnivore without “Tryn” that eats prey with “Tryn” and other marks receives all those marks at once.",
+    desc: "The animal that takes a token gets the \"Tryn\" mark: it receives no marks when taking tokens from any grass or fungi, and a carnivore with \"Tryn\" receives no marks from eaten prey. A carnivore without \"Tryn\" that eats prey with \"Tryn\" and other marks receives all those marks at once.",
   },
   datura: {
     name: "Jimson Weed",
-    desc: "The animal that takes a token gets the “Haze” mark: a carnivore (or enraged animal) attacking it may ignore one of its traits (in the online version it's chosen automatically — the one that hinders the attack most).",
+    desc: "The animal that takes a token gets the \"Haze\" mark: a carnivore (or enraged animal) attacking it may ignore one of its traits (in the online version it's chosen automatically — the one that hinders the attack most).",
   },
   smile: {
     name: "Smile Grass",
-    desc: "The animal that takes a token gets the “Pacifism” mark: it cannot attack using the “Carnivorous” trait or under the “Rage” mark, and cannot use “Piracy”.",
+    desc: "The animal that takes a token gets the \"Pacifism\" mark: it cannot attack using the \"Carnivorous\" trait or under the \"Rage\" mark, and cannot use \"Piracy\".",
   },
   cleanser: {
     name: "Cleansing Grass",
@@ -284,7 +284,7 @@ export const FLORA_EN: Record<string, TermEn> = {
   },
   passionflower: {
     name: "Passionflower",
-    desc: "Having taken a token, the owner must take one trait of this animal (except “Parasite”) and play it as a new animal (in the online version the trait is chosen automatically — the topmost valid one).",
+    desc: "Having taken a token, the owner must take one trait of this animal (except \"Parasite\") and play it as a new animal (in the online version the trait is chosen automatically — the topmost valid one).",
   },
 };
 
@@ -294,11 +294,11 @@ export const FLORA_EN: Record<string, TermEn> = {
 export const MARK_EN: Record<string, TermEn> = {
   poison: {
     name: "Poison",
-    desc: "In the extinction phase an animal with the “Poison” mark dies if it doesn't have the “Antidote” mark. When the “Poison” mark is received, the animal's “Parasite” trait is discarded.",
+    desc: "In the extinction phase an animal with the \"Poison\" mark dies if it doesn't have the \"Antidote\" mark. When the \"Poison\" mark is received, the animal's \"Parasite\" trait is discarded.",
   },
   antidote: {
     name: "Antidote",
-    desc: "An animal with the “Antidote” mark doesn't die in extinction from the “Poison” mark or from the consequences of eating an animal with the “Poisonous” trait.",
+    desc: "An animal with the \"Antidote\" mark doesn't die in extinction from the \"Poison\" mark or from the consequences of eating an animal with the \"Poisonous\" trait.",
   },
   madness: {
     name: "Madness",
@@ -314,7 +314,7 @@ export const MARK_EN: Record<string, TermEn> = {
   },
   thryn: {
     name: "Tryn",
-    desc: "The animal receives no marks when taking tokens from grass and fungi; a carnivore with “Tryn” receives no marks from eaten prey. A carnivore without “Tryn” that eats prey with “Tryn” and other marks receives all the marks at once.",
+    desc: "The animal receives no marks when taking tokens from grass and fungi; a carnivore with \"Tryn\" receives no marks from eaten prey. A carnivore without \"Tryn\" that eats prey with \"Tryn\" and other marks receives all the marks at once.",
   },
   haze: {
     name: "Haze",
@@ -322,7 +322,7 @@ export const MARK_EN: Record<string, TermEn> = {
   },
   pacifism: {
     name: "Pacifism",
-    desc: "The animal cannot attack with the “Carnivorous” trait or in rage, and cannot use “Piracy”.",
+    desc: "The animal cannot attack with the \"Carnivorous\" trait or in rage, and cannot use \"Piracy\".",
   },
 };
 
@@ -390,15 +390,15 @@ export const ACHIEVEMENT_EN: Record<string, TermEn> = {
   apex: { name: "Apex Predator", desc: "Declare 5 or more attacks in a game" },
   gourmet: { name: "Abundance", desc: "Collect 15 or more food tokens in a game" },
   "clean-pop": { name: "No Losses", desc: "Win without losing a single animal" },
-  "hard-win": { name: "Environmental Pressure", desc: "Win on “Harder” difficulty" },
+  "hard-win": { name: "Environmental Pressure", desc: "Win on \"Harder\" difficulty" },
   "big-table": { name: "Overpopulation", desc: "A game at an 8-player table" },
-  "win-continents": { name: "Pangaea", desc: "Win with the “Continents” expansion" },
-  "win-plants": { name: "Gardener", desc: "Win with the “Plants” expansion" },
-  "win-fungi": { name: "Mushroomer", desc: "Win with the “Grass and Mushrooms” expansion" },
-  "win-mutations": { name: "Radiation", desc: "Win with the “Random Mutations” expansion" },
+  "win-continents": { name: "Pangaea", desc: "Win with the \"Continents\" expansion" },
+  "win-plants": { name: "Gardener", desc: "Win with the \"Plants\" expansion" },
+  "win-fungi": { name: "Mushroomer", desc: "Win with the \"Grass and Mushrooms\" expansion" },
+  "win-mutations": { name: "Radiation", desc: "Win with the \"Random Mutations\" expansion" },
   "all-modules": {
     name: "Full Ecosystem",
-    desc: "A game with “Continents”, “Plants”, and “Random Mutations”",
+    desc: "A game with \"Continents\", \"Plants\", and \"Random Mutations\"",
   },
   darwin: { name: "Darwinism", desc: "Play 25 games" },
   escape: { name: "Narrow Escape", desc: "3 successful defenses in a game" },
@@ -483,6 +483,10 @@ const SCIENTIST_EN: Record<string, string> = {
   "Кювье": "Cuvier",
   "Ламарк": "Lamarck",
   "Геккель": "Haeckel",
+  // Служебные имена: русские литералы из БД (фолбэк имени хоста в server.ts,
+  // имя игрока в соло в engine.ts) — переводим при отображении, как и учёных.
+  "Хост": "Host",
+  "Вы": "You",
 };
 
 /** Отображаемое имя игрока: боты-учёные переводятся, люди — как есть. */

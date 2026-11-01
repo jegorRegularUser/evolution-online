@@ -199,6 +199,12 @@ export const ru = {
   "chat.hi": "Привет!",
   "chat.goodTable": "Хороший стол!",
   "chat.go": "Погнали",
+  // Системные реплики «Стола» (сервер пишет ru-text + key/params, клиент
+  // собирает текст по ключу на языке игрока; ru-текст — фолбэк).
+  "chat.table": "Стол",
+  "chat.capacityBots": "Мест стало {capacity}: убраны боты: {bots}",
+  "chat.capacityQueue": "Мест стало {capacity}: в очередь ожидающих: {names}",
+  "chat.capacityBotsQueue": "Мест стало {capacity}: убраны боты: {bots}; в очередь ожидающих: {names}",
 
   // ── ожидающий стол ───────────────────────────────────────────────────────
   "wait.subtitle": "Стол · мест нет",
@@ -402,6 +408,11 @@ export const ru = {
   "final.again": "Ещё партия",
   "final.menu": "В меню",
   "final.leave": "Покинуть стол",
+  "final.againBody": "Финальный счёт закроется для всех, а стол вернётся в лобби.",
+  "final.againConfirm": "Вернуться в лобби",
+  "final.waitingHost": "Ждём, пока хост вернёт стол в лобби.",
+  "final.spectatorTitle": "Итог партии",
+  "final.spectatorSubtitle": "Вы смотрите эту партию.",
 
   "final.labels.animals": "животные",
   "final.labels.traits": "свойства",
@@ -590,6 +601,7 @@ export const ru = {
   "game.noAnimals": "Нет животных",
   "game.placeFromHand": "Выложите животное из руки",
   "game.acting": "ходит",
+  "game.offline": "офлайн",
   "game.deckCount": "колода {n}",
   "game.handCount": "рука {n}",
   "game.discardCount": "сброс {n}",
@@ -631,6 +643,7 @@ export const ru = {
   "game.diceBonus": "+{n} к базе",
   "game.diceTerritory": "база территорий",
   "game.diceAria": "Кубики кормовой базы: {dice}",
+  "dice.aria": "Игральные кости",
   "game.bankChip": "База",
 
   // ── партия: таймер хода ──────────────────────────────────────────────────
@@ -777,6 +790,11 @@ export const ru = {
   "defense.none": "Не защищаться",
   "defense.plantIgnore": "Контратака: выберите одну игнорируемую защиту",
   "defense.ignore": "Игнорировать: {trait}",
+  "defense.outcomeRunning": "Бросок 4+ спасает животное",
+  "defense.outcomeTail": "Животное выживет, хищник получит 1 фишку",
+  "defense.outcomeNone": "Животное погибнет, хищник получит 2 фишки",
+  "defense.waitDecision": "Стол ждёт вашего решения · {n} с",
+  "defense.targetTraitsAria": "Свойства атакованного животного",
   "log.plantIgnoreDefense": "Контратака игнорирует «{trait}».",
 
   // ── партия: выход из партии ──────────────────────────────────────────────
@@ -787,6 +805,8 @@ export const ru = {
   "leave.confirmPlayer": "Сдаться и выйти",
   "leave.stay": "Остаться",
   "leave.justLeave": "Просто выйти (без сдачи)",
+  "leave.bodyNoResume":
+    "Этот браузер не сохранил ссылку возврата. При выходе вернуться за этот стол уже не получится.",
 
   // ── лента «журнал + чат» в партии ────────────────────────────────────────
   "feed.title.default": "Журнал",
@@ -918,6 +938,29 @@ export const ru = {
 
   // ── пояснение экрана ожидания ────────────────────────────────────────────
   "net.waitNote.capacityShrunk": "Хост уменьшил число мест — вы в очереди",
+
+  // ── отправка действий и замена игрока ботом ──────────────────────────────
+  "net.sending": "Отправляется…",
+  "net.actionFailed": "Действие не отправлено — проверьте связь и попробуйте ещё раз.",
+  "net.unsent": "Не отправлено — повторите.",
+  "netBot.playerOnline": "Игрок ещё в сети. Попробуйте снова, когда связь пропадёт на 30 секунд.",
+  "netBot.hostOnly": "Заменять игрока ботом может только хост.",
+  "netBot.gameFinished": "Партия уже закончена.",
+  "netBot.noConnection": "Нет связи — замена не отправлена.",
+  "netBot.noHostToken": "В этом браузере больше нет токена места хоста.",
+  "netBot.replaced": "{name} теперь играет бот.",
+  "netBot.offlineAria": "Игроки не в сети",
+  "netBot.offlineNotice":
+    "Кто-то сейчас не в сети. Дождитесь возвращения или замените игрока ботом, чтобы начать год.",
+  "netBot.replaceWaitTitle": "Доступно после 30 секунд без связи",
+  "netBot.replaceSeat": "Заменить {name} ботом",
+  "netBot.replaceThresholdHint": "Кнопка замены станет доступна после порога отсутствия связи.",
+  "netBot.confirmTitle": "Заменить игрока ботом?",
+  "netBot.confirmBody": "{name} сейчас не в сети. За это место будет играть бот.",
+  "netBot.confirm": "Заменить ботом",
+  "netBot.waitingPlayer": "Ждём игрока {name}",
+  "netBot.waitingTurnEnds": " · ход завершится через {n} с",
+  "netBot.waitingReconnecting": " · стол ждёт возвращения",
 
   // ── журнал движка (LogEntry.key): шаблоны записей ────────────────────────
   // Русские значения обязаны совпадать с текстами log(...) в engine.ts —
@@ -1102,6 +1145,14 @@ export const ru = {
   "feedBlock.noMigrator": "Нет животного, готового мигрировать.",
   "feedBlock.noMigrationTarget": "Этому животному некуда мигрировать.",
   "feedBlock.skipBlocked": "Пас недоступен: есть животные, способные получить еду или убежище.",
+
+  // ── экран ошибки приложения (error-component) ────────────────────────────
+  "error.title": "Что-то пошло не так",
+  "error.body":
+    "Не удалось открыть игру. Попробуйте ещё раз — если ошибка повторится, вернитесь в меню.",
+  "error.retry": "Попробовать снова",
+  "error.menu": "В меню",
+  "error.details": "Подробности ошибки",
 } as const;
 
 export type Dict = typeof ru;

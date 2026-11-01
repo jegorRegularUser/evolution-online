@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import * as CANNON from "cannon-es";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -263,6 +264,8 @@ export function Dice3D({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const reducedMotion = usePrefersReducedMotion();
+  // Подпись по умолчанию — из словаря (снапшот useT безопасен для SSR/гидратации).
+  const t = useT();
   const valuesRef = useRef(values);
   valuesRef.current = values;
 
@@ -620,7 +623,7 @@ export function Dice3D({
     <canvas
       ref={canvasRef}
       role="img"
-      aria-label={ariaLabel ?? "Игральные кости"}
+      aria-label={ariaLabel ?? t("dice.aria")}
       style={{ width, height, display: "block" }}
       className={cn(className)}
     />

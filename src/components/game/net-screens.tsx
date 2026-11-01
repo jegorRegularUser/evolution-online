@@ -40,9 +40,9 @@ import { TutorialScreen } from "./tutorial";
 import { TopBar } from "./top-bar";
 import { useGameStore, type NetUiState } from "@/store/game-store";
 import { cn } from "@/lib/utils";
-import { scientistName, useLang, useT } from "@/lib/i18n";
+import { scientistName, translate, useLang, useT } from "@/lib/i18n";
 
-import type { TFn } from "@/lib/i18n";
+import type { TFn, TKey } from "@/lib/i18n";
 
 /** Сложность бота — ключ словаря (id совпадает с Difficulty). */
 const DIFF_KEYS = {
@@ -1061,6 +1061,7 @@ function useTableFeedItems(net: NetUiState | null): FeedItem[] {
   const system = net?.system;
   const reactions = net?.reactions;
   const myName = net?.name;
+  const lang = useLang();
   const colorBySeat = useMemo(() => {
     const map = new Map<number, string>();
     for (const s of seats ?? []) map.set(s.seat, s.color);
@@ -1070,11 +1071,16 @@ function useTableFeedItems(net: NetUiState | null): FeedItem[] {
     const byChat = reactionsByChatId(reactions, myName);
     const chatItems: FeedItem[] = (chat ?? []).map((m) => {
       const rs = byChat.get(m.id);
+      // Системная реплика «Стола» (key+params от сервера): текст собирается
+      // по ключу на языке рендера, русский text — фолбэк для старых строк;
+      // ник системной реплики — по ключу, обычные ники — как есть.
+      const text = m.key ? translate(lang, m.key as TKey, m.params ?? undefined) : m.text;
+      const playerName = m.key ? translate(lang, "chat.table") : scientistName(m.name, lang);
       return {
         id: `chat-${m.id}`,
         kind: "chat" as const,
-        text: m.text,
-        playerName: m.name,
+        text,
+        playerName,
         seat: m.seat,
         chatId: m.id,
         at: m.at,
@@ -1096,7 +1102,7 @@ function useTableFeedItems(net: NetUiState | null): FeedItem[] {
       .map((item, i) => ({ item, i }))
       .sort((a, b) => (a.item.at ?? 0) - (b.item.at ?? 0) || a.i - b.i)
       .map((x) => x.item);
-  }, [chat, system, colorBySeat, reactions, myName]);
+  }, [chat, system, colorBySeat, reactions, myName, lang]);
 }
 
 /**

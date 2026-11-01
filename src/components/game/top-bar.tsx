@@ -15,7 +15,7 @@ export interface TopBarProps {
   subtitleShort?: string;
   /** Открыть обучение прямо в партии; кнопка скрыта, если обработчика нет. */
   onTutorial?: () => void;
-  /** Доступное и короткое имя кнопки обучения. */
+  /** Доступное и короткое имя кнопки обучения; по умолчанию — словарное «Обучение». */
   tutorialLabel?: string;
   /** Правый слот: кнопки, тумблеры, чипы. */
   children?: ReactNode;
@@ -61,12 +61,15 @@ export function TopBar({
   subtitle,
   subtitleShort,
   onTutorial,
-  tutorialLabel = "Обучение",
+  tutorialLabel,
   children,
   left,
   className,
 }: TopBarProps) {
-  const lang = useLang();
+  const t = useT();
+  // Подпись обучения: явный проп или словарная — язык берём снапшотом useT,
+  // чтобы разметка совпадала с SSR и менялась живо.
+  const tutorialText = tutorialLabel ?? t("topbar.tutorial");
   return (
     <header
       className={cn(
@@ -86,7 +89,7 @@ export function TopBar({
           <div className="min-w-0 flex-1">
             <div className="font-display text-lg leading-none">
               {/* Название игры — тоже переводится, но длина почти не меняется. */}
-              {lang === "en" ? "Evolution" : "Эволюция"}
+              {t("app.name")}
             </div>
             {/* На телефоне подпись переносится, а не обрезается: места в шапке
                 мало, а «Правильные игры · Кнорре» терять многоточие не должен. */}
@@ -113,12 +116,12 @@ export function TopBar({
           <button
             type="button"
             onClick={onTutorial}
-            aria-label={tutorialLabel}
-            title={tutorialLabel}
+            aria-label={tutorialText}
+            title={tutorialText}
             className="flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-border bg-surface px-2 text-xs font-medium text-fg transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
           >
             <BookOpen className="size-4" aria-hidden />
-            <span className="hidden sm:inline">{tutorialLabel}</span>
+            <span className="hidden sm:inline">{tutorialText}</span>
           </button>
         ) : null}
         {children}

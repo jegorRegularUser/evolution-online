@@ -40,9 +40,13 @@ export const Route = createRootRoute({
       // браузер ужимает вьюпорт, а не накладывает клавиатуру поверх — поле
       // ввода чата в игре остаётся видимым.
       { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" },
-      { title: "Эволюция" },
+      // Название/описание — из словаря, а не литералом: SSR и первый клиентский
+      // рендер читают «ru» из стора (см. LangInit ниже), после смены языка
+      // заголовок обновляет эффект LangInit — hydration это не задевает,
+      // document.title вне дерева React.
+      { title: t("app.name") },
       { name: "theme-color", content: "#111410" },
-      { name: "description", content: "Цифровая «Эволюция» — русская настольная игра о происхождении видов." },
+      { name: "description", content: t("app.description") },
     ],
     links: [
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
