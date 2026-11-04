@@ -1,7 +1,8 @@
 import { TRAITS } from "./traits.ts";
 import { PLANTS } from "./plants.ts";
 import { FLORA } from "./flora.ts";
-import type { Animal, GameAction, GameState } from "./types.ts";
+import { hasMutator } from "./modifiers.ts";
+import type { Animal, GameAction, GameState, WildEventId } from "./types.ts";
 import {
   baseFoodSpec,
   legalDefenseActions,
@@ -55,31 +56,73 @@ export function chooseAIAction(state: GameState): GameAction | null {
 }
 
 /**
+ * Событие года, которое бот должен учитывать прямо сейчас: в фазе развития
+ * событие ещё не активировано, но спрогнозировано и точно вступит в силу до
+ * броска (событие года N читается до фазы развития года N); в остальных
+ * фазах действует активное событие.
+ */
+function wildEventNow(state: GameState): WildEventId | null {
+  const ww = state.wildWorld;
+  if (!ww) return null;
+  if (state.phase === "development") {
+    return ww.planned?.year === state.year ? ww.planned.id : null;
+  }
+  return ww.active;
+}
+
+/**
  * Сколько еды достанется одному игроку в этом году (ожидание).
  * Точный бросок будет позже — в фазе кормовой базы, — поэтому считаем по числу
  * игроков и модулям. Без этой оценки бот разводил животных больше, чем стол
- * прокормит, и вымирал в ноль: в партиях на 2–3 игроков все смерти приходились
+ * прокормит, и вымирал в ноль: в партиях на 2–3 игрока все смерти приходились
  * на полностью опустошённую базу.
+ *
+ * Волна 2: бот обязан читать активные модификаторы — столовые правила
+ * («Голодный сезон», «Изобилие») и события года (тест-гейт «бот знает
+ * модификаторы» в modifiers-audit). Ожидание меньшего из двух бросков — по
+ * числу кубиков: чем их больше, тем ближе E[min] к E[сумме].
  */
 function expectedBank(state: GameState): number {
   const n = state.players.length;
+  let bank: number;
+  let dice: number;
   if (state.modules.continents) {
     const spec = territoryFoodSpec(n);
+    dice = spec.laurasia.dice + spec.gondwana.dice;
     const territories =
       spec.laurasia.dice * 3.5 +
       spec.laurasia.bonus +
       spec.gondwana.dice * 3.5 +
       spec.gondwana.bonus +
       spec.ocean;
-    // С растениями/флорой большая часть еды лежит на столе, а не в банке.
-    if (state.modules.plants || state.modules.fungi)
-      return spec.ocean + (state.modules.plants ? 8 : 0) + (state.modules.fungi ? 6 : 0);
-    return territories;
+    // С растениями/флорой большая часть еды лежит на столе, а не в банке;
+    // в банке только константа Океана — бросочные события его не трогают.
+    if (state.modules.plants || state.modules.fungi) {
+      bank = spec.ocean + (state.modules.plants ? 8 : 0) + (state.modules.fungi ? 6 : 0);
+      dice = 0;
+    } else {
+      bank = territories;
+    }
+  } else if (state.modules.plants || state.modules.fungi) {
+    // «Растения»/«Трава и грибы»: часть еды лежит на картах флоры, база меньше.
+    bank = 6 + n;
+    dice = 0;
+  } else {
+    const spec = baseFoodSpec(n);
+    dice = spec.dice;
+    bank = spec.dice * 3.5 + spec.bonus;
   }
-  // «Растения»/«Трава и грибы»: часть еды лежит на картах флоры, база меньше.
-  if (state.modules.plants || state.modules.fungi) return 6 + n;
-  const spec = baseFoodSpec(n);
-  return spec.dice * 3.5 + spec.bonus;
+  if (state.rules?.abundance) {
+    bank += state.modules.continents && dice > 0 ? 2 : 1;
+  }
+  if (state.rules?.hungrySeason && dice > 0) {
+    bank *= dice <= 1 ? 0.72 : dice === 2 ? 0.8 : 0.87;
+  }
+  const wild = wildEventNow(state);
+  if (wild === "iceAge") bank -= dice;
+  if (wild === "goldenAge") bank += 2;
+  if (wild === "cropFailure") bank -= 2;
+  return Math.max(0, bank);
 }
 
 /** Свободная доля стола: сколько еды остаётся «на меня» сверх текущей популяции. */
@@ -220,6 +263,15 @@ function pickDev(state: GameState, acts: GameAction[]): GameAction {
       if (state.difficulty === "hard" && stock > 0 && !state.lastYear && surplus > 0) s += 1.2;
       if (state.difficulty === "easy" && stock > 0) {
         s = p.animals.length > 0 ? (state.lastYear ? 0.5 : 3.2) : s - 1.5;
+      }
+      // «Ускоренная эволюция»: это только первое из двух действий — паситься
+      // рано, пока есть карты и ход всё равно останется у нас.
+      if (
+        hasMutator(state, "rapidEvolution") &&
+        (state.devActionsUsed ?? 0) === 0 &&
+        stock > keep
+      ) {
+        s -= 1.5;
       }
     }
     if (a.type === "devPlayAnimal") {
@@ -544,6 +596,9 @@ function pickFeed(state: GameState, acts: GameAction[]): GameAction {
         s -= 4;
       }
       if (hasTrait(prey, "poisonous")) s -= 5;
+      // «Падальщики»: жертва вернёт хозяину карту из сброса — чистый урон
+      // от охоты ниже, чем без мутатора.
+      if (hasMutator(state, "scavengers")) s -= 1.5;
       // Парная карта связывает животных; не охотимся на такую жертву, если
       // есть обычная добыча, чтобы не оставлять «висящую» пару после смерти.
       if (
@@ -577,6 +632,11 @@ function pickFeed(state: GameState, acts: GameAction[]): GameAction {
     if (a.type === "feedConvertFat") {
       // Свободное действие: конверсия почти всегда выгодна, но не срочно.
       s = 7;
+      // «Дикий мир»: прогнозный «Метеорит» обложит запас жира в начале
+      // следующего года — конвертация сейчас напрасна.
+      if (state.wildWorld?.planned?.id === "meteorite" && state.wildWorld.planned.year === state.year + 1) {
+        s -= 9;
+      }
     }
     if (a.type === "feedGraze") {
       // Топтун тратит еду, поэтому выбираем только реальный источник.
