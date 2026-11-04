@@ -44,6 +44,8 @@ Thumbs.db
 # README остаётся в репозитории (остальные .md — локальные отчёты)
 !/README.md
 !/README.ru.md
+# IP-план волны 0 — постоянный документ рядом с plans/*.md (уже tracked)
+!plans/ip-plan.md
 /mcps
 agent-tools/
 terminals/
