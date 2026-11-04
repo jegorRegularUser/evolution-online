@@ -19,6 +19,7 @@ import {
 } from "../../game/engine.ts";
 import { chooseAIAction } from "../../game/ai.ts";
 import { moduleCompatibilityError } from "../../game/module-compatibility.ts";
+import { modifierCompatibilityError, mutatorList } from "../../game/modifier-compatibility.ts";
 import type {
   Difficulty,
   GameAction,
@@ -1644,6 +1645,15 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
     async create(input, source) {
       const incompatibility = moduleCompatibilityError(input.modules ?? {});
       if (incompatibility) throw new NetError(incompatibility);
+      // Волна 2: лимит 3 слота модификаций и запрещённые пары — та же схема
+      // отказа, что у несовместимых модулей (клиент превалирует, сервер — право).
+      const modIncompatibility = modifierCompatibilityError({
+        modules: input.modules ?? {},
+        rules: input.rules,
+        mutators: input.mutators,
+        wildWorld: input.wildWorld,
+      });
+      if (modIncompatibility) throw new NetError(modIncompatibility);
       // S7: мягкая квота на источнике — спам комнатами раздувает БД.
       // Порог настраивается EVO_CREATE_PER_HOUR (QA-прогоны создают десятки
       // столов); без переменной окружения действует прежний лимит.
@@ -1668,6 +1678,11 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         modules: input.modules ?? {},
         difficulty: input.difficulty,
         ...(input.deckSize ? { deckSize: input.deckSize } : {}),
+        // Волна 2: модификаторы живут в settings jsonb — отдельная колонка
+        // не нужна (в отличие от modules, читаемых по комнатам давно).
+        ...(input.rules ? { rules: input.rules } : {}),
+        ...(input.mutators ? { mutators: input.mutators } : {}),
+        ...(input.wildWorld ? { wildWorld: true } : {}),
       };
       for (let attempt = 0; attempt < 6; attempt++) {
         const code = makeCode();
@@ -1951,6 +1966,18 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       }
       if (patch.difficulty !== undefined) next.difficulty = patch.difficulty;
       if (patch.deckSize !== undefined) next.deckSize = patch.deckSize;
+      // Волна 2: слоты и запрещённые пары считаются по СЛИТОЙ конфигурации —
+      // лимит общий на правила, мутаторы и «Дикий мир» (§0.10).
+      if (patch.rules !== undefined) next.rules = patch.rules;
+      if (patch.mutators !== undefined) next.mutators = patch.mutators;
+      if (patch.wildWorld !== undefined) next.wildWorld = patch.wildWorld;
+      const modIncompatibility = modifierCompatibilityError({
+        modules: next.modules,
+        rules: next.rules,
+        mutators: next.mutators,
+        wildWorld: next.wildWorld,
+      });
+      if (modIncompatibility) throw new NetError(modIncompatibility);
       await casUpdateStrict(sql, code, room.version, {
         settings: next,
         difficulty: next.difficulty ?? room.difficulty,
@@ -2344,6 +2371,13 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       const cfg = effectiveSettings(room);
       const incompatibility = moduleCompatibilityError(cfg.modules ?? room.modules ?? {});
       if (incompatibility) throw new NetError(incompatibility);
+      const modIncompatibility = modifierCompatibilityError({
+        modules: cfg.modules ?? room.modules ?? {},
+        rules: cfg.rules,
+        mutators: cfg.mutators,
+        wildWorld: cfg.wildWorld,
+      });
+      if (modIncompatibility) throw new NetError(modIncompatibility);
       const defs = seats.map((s) => ({ name: s.name, isAI: s.is_ai }));
       const state = createGame(
         room.capacity,
@@ -2352,6 +2386,12 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         defs,
         cfg.modules ?? room.modules ?? {},
         cfg.deckSize,
+        // Волна 2: модификаторы стола уходит в состояние партии.
+        {
+          rules: cfg.rules,
+          mutators: mutatorList(cfg.mutators),
+          wildWorld: cfg.wildWorld,
+        },
       );
       // Ожидающие при старте автоматически становятся зрителями: место не
       // занимают, но стол видят. Токен и имя сохраняются — клиент продолжает

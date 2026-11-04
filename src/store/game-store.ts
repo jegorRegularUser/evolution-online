@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { legalDefenseActions, legalDevActions, legalFeedActions } from "@/game/engine";
-import type { Difficulty, GameAction, GameSpeed, GameState, ModuleId } from "@/game/types";
+import type { Difficulty, GameAction, GameSpeed, GameState, ModuleId, MutatorId, TableRules } from "@/game/types";
 import { t, type TParams, type TKey } from "@/lib/i18n";
 import { NetClientError, NetSession, fetchRoomList, forgetSession, hasStoredSeatSession, hasStoredSession, loadName, type NetHooks, type NetStatus, type PendingNetItem } from "@/lib/net/session";
 import type {
@@ -356,6 +356,10 @@ export interface NetCreateConfig {
   modules?: Partial<Record<ModuleId, boolean>>;
   /** Целевой размер колоды свойств (по умолчанию — полный состав). */
   deckSize?: number;
+  /** Волна 2: модификаторы стола — правила, мутаторы, «Дикий мир». */
+  rules?: TableRules;
+  mutators?: Partial<Record<MutatorId, boolean>>;
+  wildWorld?: boolean;
   /** Приватный стол: вход по паролю, колонка «Закрытые» в меню. */
   isPrivate?: boolean;
   /** Пароль приватного стола; пусто — сервер сгенерирует 4 цифры. */
@@ -1008,6 +1012,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
         difficulty: n.settings.difficulty,
         deckSize: n.settings.deckSize,
         modules: n.settings.modules,
+        // Волна 2: модификаторы тоже открываются в следующий раз сами.
+        rules: n.settings.rules,
+        mutators: n.settings.mutators,
+        wildWorld: n.settings.wildWorld,
       });
     }
   },

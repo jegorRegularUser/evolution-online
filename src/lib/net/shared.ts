@@ -11,6 +11,9 @@ import type {
   GameEvent,
   GameState,
   ModuleId,
+  MutatorId,
+  TableRuleId,
+  TableRules,
 } from "../../game/types.ts";
 
 /** Минимальная поверхность SQL: удовлетворяется `Sql` из @/lib/db и тестовым PGlite. */
@@ -104,7 +107,19 @@ export interface RoomSettings {
   difficulty?: Difficulty;
   /** Целевой размер колоды свойств (см. createGame/6-й аргумент). */
   deckSize?: number;
+  /** Волна 2: столовые правила (§1.1); лимит слотов считает modifier-compatibility. */
+  rules?: TableRules;
+  /** Волна 2: мутаторы (§1.2) — флаги, как у модулей; в createGame уходит массив. */
+  mutators?: Partial<Record<MutatorId, boolean>>;
+  /** Волна 2: пак событий «Дикий мир» (§1.3), занимает один слот. */
+  wildWorld?: boolean;
 }
+
+/** Ключи столовых правил — для UI лобби (порядок как в modifiers.ts). */
+export const TABLE_RULE_KEYS: readonly TableRuleId[] = ["pack", "hungrySeason", "abundance", "startHand"];
+
+/** Ключи мутаторов — для UI лобби (порядок как в реестре). */
+export const MUTATOR_KEYS: readonly MutatorId[] = ["scavengers", "rapidEvolution"];
 
 /** Ожидающий места в лобби. Токен наружу не отдаётся. */
 export interface WaiterInfo {
@@ -370,12 +385,34 @@ const MODULES = z
   })
   .partial();
 
-/** Настройки стола: модули проверяются белым списком. */
+/** Столовые правила (§1.1): ключи — белый список; startHand — только 7/8/9. */
+const TABLE_RULES = z
+  .object({
+    pack: z.boolean().optional(),
+    hungrySeason: z.boolean().optional(),
+    abundance: z.boolean().optional(),
+    startHand: z.union([z.literal(7), z.literal(8), z.literal(9)]).optional(),
+  })
+  .partial();
+
+/** Мутаторы (§1.2): флаги включения, как у модулей. */
+const MUTATORS = z
+  .object({
+    scavengers: z.boolean().optional(),
+    rapidEvolution: z.boolean().optional(),
+  })
+  .partial();
+
+/** Настройки стола: модули и модификаторы проверяются белыми списками. */
 export const roomSettingsSchema = z.object({
   modules: MODULES.optional(),
   difficulty: DIFFICULTY.optional(),
   /** Границы — разумная вилка вокруг DECK_SIZE (84) с учётом всех модулей. */
   deckSize: z.number().int().min(20).max(400).optional(),
+  /** Волна 2: лимит 3 слота и запрещённые пары проверяет сервер. */
+  rules: TABLE_RULES.optional(),
+  mutators: MUTATORS.optional(),
+  wildWorld: z.boolean().optional(),
 });
 
 export const createRoomInput = z.object({
@@ -395,6 +432,10 @@ export const createRoomInput = z.object({
   modules: MODULES.default({}).optional(),
   /** Целевой размер колоды на старте; хранится в settings комнаты. */
   deckSize: z.number().int().min(20).max(400).optional(),
+  /** Волна 2: модификаторы стола (правила, мутаторы, «Дикий мир»). */
+  rules: TABLE_RULES.optional(),
+  mutators: MUTATORS.optional(),
+  wildWorld: z.boolean().optional(),
   /** Приватный стол: вход по паролю, в меню виден в колонке «Закрытые». */
   isPrivate: z.boolean().optional(),
   /** Пароль приватного стола; пусто — сервер сгенерирует 4 цифры. */

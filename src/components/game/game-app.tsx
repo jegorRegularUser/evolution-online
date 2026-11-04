@@ -724,6 +724,15 @@ function eventSfx(state: GameState, e: GameEvent): SfxId | null {
       return "leave";
     case "paralyzed":
       return "dodge";
+    // ── Волна 2 (модификаторы, «Дикий мир»): события молчат до волны
+    // анимаций — звуки и баннеры им назначит моментная библиотека (§2.2).
+    case "scavenged":
+    case "wildEventPlanned":
+    case "wildEventStarted":
+    case "wildResettlement":
+    case "wildMeteorite":
+    case "wildWildfire":
+      return null;
     case "gameFinished":
       return null;
   }

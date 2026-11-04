@@ -69,6 +69,56 @@ export type Phase =
 export type ModuleId = "continents" | "plants" | "fungi" | "randomMutations";
 export type EnabledModules = Partial<Record<ModuleId, boolean>>;
 
+// ── Волна 2: модификаторы стола ─────────────────────────────────────────────
+// Три уровня по дизайн-пакету (plans/design-expansion-pack.md §1): параметрические
+// столовые правила, структурные мутаторы и пак событий «Дикий мир». Все они
+// занимают общий лимит — 3 слота на стол (§0.10); совместимость считает слоты
+// и запрещённые пары (modifier-compatibility.ts).
+
+/** Идентификаторы столовых правил (параметрические, §1.1). */
+export type TableRuleId = "pack" | "hungrySeason" | "abundance" | "startHand";
+
+/**
+ * Столовые правила: не нейтральны, честно меняют мета. startHand — число карт
+ * стартовой руки (7/8/9; классика — 6, поле тогда не задано).
+ */
+export interface TableRules {
+  /** «Стая»: каждый начинает с двумя животными. */
+  pack?: boolean;
+  /** «Голодный сезон»: кормовая база бросается дважды, берётся меньший. */
+  hungrySeason?: boolean;
+  /** «Изобилие»: +1 к кормовой базе (с «Континентами» — на каждую бросаемую территорию). */
+  abundance?: boolean;
+  /** Стартовая рука 7/8/9 (классика — 6; с «Растениями» классика — 8). */
+  startHand?: 7 | 8 | 9;
+}
+
+/** Идентификаторы мутаторов (структурные, §1.2). Реестр — modifiers.ts. */
+export type MutatorId = "scavengers" | "rapidEvolution";
+
+/** События года «Дикий мир» (§1.3): предикат + эффект над GameState. */
+export type WildEventId =
+  | "iceAge"
+  | "goldenAge"
+  | "resettlement"
+  | "cropFailure"
+  | "meteorite"
+  | "wildfire";
+
+/**
+ * Состояние «Дикого мира». Раскрытие: событие года N читается до фазы
+ * развития года N — прогноз ровно на год. Активация (разовые эффекты и
+ * условия броска) — в revealAndStartFood, «начало года» по §6.
+ */
+export interface WildWorldState {
+  /** Событие текущего года: объявлено, действует на бросок этого года. */
+  active: WildEventId | null;
+  /** Прогноз: событие года planned.year, раскрытое заранее. */
+  planned: { year: number; id: WildEventId } | null;
+  /** События подряд без «Метеорита»: pity — не позже 8-го события серии. */
+  sinceMeteorite: number;
+}
+
 export interface Card {
   id: string;
   faces: TraitId[];
@@ -378,6 +428,19 @@ export type GameEvent =
   | { kind: "budding"; animalId: string; playerId: number }
   | { kind: "populationGrown"; animalId: string; to: number }
   | { kind: "populationLost"; animalId: string; to: number }
+  // ── Волна 2: мутаторы и «Дикий мир» ──
+  /** «Падальщики»: вымершее животное вернуло владельцу карту из сброса. */
+  | { kind: "scavenged"; playerId: number; animalId: string }
+  /** Прогноз «Дикого мира»: событие года year раскрыто до его фазы развития. */
+  | { kind: "wildEventPlanned"; year: number; event: WildEventId }
+  /** Событие года year вступило в силу (разовые эффекты применены следом). */
+  | { kind: "wildEventStarted"; year: number; event: WildEventId }
+  /** «Переселение»: каждый передал соседу по часовой карту (had — была ли карта). */
+  | { kind: "wildResettlement"; moves: Array<{ fromPlayerId: number; toPlayerId: number; had: boolean }> }
+  /** «Метеорит»: жир потеряло affected животных (без жира — ничего). */
+  | { kind: "wildMeteorite"; affected: number }
+  /** «Пожар»: флора потеряла burned фишек (по 2 с карты). */
+  | { kind: "wildWildfire"; burned: number }
   /** Партия завершена: победители посчитаны (в т.ч. флора с playerId -1). */
   | { kind: "gameFinished"; winnerIds: number[] };
 
@@ -523,6 +586,21 @@ export interface GameState {
   /** Животные, ожидающие гибели в показанной стадии вымирания. */
   extinctionDeaths: string[];
   modules: EnabledModules;
+  /**
+   * Волна 2: столовые правила (§1.1). undefined — классические правила;
+   * валидируются modifier-compatibility.ts при создании/старте стола.
+   */
+  rules?: TableRules;
+  /** Волна 2: включённые мутаторы (§1.2), реестр — modifiers.ts. */
+  mutators?: MutatorId[];
+  /** Волна 2: «Дикий мир» (§1.3). undefined — пак выключен. */
+  wildWorld?: WildWorldState;
+  /**
+   * «Ускоренная эволюция»: сколько действий развития уже сделано текущим
+   * игроком в этом круге (лимит 2). Сбрасывается при передаче хода и в новом
+   * году; вне мутатора всегда 0.
+   */
+  devActionsUsed?: number;
   /**
    * «Континенты»: хищники, парализованные стрекательными клетками до конца
    * фазы питания (в океане теряют и водоплавающее — вытеснены на континент).

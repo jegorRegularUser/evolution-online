@@ -1,5 +1,7 @@
 import { buildDeck, deckSizeFor } from "./deck.ts";
 import { FLORA, FLORA_MAX_TOKENS, FLORA_TABLE_MAX, MARKS, floraDeckKinds, fullMarksPool } from "./flora.ts";
+import { METEORITE_CHANCE, METEORITE_PITY, WILD_EVENTS, hasMutator, startingHandSize } from "./modifiers.ts";
+import { assertModifierCompatibility } from "./modifier-compatibility.ts";
 import { growthTarget, plantTable, plantDeckKinds, PLANTS, shelterCapacity } from "./plants.ts";
 import { dieFor, nextRandom, shuffled } from "./rng.ts";
 import { TRAITS } from "./traits.ts";
@@ -19,15 +21,18 @@ import type {
   LogEntry,
   MarkKind,
   ModuleId,
+  MutatorId,
   PendingAttack,
   Plant,
   PlantKind,
   Player,
   RegenPending,
   ScoreBreakdown,
+  TableRules,
   TerritoryId,
   TraitId,
   TraitInstance,
+  WildEventId,
 } from "./types.ts";
 import {
   allAnimals,
@@ -96,6 +101,18 @@ function log(
   if (state.log.length > 80) state.log.splice(0, state.log.length - 80);
 }
 
+/** Вводные строки мутаторов в журнале (реестр мутаторов — modifiers.ts). */
+const MUTATOR_INTRO: Record<MutatorId, { text: string; key: TKey }> = {
+  scavengers: {
+    text: `Мутатор «Падальщики»: вымершее животное возвращает владельцу карту из сброса.`,
+    key: "log.mut.scavengersIntro",
+  },
+  rapidEvolution: {
+    text: `Мутатор «Ускоренная эволюция»: два действия развития за ход.`,
+    key: "log.mut.rapidIntro",
+  },
+};
+
 function ev(state: GameState, event: GameEvent) {
   state.lastEvents.push(event);
 }
@@ -129,9 +146,10 @@ function buildScaledDeck(state: GameState, deckSize?: number): Card[] {
   const nextId = (prefix: string) => nid(state, prefix);
   const requested = deckSize && deckSize > 0 ? Math.floor(deckSize) : 0;
   if (!requested) return buildDeck(nextId, state.modules);
-  const dealEach = state.modules.randomMutations ? 7 : state.modules.plants ? 8 : 6;
-  const startingSpecies = state.modules.randomMutations ? 3 : 0;
-  const firstDrawEach = state.modules.randomMutations ? startingSpecies + 2 : 1;
+  const mutSpecies = state.modules.randomMutations ? 3 : 0;
+  const dealEach = startingHandSize(state.rules, state.modules.plants);
+  const startingSpecies = mutSpecies + (state.rules?.pack ? 2 : 0);
+  const firstDrawEach = state.modules.randomMutations ? mutSpecies + 2 : 1;
   const minimum = Math.max(
     deckSizeFor(0, state.modules),
     state.players.length * (dealEach + startingSpecies + firstDrawEach) + 1,
@@ -161,7 +179,17 @@ export function createGame(
    * Не задано — полный состав (обратная совместимость вызовов).
    */
   deckSize?: number,
+  /**
+   * Волна 2: модификаторы стола — столовые правила (§1.1), мутаторы (§1.2)
+   * и пак «Дикий мир» (§1.3). Совместимость и лимит 3 слотов проверяет
+   * assertModifierCompatibility: движок — источник истины, сервер валидирует
+   * раньше, но прямо здесь защита тоже стоит.
+   */
+  expansion?: { rules?: TableRules; mutators?: MutatorId[]; wildWorld?: boolean },
 ): GameState {
+  const rules = expansion?.rules;
+  const mutators = expansion?.mutators?.length ? [...expansion.mutators] : undefined;
+  assertModifierCompatibility({ modules: modules ?? {}, rules, mutators, wildWorld: expansion?.wildWorld });
   const names = ["Вы", ...AI_NAMES].slice(0, playerCount);
   const base =
     seats && seats.length === playerCount
@@ -201,6 +229,10 @@ export function createGame(
     devStartPlaySeq: 0,
     extinctionDeaths: [],
     modules: modules ?? {},
+    rules,
+    mutators,
+    wildWorld: expansion?.wildWorld ? { active: null, planned: null, sinceMeteorite: 0 } : undefined,
+    devActionsUsed: 0,
     paralyzed: modules?.continents ? [] : undefined,
     turnUse: freshTurnUse(),
   };
@@ -237,14 +269,50 @@ export function createGame(
     }
     log(state, `Случайные мутации: у каждого игрока личная колода из 7 карт и три стартовых вида.`, "log.mutationsIntro", undefined, "good");
   } else {
-    // «Растения» раздают по 8 карт (правила дополнения), базовая игра — по 6.
-    const dealEach = state.modules.plants ? 8 : 6;
+    // «Растения» раздают по 8 карт (правила дополнения), базовая игра — по 6;
+    // правило startHand — явный выбор стола и бьёт классику модулей.
+    const dealEach = startingHandSize(state.rules, state.modules.plants);
     for (let i = 0; i < dealEach; i++) {
       for (const p of state.players) {
         const c = state.deck.pop();
         if (c) p.hand.push(c);
       }
     }
+  }
+  if (state.rules?.startHand !== undefined) {
+    log(state, `Стартовая рука: по ${state.rules.startHand} карт.`, "log.ruleHand", { n: state.rules.startHand });
+  }
+  if (state.rules?.pack) {
+    // «Стая»: каждый начинает с двумя животными (карты сверху колоды ложатся видами).
+    for (const p of state.players) {
+      for (let i = 0; i < 2; i++) {
+        const c = state.deck.pop();
+        if (c) spawnSpecies(state, p, c);
+      }
+    }
+    log(state, `«Стая»: каждый начинает с двумя животными.`, "log.rulePack", undefined, "good");
+  }
+  if (state.rules?.hungrySeason) {
+    log(state, `Правило «Голодный сезон»: кормовая база бросается дважды — берётся меньший.`, "log.ruleHungrySeason");
+  }
+  if (state.rules?.abundance) {
+    log(state, `Правило «Изобилие»: +1 к кормовой базе.`, "log.ruleAbundance");
+  }
+  for (const id of state.mutators ?? []) {
+    const intro = MUTATOR_INTRO[id];
+    log(state, intro.text, intro.key);
+  }
+  if (state.wildWorld) {
+    // «Дикий мир»: событие года 1 известно сразу (прогноз), активируется
+    // в revealAndStartFood — до броска кормовой базы этого года.
+    log(
+      state,
+      `«Дикий мир»: событие каждого года объявляется до фазы развития — прогноз ровно на год.`,
+      "log.wildIntro",
+    );
+    const first = drawWildEvent(state);
+    state.wildWorld.planned = { year: 1, id: first };
+    announceWildForecast(state, first, 1);
   }
   const first = Math.floor(nextRandom(state) * playerCount);
   passTurnTo(state, first);
@@ -346,11 +414,32 @@ function discardAnimal(state: GameState, animal: Animal) {
     }
   }
   p.animals = p.animals.filter((a) => a.id !== animal.id);
+  // «Падальщики»: вымершее животное возвращает владельцу карту из сброса.
+  scavengeReturn(state, p, animal);
   // «Растения»: гибель любого животного кормит грибы.
   feedFungi(state);
   // «Трава и грибы»: метки погибшего возвращаются на стол, гибель кормит грибы.
   returnMarksToPool(state, animal);
   spreadFungalGrowth(state);
+}
+
+/**
+ * «Падальщики»: машинная формулировка (куча сброса в цифровой версии не
+ * материализована — карты исчезают в discardCount при выкладывании): если у
+ * владельца есть карты в сбросе, счётчик уменьшается на 1 и владелец добирает
+ * верхнюю карту колоды — «вернул себе карту неизвестного содержимого». Колода
+ * пуста — возвращать неоткуда. Слепая колода пополняется на дно (unshift).
+ */
+function scavengeReturn(state: GameState, p: Player, animal: Animal) {
+  if (!hasMutator(state, "scavengers")) return;
+  if (p.discardCount <= 0 || state.deck.length === 0) return;
+  const card = state.deck.pop();
+  if (!card) return;
+  p.discardCount -= 1;
+  if (state.modules.randomMutations) p.blindDeck?.unshift(card);
+  else p.hand.push(card);
+  ev(state, { kind: "scavenged", playerId: p.id, animalId: animal.id });
+  log(state, `«Падальщики»: ${p.name} возвращает карту из сброса.`, "log.mut.scavenged", { name: p.name }, "good");
 }
 
 /** Каждый гриб получает фишку за гибель животного (не выше максимума). */
@@ -2348,6 +2437,16 @@ function advanceDev(state: GameState) {
     revealAndStartFood(state);
     return;
   }
+  // «Ускоренная эволюция»: тот же игрок делает второе действие развития,
+  // прежде чем ход уйдёт дальше. Пас и автопас счётчик не тратят.
+  if (hasMutator(state, "rapidEvolution")) {
+    const current = player(state, state.currentPlayerId);
+    if (!current.passedDev && (state.devActionsUsed ?? 0) < 1) {
+      state.devActionsUsed = (state.devActionsUsed ?? 0) + 1;
+      return;
+    }
+  }
+  state.devActionsUsed = 0;
   let id = nextPlayerId(state);
   for (let i = 0; i < state.players.length; i++) {
     if (!player(state, id).passedDev) {
@@ -2358,6 +2457,171 @@ function advanceDev(state: GameState) {
     id = nextPlayerId(state, id);
   }
   revealAndStartFood(state);
+}
+
+// ── Волна 2: «Дикий мир» (§1.3) ─────────────────────────────────────────────
+// Событие обязано выражаться предикатом и эффектом над GameState; меняет
+// УСЛОВИЯ года, не распределяет победу. Прогноз — ровно на год: событие года
+// N+1 рисуется при активации события года N (в revealAndStartFood), то есть
+// до фазы развития года N+1.
+
+/** Русские названия событий — для готового текста журнала (ключи — в WILD_EVENTS). */
+const WILD_EVENT_RU: Record<WildEventId, string> = {
+  iceAge: "Ледниковый период",
+  goldenAge: "Золотой век",
+  resettlement: "Переселение",
+  cropFailure: "Неурожай",
+  meteorite: "Метеорит",
+  wildfire: "Пожар",
+};
+
+/**
+ * Розыгрыш события года: «Пожар» только с флорой («Трава и грибы»), сразу
+ * после события не повторяется, «Метеорит» редкий с pity-форсом — не позже
+ * 8-го события серии (METEORITE_PITY). Расход rng — часть состояния, розыгрыш
+ * воспроизводим по сиду вместе со всей партией.
+ */
+export function drawWildEvent(state: GameState): WildEventId {
+  const ww = state.wildWorld;
+  if (!ww) throw new Error("drawWildEvent without wildWorld");
+  ww.sinceMeteorite += 1;
+  if (ww.sinceMeteorite >= METEORITE_PITY) {
+    ww.sinceMeteorite = 0;
+    return "meteorite";
+  }
+  if (nextRandom(state) < METEORITE_CHANCE) {
+    ww.sinceMeteorite = 0;
+    return "meteorite";
+  }
+  const pool: WildEventId[] = ["iceAge", "goldenAge", "resettlement", "cropFailure"];
+  if (state.modules.fungi) pool.push("wildfire");
+  const candidates = pool.filter((id) => id !== ww.active);
+  return candidates[Math.floor(nextRandom(state) * candidates.length)]!;
+}
+
+/** Строка прогноза в журнале: событие года year уже известно всем. */
+function announceWildForecast(state: GameState, id: WildEventId, year: number) {
+  const def = WILD_EVENTS[id];
+  ev(state, { kind: "wildEventPlanned", year, event: id });
+  log(
+    state,
+    `Прогноз на год ${year}: ${WILD_EVENT_RU[id]}.`,
+    def.plannedKey,
+    { year },
+  );
+}
+
+/** «Переселение»: каждый передаёт соседу по часовой одну карту. */
+function applyResettlement(state: GameState): number {
+  // Одновременность: сначала собираем карты, потом раздвигаем — при двух
+  // игроках это взаимный обмен, порядок круга не должен терять карту.
+  // С руки уходит старейшая карта (начало руки); со слепой колоды — верх.
+  const gives = state.players.map((p) => ({
+    from: p.id,
+    to: nextPlayerId(state, p.id),
+    card: state.modules.randomMutations
+      ? (p.blindDeck?.pop() ?? null)
+      : (p.hand.shift() ?? null),
+  }));
+  let passed = 0;
+  const moves: Array<{ fromPlayerId: number; toPlayerId: number; had: boolean }> = [];
+  for (const g of gives) {
+    if (!g.card) {
+      moves.push({ fromPlayerId: g.from, toPlayerId: g.to, had: false });
+      continue;
+    }
+    const target = state.players[g.to]!;
+    if (state.modules.randomMutations) target.blindDeck?.push(g.card);
+    else target.hand.push(g.card);
+    passed += 1;
+    moves.push({ fromPlayerId: g.from, toPlayerId: g.to, had: true });
+  }
+  ev(state, { kind: "wildResettlement", moves });
+  return passed;
+}
+
+/** «Метеорит»: каждое животное теряет фишку жира; без жира — ничего. */
+function applyMeteorite(state: GameState): number {
+  let affected = 0;
+  for (const a of allAnimals(state)) {
+    if (a.fatTokens <= 0) continue;
+    a.fatTokens -= 1;
+    affected += 1;
+  }
+  ev(state, { kind: "wildMeteorite", affected });
+  return affected;
+}
+
+/** «Пожар»: каждая карта флоры теряет до 2 фишек. */
+function applyWildfire(state: GameState): number {
+  let burned = 0;
+  for (const f of state.flora ?? []) {
+    const loss = Math.min(2, f.food);
+    f.food -= loss;
+    burned += loss;
+  }
+  ev(state, { kind: "wildWildfire", burned });
+  return burned;
+}
+
+/**
+ * Граница года (вызывается из revealAndStartFood, «начало года» по §6):
+ * активирует спрогнозированное событие текущего года — разовые эффекты
+ * применяются здесь, условия броска действуют до конца года, — затем рисует
+ * прогноз на следующий. Событие года N игроки читали ещё в году N−1.
+ */
+function startOfYearWildEvents(state: GameState) {
+  const ww = state.wildWorld;
+  if (!ww) return;
+  const planned = ww.planned;
+  if (planned && planned.year === state.year) {
+    ww.active = planned.id;
+    ww.planned = null;
+    ev(state, { kind: "wildEventStarted", year: state.year, event: planned.id });
+    // Счётчики разовых эффектов идут параметрами ключа: EN-клиент собирает
+    // строку по словарю, русский text — фолбэк.
+    if (planned.id === "resettlement") {
+      const passed = applyResettlement(state);
+      log(
+        state,
+        `Год ${state.year}: ${WILD_EVENT_RU[planned.id]}.`,
+        WILD_EVENTS[planned.id].startedKey,
+        { year: state.year },
+      );
+      log(state, `Передано карт: ${passed}.`, "log.wild.resettlementDone", { n: passed });
+    } else if (planned.id === "meteorite") {
+      const affected = applyMeteorite(state);
+      log(
+        state,
+        `Год ${state.year}: ${WILD_EVENT_RU[planned.id]} — потеряно фишек жира: ${affected}.`,
+        WILD_EVENTS[planned.id].startedKey,
+        { year: state.year, n: affected },
+        "bad",
+      );
+    } else if (planned.id === "wildfire") {
+      const burned = applyWildfire(state);
+      log(
+        state,
+        `Год ${state.year}: ${WILD_EVENT_RU[planned.id]} — сгорело фишек флоры: ${burned}.`,
+        WILD_EVENTS[planned.id].startedKey,
+        { year: state.year, n: burned },
+        "bad",
+      );
+    } else {
+      log(
+        state,
+        `Год ${state.year}: ${WILD_EVENT_RU[planned.id]}.`,
+        WILD_EVENTS[planned.id].startedKey,
+        { year: state.year },
+        planned.id === "goldenAge" ? "good" : "bad",
+      );
+    }
+  }
+  if (!state.lastYear) {
+    const next = drawWildEvent(state);
+    ww.planned = { year: state.year + 1, id: next };
+    announceWildForecast(state, next, state.year + 1);
+  }
 }
 
 function revealAndStartFood(state: GameState) {
@@ -2392,6 +2656,10 @@ function revealAndStartFood(state: GameState) {
     }
   }
   ev(state, { kind: "traitsRevealed" });
+  // «Дикий мир»: граница года — активация спрогнозированного события и
+  // розыгрыш прогноза на следующий. До ветки растений/флоры: события года
+  // действуют и когда кубик не бросается.
+  if (state.wildWorld) startOfYearWildEvents(state);
   if ((state.modules.plants || state.modules.fungi) && !state.modules.continents) {
     // «Растения»/«Трава и грибы»: еда этого года — на столе, кубик не нужен.
     if (state.modules.fungi) addNewFlora(state, state.players.length);
@@ -2446,7 +2714,7 @@ function startFoodRoll(state: GameState) {
     const bases: Record<TerritoryId, number> = {
       laurasia: 0,
       gondwana: 0,
-      ocean: territoryFoodSpec(n).ocean,
+      ocean: adjustBank(state, territoryFoodSpec(n).ocean),
     };
     for (const a of allAnimals(state)) {
       if (a.hibernating) continue;
@@ -2458,11 +2726,12 @@ function startFoodRoll(state: GameState) {
       // Континентальные эдификаторы добавляют фишки растениям/флоре
       // своей локации (растения — в фазе роста, флора — в вымирание).
     }
-    state.foodRoll = [dieFor(state)];
+    state.foodRoll = [wildDie(state)];
     state.territoryFood = { laurasia: 0, gondwana: 0, ocean: bases.ocean };
     state.foodBank = bases.ocean;
     ev(state, { kind: "diceRoll", dice: state.foodRoll, total: bases.ocean });
     log(state, `Океан: кормовая база ${bases.ocean}. На континентах еда — на столе флоры.`, "log.oceanBank", { bank: bases.ocean }, "good");
+    logBankAdjustments(state);
     return;
   }
   if (state.modules.continents) {
@@ -2470,12 +2739,30 @@ function startFoodRoll(state: GameState) {
     advanceNeoplasia(state);
     // Официальная таблица дополнения: у каждой территории своя база.
     // Лавразия — белые кубики, Гондвана — цветные, Океан — константа.
+    // Бросочные события и «Изобилие» ложатся на каждую бросаемую территорию
+    // (§1.1), Океан — константа, его не бросают. Инвариант суммы с foodBank
+    // сохраняется, поэтому корректировка по территориям, а не по общему банку.
     const spec = territoryFoodSpec(n);
-    const laurasia = rollSpec(state, spec.laurasia);
-    const gondwana = rollSpec(state, spec.gondwana);
+    // «Голодный сезон» с «Континентами»: каждая база бросается дважды —
+    // берётся меньший (правило ложится на бросок каждой территории).
+    const rollTerritory = (s: { dice: number; bonus: number }) => {
+      if (!state.rules?.hungrySeason) return rollSpec(state, s);
+      const a = rollSpec(state, s);
+      const b = rollSpec(state, s);
+      return a.food <= b.food ? a : b;
+    };
+    const laurasia = rollTerritory(spec.laurasia);
+    const gondwana = rollTerritory(spec.gondwana);
+    if (state.rules?.hungrySeason) {
+      log(
+        state,
+        `«Голодный сезон»: каждая база брошена дважды — берётся меньший.`,
+        "log.ruleHungrySeasonTerritories",
+      );
+    }
     const bases: Record<TerritoryId, number> = {
-      laurasia: laurasia.food,
-      gondwana: gondwana.food,
+      laurasia: adjustTerritoryBank(state, laurasia.food),
+      gondwana: adjustTerritoryBank(state, gondwana.food),
       ocean: spec.ocean,
     };
     // Эдификаторы добавляют по 2 фишки в свою территорию.
@@ -2500,21 +2787,41 @@ function startFoodRoll(state: GameState) {
       { l: bases.laurasia, g: bases.gondwana, o: bases.ocean, lroll: lRoll, groll: gRoll },
       "good",
     );
+    logBankAdjustments(state);
     return;
   }
   const spec = baseFoodSpec(n);
-  const { dice, food } = rollSpec(state, spec);
-  state.foodRoll = dice;
-  state.foodBank = food;
-  ev(state, { kind: "diceRoll", dice, total: food });
+  if (state.rules?.hungrySeason) {
+    // «Голодный сезон»: база бросается дважды, берётся меньший итог;
+    // события и «Изобилие» применяются к выбранному (меньшему) броску.
+    const r1 = rollSpec(state, spec);
+    const r2 = rollSpec(state, spec);
+    const take = r1.food <= r2.food ? r1 : r2;
+    state.foodRoll = take.dice;
+    state.foodBank = adjustBank(state, take.food);
+    log(
+      state,
+      `«Голодный сезон»: броски ${r1.food} и ${r2.food} — берём меньший.`,
+      "log.ruleHungrySeasonRoll",
+      { a: r1.food, b: r2.food },
+    );
+    ev(state, { kind: "diceRoll", dice: take.dice, total: state.foodBank });
+  } else {
+    const { dice, food } = rollSpec(state, spec);
+    state.foodRoll = dice;
+    state.foodBank = adjustBank(state, food);
+    ev(state, { kind: "diceRoll", dice, total: state.foodBank });
+  }
+  const dice = state.foodRoll!;
   const extra = spec.bonus ? ` (+${spec.bonus})` : "";
   log(
     state,
-    `Кубики кормовой базы: ${dice.join(" + ")}${extra} = ${food}.`,
+    `Кубики кормовой базы: ${dice.join(" + ")}${extra} = ${dice.reduce((s, d) => s + d, 0) + spec.bonus}.`,
     "log.diceBank",
-    { dice: dice.join(" + "), extra, food },
+    { dice: dice.join(" + "), extra, food: dice.reduce((s, d) => s + d, 0) + spec.bonus },
     "good",
   );
+  logBankAdjustments(state);
 }
 
 /** Действие beginFeeding: вызывается после показа кубиков, стартует питание по кругу. */
@@ -2601,9 +2908,50 @@ export function territoryFoodSpec(playerCount: number): {
   return { laurasia: { dice: 2, bonus: 2 }, gondwana: { dice: 3, bonus: 4 }, ocean: 9 };
 }
 
+/**
+ * Кубик кормовой базы с учётом активного события года: «Ледниковый период»
+ * считает каждый кубик на 1 меньше (не ниже нуля).
+ */
+function wildDie(state: GameState): number {
+  const d = dieFor(state);
+  return state.wildWorld?.active === "iceAge" ? Math.max(0, d - 1) : d;
+}
+
+/**
+ * Корректировка единой кормовой базы (базовая игра; Океан с растениями/грибами):
+ * «Золотой век» +2, «Неурожай» −2 (не ниже нуля), «Изобилие» +1.
+ */
+function adjustBank(state: GameState, food: number): number {
+  let v = food;
+  if (state.wildWorld?.active === "goldenAge") v += 2;
+  if (state.wildWorld?.active === "cropFailure") v = Math.max(0, v - 2);
+  if (state.rules?.abundance) v += 1;
+  return v;
+}
+
+/**
+ * Корректировка базы одной территории «Континентов»: ±1-правила и события
+ * года ложатся на каждую бросаемую территорию (§1.1), поэтому «Золотой век»
+ * и «Неурожай» дают по 1 на Лавразию и Гондвану (суммарно ±2, как в базе).
+ */
+function adjustTerritoryBank(state: GameState, food: number): number {
+  let v = food;
+  if (state.wildWorld?.active === "goldenAge") v += 1;
+  if (state.wildWorld?.active === "cropFailure") v = Math.max(0, v - 1);
+  if (state.rules?.abundance) v += 1;
+  return v;
+}
+
+/** След модификаторов броска в журнале: честно объясняет разницу с кубиками. */
+function logBankAdjustments(state: GameState) {
+  if (state.rules?.abundance) {
+    log(state, `«Изобилие»: +1 к кормовой базе.`, "log.ruleAbundanceRoll", undefined, "good");
+  }
+}
+
 /** Бросок кубиков по спецификации: столько кубиков, столько и сумма. */
 function rollSpec(state: GameState, spec: { dice: number; bonus: number }): { dice: number[]; food: number } {
-  const dice = Array.from({ length: spec.dice }, () => dieFor(state));
+  const dice = Array.from({ length: spec.dice }, () => wildDie(state));
   return { dice, food: dice.reduce((s, d) => s + d, 0) + spec.bonus };
 }
 
@@ -3893,6 +4241,9 @@ function continueAfterExtinction(state: GameState) {
     discardAnimal(state, a);
   }
   state.extinctionDeaths = [];
+  // «Дикий мир»: условие года действовало только на бросок этого года —
+  // в новом году вступит следующее событие (уже спрогнозированное).
+  if (state.wildWorld) state.wildWorld.active = null;
   // Регенерация: владелец обязан положить карту из руки как новое животное
   // поверх оставленных свойств (без добора за него). Счётчик восстановлений —
   // часть состояния: он сбрасывается перед восстановлением и учитывается
@@ -4290,6 +4641,8 @@ function drawCards(state: GameState) {
   state.year += 1;
   state.phase = "development";
   state.devStartPlaySeq = state.playSeq;
+  // «Ускоренная эволюция»: счётчик действий нового года начинается с нуля.
+  state.devActionsUsed = 0;
   log(
     state,
     state.lastYear
