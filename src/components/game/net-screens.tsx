@@ -27,8 +27,9 @@ import { Button } from "@/components/ui/button";
 import { DialogShell } from "@/components/ui/dialog-shell";
 import { ConfirmDialog } from "@/components/game/confirm-dialog";
 import { deckSizeFor } from "@/game/deck";
+import { modifierCompatibilityError, modifierSlotsUsed } from "@/game/modifier-compatibility";
 import { moduleCompatibilityError } from "@/game/module-compatibility";
-import type { Difficulty } from "@/game/types";
+import type { Difficulty, MutatorId, TableRuleId } from "@/game/types";
 import { PLAYER_COLORS, type PlayerColor, type ReactionEmoji, type RoomSummary, type SeatInfo } from "@/lib/net/shared";
 import { EventFeed, reactionsByChatId, type FeedItem } from "./event-feed";
 import { HintNote } from "./hint-note";
@@ -57,6 +58,19 @@ const MODULE_OPTIONS: Array<[ModuleKey, Parameters<TFn>[0], Parameters<TFn>[0]]>
   ["plants", "module.plants", "module.plants.hint"],
   ["fungi", "module.fungi", "module.fungi.hint"],
   ["randomMutations", "module.randomMutations", "module.randomMutations.hint"],
+];
+
+/** Волна 2: столовые правила лобби (§1.1); стартовая рука — отдельный ряд 7/8/9. */
+const RULE_OPTIONS: Array<[TableRuleId, TKey, TKey]> = [
+  ["pack", "lobby.rule.pack", "lobby.rule.pack.hint"],
+  ["hungrySeason", "lobby.rule.hungrySeason", "lobby.rule.hungrySeason.hint"],
+  ["abundance", "lobby.rule.abundance", "lobby.rule.abundance.hint"],
+];
+
+/** Волна 2: мутаторы лобби (§1.2). */
+const MUTATOR_OPTIONS: Array<[MutatorId, TKey, TKey]> = [
+  ["scavengers", "lobby.mutator.scavengers", "lobby.mutator.scavengers.hint"],
+  ["rapidEvolution", "lobby.mutator.rapidEvolution", "lobby.mutator.rapidEvolution.hint"],
 ];
 
 /**
@@ -424,6 +438,10 @@ export function NetMenuScreen() {
         difficulty: last.difficulty ?? "normal",
         modules: last.modules,
         deckSize: last.deckSize,
+        // Волна 2: модификаторы последнего стола подхватываются сами.
+        rules: last.rules,
+        mutators: last.mutators,
+        wildWorld: last.wildWorld,
         isPrivate: makePrivate,
       }),
     );
@@ -1205,15 +1223,25 @@ export function LobbyScreen() {
   const shareUrl = `${window.location.origin}/?room=${net.code}`;
   const modules = net.settings.modules ?? {};
   const difficulty = net.settings.difficulty ?? "normal";
+  // Волна 2: модификаторы стола — общий лимит 3 слота на правила, мутаторы
+  // и «Дикий мир» (§0.10); сервер считает то же самое при create/settings/start.
+  const rules = net.settings.rules ?? {};
+  const mutators = net.settings.mutators ?? {};
+  const wildWorld = net.settings.wildWorld ?? false;
+  const slotsUsed = modifierSlotsUsed({ rules, mutators, wildWorld });
   // Полная колода для выбранных дополнений: если хост не менял размер — она.
   const deckFull = Math.max(deckSizeFor(1, modules), 20);
   const deckNow = Math.min(net.settings.deckSize ?? deckFull, deckFull);
   // Чего не хватает для старта: у хоста — полного стола, у остальных — прав.
   const freeSeats = Math.max(0, net.capacity - net.seats.length);
-  // Несовместимые дополнения блокируют старт: сервер тоже отклонит, но кнопку
-  // лучше показать неактивной сразу (флаги при этом никто не снимает молча).
+  // Несовместимые дополнения и модификаторы блокируют старт: сервер тоже
+  // отклонит, но кнопку лучше показать неактивной сразу (флаги при этом
+  // никто не снимает молча).
   const incompatibility = isHost ? moduleCompatibilityError(modules, lang) : null;
-  const startHint = incompatibility
+  const modIncompatibility = isHost
+    ? modifierCompatibilityError({ modules, rules, mutators, wildWorld }, lang)
+    : null;
+  const startHint = (incompatibility ?? modIncompatibility)
     ?? (!isHost
       ? tt("lobby.startHint.host")
       : freeSeats > 0
@@ -1278,6 +1306,36 @@ export function LobbyScreen() {
 
   function pickDifficulty(id: Difficulty) {
     if (isHost) void netSetSettings({ difficulty: id });
+  }
+
+  /** Волна 2: правила, мутаторы и «Дикий мир» — включение только в лимит слотов. */
+  function toggleRule(key: TableRuleId) {
+    if (!isHost) return;
+    const candidate = { ...rules, [key]: !rules[key] };
+    if (modifierCompatibilityError({ modules, rules: candidate, mutators, wildWorld }, lang)) return;
+    void netSetSettings({ rules: candidate });
+  }
+
+  function toggleMutator(key: MutatorId) {
+    if (!isHost) return;
+    const candidate = { ...mutators, [key]: !mutators[key] };
+    if (modifierCompatibilityError({ modules, rules, mutators: candidate, wildWorld }, lang)) return;
+    void netSetSettings({ mutators: candidate });
+  }
+
+  function toggleWildWorld() {
+    if (!isHost) return;
+    if (modifierCompatibilityError({ modules, rules, mutators, wildWorld: !wildWorld }, lang)) return;
+    void netSetSettings({ wildWorld: !wildWorld });
+  }
+
+  /** Стартовая рука: 0 — классика (правило снимается, слот освобождается). */
+  function pickStartHand(n: 0 | 7 | 8 | 9) {
+    if (!isHost) return;
+    const rest = (({ startHand: _hand, ...without }) => without)(rules);
+    const candidate = n === 0 ? rest : { ...rest, startHand: n };
+    if (modifierCompatibilityError({ modules, rules: candidate, mutators, wildWorld }, lang)) return;
+    void netSetSettings({ rules: candidate });
   }
 
   function pickDeck(size: number) {
@@ -1586,6 +1644,120 @@ export function LobbyScreen() {
                   </button>
                 );
               })}
+            </div>
+          </div>
+
+          {/* Волна 2: модификаторы — правила, мутаторы и «Дикий мир», суммарно
+              не больше 3 слотов (§0.10). Бейджей и баннеров на столе пока нет
+              (волна анимаций): видимый след — журнал и данные состояния. */}
+          <div className="mb-3">
+            <div className="mb-1.5 flex items-baseline justify-between gap-2">
+              <p className="text-xs text-muted">{tt("lobby.modifiers")}</p>
+              <span
+                className={cn(
+                  "text-[10px] uppercase tracking-wide",
+                  slotsUsed >= 3 ? "text-accent" : "text-muted",
+                )}
+              >
+                {tt("lobby.slotsLeft", { used: slotsUsed })}
+              </span>
+            </div>
+            {modIncompatibility ? (
+              <p className="mb-2 text-xs text-muted">{modIncompatibility}</p>
+            ) : null}
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                ...RULE_OPTIONS.map(([key, labelKey, hintKey]) => ({
+                  key,
+                  labelKey,
+                  hintKey,
+                  on: Boolean(rules[key]),
+                })),
+                ...MUTATOR_OPTIONS.map(([key, labelKey, hintKey]) => ({
+                  key,
+                  labelKey,
+                  hintKey,
+                  on: Boolean(mutators[key]),
+                })),
+                {
+                  key: "wildWorld" as const,
+                  labelKey: "lobby.wildWorld" as TKey,
+                  hintKey: "lobby.wildWorld.hint" as TKey,
+                  on: wildWorld,
+                },
+              ].map((item) => {
+                const blocked = modifierCompatibilityError(
+                  item.key === "wildWorld"
+                    ? { modules, rules, mutators, wildWorld: !item.on }
+                    : item.key === "scavengers" || item.key === "rapidEvolution"
+                      ? { modules, rules, mutators: { ...mutators, [item.key]: !item.on }, wildWorld }
+                      : { modules, rules: { ...rules, [item.key]: !item.on }, mutators, wildWorld },
+                  lang,
+                );
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    disabled={!isHost || Boolean(blocked)}
+                    aria-pressed={item.on}
+                    title={isHost ? blocked ?? tt(item.hintKey) : tt("lobby.hostOnly")}
+                    onClick={() => {
+                      if (item.key === "wildWorld") toggleWildWorld();
+                      else if (item.key === "scavengers" || item.key === "rapidEvolution") toggleMutator(item.key);
+                      else toggleRule(item.key);
+                    }}
+                    className={cn(
+                      "flex items-center justify-between gap-2 rounded-[var(--radius-md)] border px-3 py-2 text-left text-xs leading-tight disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:text-sm",
+                      item.on ? "border-accent bg-accent/15 text-fg" : "border-border bg-bg text-fg hover:bg-surface-2",
+                    )}
+                  >
+                    <span className="min-w-0">{tt(item.labelKey)}</span>
+                    <span
+                      className={cn(
+                        "shrink-0 rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
+                        item.on ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
+                      )}
+                    >
+                      {item.on ? tt("common.on") : tt("common.off")}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-2">
+              <p className="mb-1.5 text-xs text-muted">{tt("lobby.rule.startHand")}</p>
+              <div className="grid grid-cols-4 gap-2">
+                {([0, 7, 8, 9] as const).map((n) => {
+                  const on = (rules.startHand ?? 0) === n;
+                  const without = (({ startHand: _hand, ...restRules }) => restRules)(rules);
+                  const candidate = n === 0 ? without : { ...without, startHand: n };
+                  const blocked = modifierCompatibilityError(
+                    { modules, rules: candidate, mutators, wildWorld },
+                    lang,
+                  );
+                  return (
+                    <button
+                      key={n}
+                      type="button"
+                      disabled={!isHost || Boolean(blocked)}
+                      aria-pressed={on}
+                      title={
+                        isHost
+                          ? blocked ?? tt(n === 0 ? "lobby.hand.classic" : "lobby.rule.startHand.hint")
+                          : tt("lobby.hostOnly")
+                      }
+                      onClick={() => pickStartHand(n)}
+                      className={cn(
+                        TOGGLE_BASE,
+                        "rounded-[var(--radius-md)] border px-2 py-1.5 text-xs sm:text-sm",
+                        on ? "border-accent bg-accent/15 text-fg" : "border-border bg-bg text-fg hover:bg-surface-2",
+                      )}
+                    >
+                      {n === 0 ? tt("lobby.hand.classic") : n}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 

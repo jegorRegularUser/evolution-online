@@ -93,6 +93,74 @@ describe("module compatibility gates", () => {
   });
 });
 
+describe("modifier gates (волна 2)", () => {
+  const base = { name: "QA", capacity: 2, botSeats: 1, difficulty: "normal" } as const;
+
+  it("create: больше трёх слотов модификаций отклоняется", async () => {
+    const s = svc();
+    await assert.rejects(
+      () =>
+        s.create({
+          ...base,
+          rules: { pack: true, abundance: true },
+          mutators: { scavengers: true },
+          wildWorld: true,
+        }),
+      /3 слота/,
+    );
+  });
+
+  it("create: запрещённая пара «Стая» × «Случайные мутации»", async () => {
+    const s = svc();
+    await assert.rejects(
+      () => s.create({ ...base, modules: { randomMutations: true }, rules: { pack: true } }),
+      /Стая/,
+    );
+  });
+
+  it("create: ровно три слота принимаются и хранятся в settings", async () => {
+    const s = svc();
+    const host = await s.create({
+      ...base,
+      rules: { pack: true },
+      mutators: { rapidEvolution: true },
+      wildWorld: true,
+    });
+    const settings = (await s.rejoin(host.code, host.token)).room.settings;
+    assert.deepEqual(settings.rules, { pack: true });
+    assert.deepEqual(settings.mutators, { rapidEvolution: true });
+    assert.equal(settings.wildWorld, true);
+  });
+
+  it("setSettings: лимит считается по слитой конфигурации стола", async () => {
+    const s = svc();
+    const host = await s.create({ ...base, rules: { pack: true }, wildWorld: true });
+    // pack + wildWorld + два мутатора = 4 слота — отказ.
+    await assert.rejects(
+      () => s.setSettings(host.code, host.token, { mutators: { scavengers: true, rapidEvolution: true } }),
+      /3 слота/,
+    );
+    // Хост снял правило — слот освободился, мутаторы проходят.
+    await s.setSettings(host.code, host.token, { rules: {} });
+    await s.setSettings(host.code, host.token, { mutators: { scavengers: true, rapidEvolution: true } });
+  });
+
+  it("start: модификаторы попадают в состояние партии (правила, мутаторы, прогноз)", async () => {
+    const s = svc();
+    const host = await s.create({
+      ...base,
+      rules: { startHand: 7 },
+      mutators: { rapidEvolution: true },
+      wildWorld: true,
+    });
+    await s.start(host.code, host.token);
+    const state = full(await s.rejoin(host.code, host.token)).state!;
+    assert.deepEqual(state.rules, { startHand: 7 });
+    assert.deepEqual(state.mutators, ["rapidEvolution"]);
+    assert.equal(state.wildWorld?.planned?.year, 1, "прогноз года 1 нарисован до старта");
+  });
+});
+
 describe("лобби", () => {
   it("create → join: места и хост", async () => {
     const s = svc();
