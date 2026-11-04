@@ -9,7 +9,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { endPhaseStep, phaseOf, shotsDir, startNetGame } from "./qa-lib.mjs";
+import { endPhaseStep, newRuPage, phaseOf, shotsDir, startNetGame } from "./qa-lib.mjs";
 
 const base = process.env.EVO_URL ?? "http://127.0.0.1:8099";
 // Улики (скриншот и лог) — вне репозитория: запись PNG в scripts/ дёргала
@@ -17,7 +17,7 @@ const base = process.env.EVO_URL ?? "http://127.0.0.1:8099";
 // этот скрипт расследует. Переопределяется переменной EVO_SHOTS.
 const SHOTS = shotsDir();
 const browser = await chromium.launch();
-const page = await browser.newPage();
+const { page } = await newRuPage(browser);
 const notes = [];
 const t0 = Date.now();
 const stamp = () => `${Math.round((Date.now() - t0) / 1000)}s`;

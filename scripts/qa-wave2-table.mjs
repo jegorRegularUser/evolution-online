@@ -17,7 +17,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { endPhaseStep, phaseOf, shotsDir, startNetGame, waitUntil } from "./qa-lib.mjs";
+import { endPhaseStep, newRuContext, phaseOf, shotsDir, startNetGame, waitUntil } from "./qa-lib.mjs";
 
 const BASE = process.env.EVO_URL ?? "http://127.0.0.1:8099/";
 const SHOTS = shotsDir();
@@ -246,7 +246,7 @@ async function probePlacing(page) {
 }
 
 async function runSession(players) {
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => bad(`pageerror (${players}p): ${e.message}`));
   await page.goto(BASE, { waitUntil: "networkidle" });

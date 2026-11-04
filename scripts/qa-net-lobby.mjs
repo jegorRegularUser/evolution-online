@@ -21,7 +21,7 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { openCreateTab, startNetGame } from "./qa-lib.mjs";
+import { newRuContext, openCreateTab, startNetGame } from "./qa-lib.mjs";
 
 const BASE = process.env.EVO_URL ?? "http://127.0.0.1:8099/";
 // Скриншоты пишем ВНЕ репозитория: Tailwind в dev сканирует содержимое проекта
@@ -90,7 +90,7 @@ function collectResponses(page) {
 }
 
 async function newPage(label, viewport = { width: 1280, height: 900 }) {
-  const context = await browser.newContext({ viewport });
+  const context = await newRuContext(browser, { viewport });
   const page = await context.newPage();
   track(page, label);
   return page;
@@ -418,7 +418,7 @@ const WARM_MODULES = [
 ];
 
 async function warmupServer() {
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1280, height: 900 } });
   const page = await ctx.newPage();
   let navs = 0;
   // Реальные перезагрузки документа: framenavigated ловит и смену URL через

@@ -27,6 +27,7 @@ import {
   createRoomViaStore,
   dismissSpotlight,
   dismissTurnCard,
+  newRuContext,
   openMenu,
   sleep,
   trackPage,
@@ -148,7 +149,7 @@ try {
   await warmupServer(browser, { log: (m) => console.log(`       ${m}`) });
   ok("сервер прогрет");
 
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
   errs.push(...trackPage(page, "blink"));
   await openMenu(page);

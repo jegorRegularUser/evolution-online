@@ -2,7 +2,7 @@
 // Использование: node scripts/tip-smoke.mjs [baseUrl]
 // Партия — сетевой стол с ботом (соло-режим удалён): see scripts/qa-lib.mjs.
 import { chromium } from "playwright";
-import { endPhaseStep, shotsDir, startNetGame } from "./qa-lib.mjs";
+import { endPhaseStep, newRuContext, shotsDir, startNetGame } from "./qa-lib.mjs";
 
 const BASE = process.argv[2] ?? process.env.EVO_URL ?? "http://127.0.0.1:8099/";
 // Скриншоты — вне репозитория (дефолт — временная папка): PNG в screenshots/
@@ -133,7 +133,7 @@ const verdict = { desktopHover: false, desktopClose: false, mobileTap: false, mo
 // --- Десктоп: мышь ---
 {
   const browser = await chromium.launch();
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1280, height: 800 } });
   const page = await ctx.newPage();
   track(page, "desktop");
   try {
@@ -198,7 +198,7 @@ const verdict = { desktopHover: false, desktopClose: false, mobileTap: false, mo
 // --- Мобильный: тач ---
 {
   const browser = await chromium.launch();
-  const ctx = await browser.newContext({
+  const ctx = await newRuContext(browser, {
     viewport: { width: 390, height: 844 },
     hasTouch: true,
     isMobile: true,

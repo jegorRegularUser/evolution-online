@@ -20,6 +20,11 @@
  *     serverFn и первый импорт клиентских модулей партии в dev компилируются
  *     лениво и шлют full-reload всем вкладкам. Скрипты, которым важна
  *     устойчивость, вызывают прогрев до сценарных вкладок.
+ *   - `newRuContext(browser, opts)` / `newRuPage(browser, opts)` — контекст и
+ *     страница с детерминированным русским языком приложения. Селекторы
+ *     библиотеки русские, а язык приложения выбирается по localStorage
+ *     "evo-lang", без него — по navigator.language (i18n/store.ts): Chromium
+ *     с локалью машины рендерил меню по-английски и сценарии падали средово.
  *
  * Библиотека ничего не печатает сама: статусы и вердикт остаются за скриптом.
  * Точки входа намеренно идемпотентны — повторный вызов `startNetGame` на той
@@ -60,13 +65,55 @@ export const MODULE_LABELS = {
   randomMutations: "Случайные мутации",
 };
 
-// ── базовые примитивы страницы ───────────────────────────────────────────────
+// ── язык QA-вкладок ──────────────────────────────────────────────────────────
+
+/**
+ * Init-скрипт языка: ставит localStorage "evo-lang" = "ru" до любых скриптов
+ * страницы (раньше инлайн-скрипта из __root.tsx и раньше initLang в эффекте).
+ * Без сохранённого выбора приложение берёт navigator.language — то есть
+ * локаль машины, на EN-системе меню рендерится по-английски.
+ */
+export const RU_LANG_INIT = () => {
+  try {
+    localStorage.setItem("evo-lang", "ru");
+  } catch {
+    /* приватный режим — останется определение по locale контекста ("ru-RU") */
+  }
+};
+
+/**
+ * Контекст с гарантированным русским языком приложения — замена
+ * `browser.newContext(...)` во всех QA-скриптах. Явный `locale` вызывающего
+ * старше: i18n-сценарии (волны 7–8) задают язык сами через locale +
+ * storageState и принудительного ru получать не должны.
+ */
+export async function newRuContext(browser, opts = {}) {
+  const ctx = await browser.newContext({ locale: "ru-RU", ...opts });
+  await ctx.addInitScript(RU_LANG_INIT);
+  return ctx;
+}
+
+/** Контекст + страница одним вызовом — замена `browser.newPage(...)`. */
+export async function newRuPage(browser, opts = {}) {
+  const ctx = await newRuContext(browser, opts);
+  const page = await ctx.newPage();
+  return { ctx, page };
+}
+
+/** Вкладки, которым gotoUrl уже посеял язык (чтобы не копить init-скрипты). */
+const langSeeded = new WeakSet();
 
 /**
  * Переход по URL с ожиданием гидратации: networkidle даёт React время
  * навесить обработчики, иначе первые клики по SSR-разметке теряются.
+ * Страховка языка: вкладке, созданной мимо newRuContext, init-скрипт
+ * сеется здесь — до первого перехода.
  */
 export async function gotoUrl(page, url = `${BASE}/`) {
+  if (!langSeeded.has(page)) {
+    langSeeded.add(page);
+    await page.addInitScript(RU_LANG_INIT).catch(() => {});
+  }
   await page
     .goto(url, { waitUntil: "networkidle", timeout: 60_000 })
     .catch(() => page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {}));
@@ -800,7 +847,7 @@ const WARM_MODULES = [
  * его до сценарных вкладок; вкладка прогрева закрывается.
  */
 export async function warmupServer(browser, { timeout = 240_000, quietMs = 4_000, log = () => {} } = {}) {
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1280, height: 900 } });
   const page = await ctx.newPage();
   const deadline = Date.now() + timeout;
   let navs = 0;

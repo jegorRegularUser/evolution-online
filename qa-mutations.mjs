@@ -4,6 +4,7 @@
 // Использование: node qa-mutations.mjs [baseUrl]
 import { mkdirSync } from "node:fs";
 import { chromium } from "playwright";
+import { newRuContext } from "./scripts/qa-lib.mjs";
 
 const BASE = process.argv[2] ?? "http://localhost:8099/";
 const OUT = new URL("./screenshots/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
@@ -196,7 +197,7 @@ const browser = await chromium.launch();
 (async () => {
   // ---------- «Случайные мутации» отдельно (desktop) ----------
   {
-    const ctx = await browser.newContext({ viewport: { width: 1366, height: 850 } });
+    const ctx = await newRuContext(browser, { viewport: { width: 1366, height: 850 } });
     const page = await ctx.newPage();
     await track(page, "mutations");
     try {
@@ -210,7 +211,7 @@ const browser = await chromium.launch();
 
   // ---------- Мутации + Континенты + Растения (desktop) ----------
   {
-    const ctx = await browser.newContext({ viewport: { width: 1366, height: 850 } });
+    const ctx = await newRuContext(browser, { viewport: { width: 1366, height: 850 } });
     const page = await ctx.newPage();
     await track(page, "mutations-combo");
     try {
@@ -229,7 +230,7 @@ const browser = await chromium.launch();
 
   // ---------- Мутации на мобиле ----------
   {
-    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const ctx = await newRuContext(browser, { viewport: { width: 390, height: 844 } });
     const page = await ctx.newPage();
     await track(page, "mutations-mobile");
     try {

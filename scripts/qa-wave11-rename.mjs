@@ -26,6 +26,7 @@ import {
   gotoUrl,
   isVisible,
   netState,
+  newRuContext,
   openMenu,
   safeClick,
   sleep,
@@ -140,8 +141,8 @@ async function waitDevTurn(pages, timeout = 90_000) {
 async function renameScenario(browser) {
   // Два ОТДЕЛЬНЫХ контекста: токены мест живут в localStorage, в одном
   // контексте вторая вкладка вошла бы в стол тем же игроком.
-  const hostCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const guestCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const hostCtx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
+  const guestCtx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   const host = await hostCtx.newPage();
   const guest = await guestCtx.newPage();
   const errsHost = trackPage(host, "rename-host");
@@ -325,7 +326,7 @@ async function renameScenario(browser) {
 // ── (б) галочки сохранения имени и пароля в лобби ────────────────────────────
 
 async function lobbyCheckmarks(browser) {
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   const host = await ctx.newPage();
   const errs = trackPage(host, "lobby");
   try {

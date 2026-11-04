@@ -2,10 +2,11 @@
 // чипы меток, свойства в руке) и на экране правил должны загрузиться
 // (naturalWidth > 0), битых путей быть не должно.
 import { chromium } from "playwright";
+import { newRuPage } from "./scripts/qa-lib.mjs";
 
 const BASE = process.argv[2] ?? "http://localhost:8099/";
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+const { page } = await newRuPage(browser, { viewport: { width: 1280, height: 900 } });
 
 const failed = [];
 page.on("requestfailed", (r) => {

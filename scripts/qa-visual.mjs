@@ -8,13 +8,13 @@
  * Партия поднимается СЕТЕВЫМ столом (соло-режим удалён): see scripts/qa-lib.mjs.
  */
 import { chromium } from "playwright";
-import { SHOTS, advancePhase, endPhaseStep, menuReady, phaseOf, shotsDir, startNetGame, waitHumanTurn } from "./qa-lib.mjs";
+import { SHOTS, advancePhase, endPhaseStep, menuReady, newRuPage, phaseOf, shotsDir, startNetGame, waitHumanTurn } from "./qa-lib.mjs";
 
 const base = process.env.EVO_URL ?? "http://127.0.0.1:8099";
 shotsDir();
 
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const { page } = await newRuPage(browser, { viewport: { width: 1440, height: 900 } });
 const problems = [];
 const ok = (msg) => console.log("OK:", msg);
 const fail = (msg) => {

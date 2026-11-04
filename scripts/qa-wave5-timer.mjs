@@ -27,6 +27,7 @@ import {
   bodyOf,
   dismissSpotlight,
   isVisible,
+  newRuContext,
   openMenu,
   safeClick,
   sleep,
@@ -93,7 +94,7 @@ async function shotTimer(page, name) {
 }
 
 async function newPage(label, viewport) {
-  const ctx = await browser.newContext({ viewport });
+  const ctx = await newRuContext(browser, { viewport });
   const page = await ctx.newPage();
   pageProblems.push(trackPage(page, label, { ignore: [/hydrated but some attributes/] }));
   return page;

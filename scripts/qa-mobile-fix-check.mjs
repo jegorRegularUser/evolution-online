@@ -24,7 +24,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { menuReady, openCreateTab, shotsDir, startNetGame } from "./qa-lib.mjs";
+import { menuReady, newRuContext, openCreateTab, shotsDir, startNetGame } from "./qa-lib.mjs";
 
 const BASE = process.env.EVO_URL ?? "http://127.0.0.1:8099/";
 // Снимки копятся во временной папке и в конце копируются в EVO_SHOTS
@@ -386,7 +386,7 @@ let desktopRoom = "";
 
 try {
   // ══ A. Десктоп: меню ════════════════════════════════════════════════════
-  const dCtx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const dCtx = await newRuContext(browser, { viewport: { width: 1280, height: 800 } });
   const d = await dCtx.newPage();
   try {
     await gotoMenu(d);
@@ -425,7 +425,7 @@ try {
   }
 
   // ══ C. Мобилка: меню, обучение, лобби ═══════════════════════════════════
-  const mCtx = await browser.newContext(mobileOpts());
+  const mCtx = await newRuContext(browser, mobileOpts());
   const m = await mCtx.newPage();
   try {
     await gotoMenu(m);
@@ -539,8 +539,8 @@ try {
   // ══ E. Зритель (mobile + desktop) на десктопном столе ═══════════════════
   if (desktopRoom) {
     const specs = [
-      { name: "mobile", ctx: await browser.newContext(mobileOpts()), mobile: true },
-      { name: "desktop", ctx: await browser.newContext({ viewport: { width: 1280, height: 800 } }), mobile: false },
+      { name: "mobile", ctx: await newRuContext(browser, mobileOpts()), mobile: true },
+      { name: "desktop", ctx: await newRuContext(browser, { viewport: { width: 1280, height: 800 } }), mobile: false },
     ];
     for (const s of specs) {
       const p = await s.ctx.newPage();
@@ -606,7 +606,7 @@ try {
   // Сетевые столы на короткой колоде (20 карт) — быстрее доходим до питания;
   // контексты закрываются вместе с партиями.
   try {
-    const sCtx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const sCtx = await newRuContext(browser, { viewport: { width: 1280, height: 800 } });
     const s = await sCtx.newPage();
     try {
       await gotoMenu(s);
@@ -625,7 +625,7 @@ try {
       await sCtx.close().catch(() => {});
     }
 
-    const oCtx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const oCtx = await newRuContext(browser, { viewport: { width: 1280, height: 800 } });
     const o = await oCtx.newPage();
     try {
       await gotoMenu(o);

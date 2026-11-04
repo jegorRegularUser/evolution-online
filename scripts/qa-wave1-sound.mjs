@@ -21,7 +21,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { openMenu, roomCode, safeClick, startNetGame, waitUntil } from "./qa-lib.mjs";
+import { newRuContext, openMenu, roomCode, safeClick, startNetGame, waitUntil } from "./qa-lib.mjs";
 
 const SHOTS = process.env.EVO_SHOTS ?? join(tmpdir(), "evo-wave1-sound");
 mkdirSync(SHOTS, { recursive: true });
@@ -116,7 +116,7 @@ async function shot(page, name, { zoom = true } = {}) {
 }
 
 try {
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => fail("PAGEERROR: " + e.message));
 
@@ -333,7 +333,7 @@ try {
 
   // ── 8. Мобильная шапка: одна иконка, панель влезает в экран ──
   {
-    const mctx = await browser.newContext({
+    const mctx = await newRuContext(browser, {
       viewport: { width: 390, height: 844 },
       isMobile: true,
       hasTouch: true,
@@ -366,7 +366,7 @@ try {
 
   // ── 9. Третий экземпляр — сетевой стол (net-screens, NetTopBar) ──
   try {
-    const nctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const nctx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
     const np = await nctx.newPage();
     np.on("pageerror", (e) => fail("NET PAGEERROR: " + e.message));
     await openMenu(np);

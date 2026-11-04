@@ -19,11 +19,11 @@
  * Запуск: node scripts/qa-m6-repro.mjs
  */
 import { chromium } from "playwright";
-import { advancePhase, netState, phaseOf, startNetGame, waitHumanTurn } from "./qa-lib.mjs";
+import { advancePhase, netState, newRuPage, phaseOf, startNetGame, waitHumanTurn } from "./qa-lib.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const { page } = await newRuPage(browser, { viewport: { width: 1440, height: 900 } });
 page.on("pageerror", (e) => console.log("PAGEERROR:", e.message));
 
 /** Прямой вызов netAction от имени места вкладки (токен из localStorage). */

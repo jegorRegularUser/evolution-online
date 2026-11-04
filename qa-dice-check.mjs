@@ -4,13 +4,14 @@
 import { writeFileSync, rmSync } from "node:fs";
 import sharp from "sharp";
 import { chromium } from "playwright";
+import { newRuPage } from "./scripts/qa-lib.mjs";
 
 const BASE = process.argv[2] ?? "http://localhost:8099/";
 const TMP = "screenshots-dice-buffer.txt";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+const { page } = await newRuPage(browser, { viewport: { width: 1280, height: 900 } });
 page.on("pageerror", (e) => console.error(`[dice-qa] pageerror: ${e}`));
 await page.goto(BASE, { waitUntil: "networkidle" });
 await page.getByRole("button", { name: /Правила/i }).first().click();

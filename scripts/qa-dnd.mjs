@@ -11,7 +11,7 @@
  * scripts/qa-lib.mjs. Соперник — бот: сценарий ждёт своего хода, как и в соло.
  */
 import { chromium } from "playwright";
-import { menuReady, phaseOf, shotsDir, startNetGame } from "./qa-lib.mjs";
+import { menuReady, newRuContext, phaseOf, shotsDir, startNetGame } from "./qa-lib.mjs";
 
 const BASE = process.env.EVO_URL ?? "http://127.0.0.1:8099/";
 const SHOTS = shotsDir();
@@ -102,7 +102,7 @@ async function waitHumanTurn(page, timeout = 60_000) {
 const board = (page) =>
   page.evaluate(() => {
     const sec = [...document.querySelectorAll("[data-player-section]")].find((s) =>
-      s.textContent.includes("Ваша популяция"),
+      s.textContent.includes("Ваши животные"),
     );
     if (!sec) return null;
     const animals = [...sec.querySelectorAll("[data-animal-id]")].map((el) => ({
@@ -241,7 +241,7 @@ const clearSfx = (page) => page.evaluate(() => (window.__sfxLog = []));
 const freeRowPoint = (page) =>
   page.evaluate(() => {
     const sec = [...document.querySelectorAll("[data-player-section]")].find((s) =>
-      s.textContent.includes("Ваша популяция"),
+      s.textContent.includes("Ваши животные"),
     );
     if (!sec) return null;
     const row = sec.querySelector("div.flex.flex-wrap.items-stretch.gap-2");
@@ -266,7 +266,7 @@ const zonePoint = async (page, zone, { scroll = true } = {}) => {
     await page
       .evaluate((z) => {
         const sec = [...document.querySelectorAll("[data-player-section]")].find((s) =>
-          s.textContent.includes("Ваша популяция"),
+          s.textContent.includes("Ваши животные"),
         );
         sec?.querySelector(`[data-zone="${z}"]`)?.scrollIntoView({ block: "center" });
       }, zone)
@@ -275,7 +275,7 @@ const zonePoint = async (page, zone, { scroll = true } = {}) => {
   }
   return page.evaluate((z) => {
     const sec = [...document.querySelectorAll("[data-player-section]")].find((s) =>
-      s.textContent.includes("Ваша популяция"),
+      s.textContent.includes("Ваши животные"),
     );
     const el = sec?.querySelector(`[data-zone="${z}"]`);
     if (!el) return null;
@@ -309,7 +309,7 @@ const browser = await chromium.launch({ channel: "chromium" });
 
 try {
   // ══ A. Мышь: перестановка, карта на пустое место, карта на животное ══
-  const ctxA = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctxA = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   const a = await ctxA.newPage();
   a.on("pageerror", (e) => fail(`A pageerror: ${e.message}`));
   a.on("console", (m) => { if (m.text().startsWith("[dnd]")) console.log("  A>", m.text()); });
@@ -469,7 +469,7 @@ try {
   }
 
   // ══ B. Палец: карта из руки на пустое место и перестановка животных ══
-  const ctxB = await browser.newContext({
+  const ctxB = await newRuContext(browser, {
     viewport: { width: 390, height: 844 },
     deviceScaleFactor: 2,
     hasTouch: true,
@@ -496,7 +496,7 @@ try {
     await waitHumanTurn(b);
     await b.evaluate(() => {
       const sec = [...document.querySelectorAll("[data-player-section]")].find((s) =>
-        s.textContent.includes("Ваша популяция"),
+        s.textContent.includes("Ваши животные"),
       );
       sec?.scrollIntoView({ block: "center" });
     });
@@ -538,7 +538,7 @@ try {
   }
 
   // ══ C. «Континенты»: перенос между территориями, океан — отказ ══
-  const ctxC = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctxC = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   const c = await ctxC.newPage();
   c.on("pageerror", (e) => fail(`C pageerror: ${e.message}`));
   c.on("console", (m) => { if (m.text().startsWith("[dnd]")) console.log("  C>", m.text()); });
@@ -552,8 +552,9 @@ try {
     const playToZone = async (zoneLabel) => {
       await c.locator("[data-hand-row] button", { hasText: "Животное" }).first().click({ timeout: 8000 });
       await sleep(400);
+      // Хвост «· N» в aria-label — число территорий, доступных для размещения.
       await c
-        .locator(`[role="button"][aria-label="Разместить на ${zoneLabel}"]`)
+        .locator(`[role="button"][aria-label^="Разместить на ${zoneLabel}"]`)
         .first()
         .click({ timeout: 4000 });
       await sleep(500);

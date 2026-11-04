@@ -12,7 +12,7 @@
  * Запуск при живом dev-сервере: node scripts/qa-net-privacy.mjs
  */
 import { chromium } from "playwright";
-import { bodyOf, openMenu, roomCode, safeClick, sleep, waitUntil } from "./qa-lib.mjs";
+import { bodyOf, newRuContext, openMenu, roomCode, safeClick, sleep, waitUntil } from "./qa-lib.mjs";
 
 const problems = [];
 const check = (cond, msg) => {
@@ -26,7 +26,7 @@ const check = (cond, msg) => {
 const browser = await chromium.launch();
 try {
   // ── Хост: приватный стол из меню ─────────────────────────────────────────
-  const hostCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const hostCtx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   const host = await hostCtx.newPage();
   await openMenu(host);
 
@@ -62,7 +62,7 @@ try {
   check(/^\d{4}$/.test(generated), `приватный стол: сервер выдал пароль из 4 цифр (${generated})`);
 
   // ── Гость: закрытый стол виден в колонке «Закрытые», без пароля ──────────
-  const guestCtx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const guestCtx = await newRuContext(browser, { viewport: { width: 1280, height: 800 } });
   const guest = await guestCtx.newPage();
   await openMenu(guest);
   // Список комнат поллится раз в 4 с — ждём появления строки.

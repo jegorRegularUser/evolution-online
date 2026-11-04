@@ -3,6 +3,7 @@
 // Использование: node qa-continents.mjs [baseUrl]
 import { mkdirSync } from "node:fs";
 import { chromium } from "playwright";
+import { newRuContext } from "./scripts/qa-lib.mjs";
 
 const BASE = process.argv[2] ?? "http://localhost:8099/";
 const OUT = new URL("./screenshots/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
@@ -113,7 +114,7 @@ async function autoStep(page) {
 const browser = await chromium.launch();
 
 (async () => {
-  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1366, height: 900 } });
   const page = await ctx.newPage();
   await track(page, "cont");
 

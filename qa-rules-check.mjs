@@ -3,6 +3,7 @@
 // Все <img> должны загрузиться, у кубиков должен быть canvas.
 import { mkdirSync } from "node:fs";
 import { chromium } from "playwright";
+import { newRuPage } from "./scripts/qa-lib.mjs";
 
 const BASE = process.argv[2] ?? "http://localhost:8099/";
 const OUT = new URL("./screenshots/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
@@ -12,7 +13,7 @@ const problems = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+const { page } = await newRuPage(browser, { viewport: { width: 1280, height: 900 } });
 page.on("pageerror", (e) => problems.push(`pageerror: ${e}`));
 
 await page.goto(BASE, { waitUntil: "networkidle" });

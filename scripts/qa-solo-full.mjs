@@ -13,7 +13,7 @@
  * EVO_SOLO_BUDGET_MS — бюджет первой партии в миллисекундах.
  */
 import { chromium } from "playwright";
-import { menuReady, phaseOf, shotsDir, startNetGame } from "./qa-lib.mjs";
+import { menuReady, newRuPage, phaseOf, shotsDir, startNetGame } from "./qa-lib.mjs";
 
 const BASE = process.env.EVO_URL ?? "http://127.0.0.1:8099/";
 // Скриншоты — вне репозитория (по умолчанию временная папка): PNG в
@@ -60,7 +60,7 @@ const SCENARIOS = {
 const seen = Object.fromEntries(Object.keys(SCENARIOS).map((k) => [k, false]));
 
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const { page } = await newRuPage(browser, { viewport: { width: 1440, height: 900 } });
 
 // Ошибки страницы: дедуплицируем, чтобы одна и та же не забивала отчёт.
 const reportedErrors = new Set();
