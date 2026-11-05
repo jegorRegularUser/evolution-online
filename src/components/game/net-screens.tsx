@@ -38,6 +38,7 @@ import { loadName, saveName } from "@/lib/net/session";
 import { SoundToggle } from "./sound-toggle";
 import { RulesPanel, StatsScreen } from "./screens";
 import { TutorialScreen } from "./tutorial";
+import { TutorialMissionBlock } from "./tutorial-missions";
 import { TopBar } from "./top-bar";
 import { useGameStore, type NetUiState } from "@/store/game-store";
 import { cn } from "@/lib/utils";
@@ -603,6 +604,9 @@ export function NetMenuScreen() {
             {tt("menu.err.name")}
           </p>
         ) : null}
+
+        {/* Обучение (волна 1.5): интерактивные миссии против лёгкого бота. */}
+        <TutorialMissionBlock name={name} busy={busy} />
 
         {/* min-h-11: чекбокс — тап-таргет 44px на телефоне, а не полоса в одну строку текста. */}
         <label className="flex min-h-11 items-center gap-2 text-xs text-muted">

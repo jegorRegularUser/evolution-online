@@ -64,6 +64,7 @@ import { EventSpotlight } from "./spotlight";
 import { SoundToggle } from "./sound-toggle";
 import { TopBar } from "./top-bar";
 import { TutorialScreen } from "./tutorial";
+import { TutorialHud } from "./tutorial-missions";
 
 const LazyDice3D = lazy(async () => {
   const module = await import("./dice-3d");
@@ -2911,6 +2912,8 @@ function Table({
         className="pointer-events-none fixed inset-0 -z-10 bg-cover bg-center opacity-[0.07]"
         style={{ backgroundImage: `url(${BG.valley})` }}
       />
+      {/* Обучение (волна 1.5): живой список целей поверх учебной партии. */}
+      <TutorialHud />
       <TopBar
         subtitle={`${t("game.yearN", { year: state.year })}${state.lastYear ? ` · ${t("game.yearLast")}` : ""} · ${t(PHASE_LABEL[state.phase] ?? ("phase.development" as const))}${actor ? ` · ${scientistName(actor.name, lang)}` : ""}`}
         subtitleShort={`${t("game.yearN", { year: state.year })} · ${t(PHASE_LABEL[state.phase] ?? ("phase.development" as const))}`}

@@ -1233,6 +1233,26 @@ export const en: Record<keyof RuDict, string> = {
   "final.report.button": "Copy report",
   "final.report.copied": "Report copied",
 
+  // ── wave 1.5: interactive tutorial missions ──────────────────────────────
+  "tutorial.block": "Tutorial",
+  "tutorial.startError": "Couldn't start the mission — try again",
+  "tutorial.abort": "Quit tutorial",
+  "tutorial.missionDone": "Mission complete! The rest await in the menu.",
+  "tutorial.mission.firstSteps.title": "First Steps",
+  "tutorial.mission.firstSteps.desc": "Place an animal, strengthen it with traits, and survive the first year.",
+  "tutorial.mission.hunger.title": "Hungry Year",
+  "tutorial.mission.hunger.desc": "Food runs scarce: store fat, defend yourself, and build a strong animal.",
+  "tutorial.mission.wildWorld.title": "Wild World",
+  "tutorial.mission.wildWorld.desc": "The world shifts every year: read the forecasts and put Scavengers to work.",
+  "tutorial.obj.placeAnimal": "Place an animal on the table",
+  "tutorial.obj.placeTraits": "Attach 2 traits to your animals",
+  "tutorial.obj.reachYear2": "Reach year two",
+  "tutorial.obj.storeFat": "Store a token as fat",
+  "tutorial.obj.conflict": "Fend off a hunt or eat prey",
+  "tutorial.obj.threeTraits": "Build an animal with 3 traits",
+  "tutorial.obj.forecast": "Read a year's event forecast",
+  "tutorial.obj.scavenge": "Collect a card via Scavengers",
+
   // ── app error screen (error-component) ───────────────────────────────────
   "error.title": "Something went wrong",
   "error.body": "Couldn't open the game. Try again — if the error keeps coming back, return to the menu.",

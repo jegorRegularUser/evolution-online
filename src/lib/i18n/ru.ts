@@ -1232,6 +1232,26 @@ export const ru = {
   "final.report.button": "Скопировать отчёт",
   "final.report.copied": "Отчёт скопирован",
 
+  // ── волна 1.5: интерактивные учебные миссии ──────────────────────────────
+  "tutorial.block": "Обучение",
+  "tutorial.startError": "Не удалось начать миссию — попробуйте ещё раз",
+  "tutorial.abort": "Прервать обучение",
+  "tutorial.missionDone": "Миссия выполнена! Остальные ждут в меню.",
+  "tutorial.mission.firstSteps.title": "Первые шаги",
+  "tutorial.mission.firstSteps.desc": "Выложите животное, укрепите его свойствами и переживите первый год.",
+  "tutorial.mission.hunger.title": "Голодный год",
+  "tutorial.mission.hunger.desc": "Кормовая база скудеет: копите жир, защищайтесь и стройте сильное животное.",
+  "tutorial.mission.wildWorld.title": "Дикий мир",
+  "tutorial.mission.wildWorld.desc": "Мир меняется каждый год: читайте прогноз событий и проверьте «Падальщиков» в деле.",
+  "tutorial.obj.placeAnimal": "Выложите животное на стол",
+  "tutorial.obj.placeTraits": "Вложите 2 свойства в свои животные",
+  "tutorial.obj.reachYear2": "Доживите до второго года",
+  "tutorial.obj.storeFat": "Отложите фишку в жир",
+  "tutorial.obj.conflict": "Отразите охоту или съешьте добычу",
+  "tutorial.obj.threeTraits": "Соберите животное с 3 свойствами",
+  "tutorial.obj.forecast": "Прочитайте прогноз события года",
+  "tutorial.obj.scavenge": "Заберите карту по «Падальщикам»",
+
   // ── экран ошибки приложения (error-component) ────────────────────────────
   "error.title": "Что-то пошло не так",
   "error.body":

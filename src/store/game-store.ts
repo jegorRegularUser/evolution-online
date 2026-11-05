@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import { legalDefenseActions, legalDevActions, legalFeedActions } from "@/game/engine";
 import type { Difficulty, GameAction, GameSpeed, GameState, ModuleId, MutatorId, TableRules } from "@/game/types";
+import {
+  TUTORIAL_MISSIONS,
+  loadDoneMissions,
+  saveDoneMission,
+  type TutorialMissionId,
+} from "@/game/tutorial";
 import { t, type TParams, type TKey } from "@/lib/i18n";
 import { NetClientError, NetSession, fetchRoomList, forgetSession, hasStoredSeatSession, hasStoredSession, loadName, type NetHooks, type NetStatus, type PendingNetItem } from "@/lib/net/session";
 import type {
@@ -434,6 +440,13 @@ interface GameStore {
   setLogOpen: (v: boolean) => void;
   setSpeed: (v: GameSpeed) => void;
   setAnimMode: (v: AnimMode) => void;
+  /** Обучение (волна 1.5): активная миссия поверх обычной сетевой партии. */
+  tutorialMission: TutorialMissionId | null;
+  /** Пройденные миссии (localStorage evo-tutorial) — галочки в меню. */
+  doneMissions: TutorialMissionId[];
+  startTutorial: (id: TutorialMissionId, name: string) => Promise<void>;
+  clearTutorial: () => void;
+  completeTutorial: (id: TutorialMissionId) => void;
   startNetCreate: (cfg: NetCreateConfig) => Promise<void>;
   /** Войти за стол; password — только для приватного (см. NetClientError). */
   startNetJoin: (code: string, name: string, password?: string) => Promise<void>;
@@ -820,6 +833,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
   logUnread: 0,
   speed: "normal",
   animMode: loadAnimMode(),
+  tutorialMission: null,
+  doneMissions: loadDoneMissions(),
   net: null,
   netFatal: null,
   rooms: [],
@@ -878,6 +893,34 @@ export const useGameStore = create<GameStore>((set, get) => ({
       // приватный режим — режим анимаций просто не сохранится
     }
     set({ animMode });
+  },
+
+  // ── обучение (волна 1.5) ────────────────────────────────────────────────
+  startTutorial: async (id, name) => {
+    const m = TUTORIAL_MISSIONS[id];
+    set({ tutorialMission: id });
+    // Миссия = обычная комната с лёгким ботом и настройками миссии: никакого
+    // отдельного оффлайн-контура (соло удалено by design, коммит bcd54b0).
+    try {
+      await get().startNetCreate({
+        name: name || "Evo",
+        capacity: 2,
+        botSeats: 1,
+        difficulty: "easy",
+        modules: m.modules,
+        mutators: m.mutators,
+        wildWorld: m.wildWorld,
+      });
+    } catch (e) {
+      set({ tutorialMission: null });
+      throw e;
+    }
+  },
+
+  clearTutorial: () => set({ tutorialMission: null }),
+
+  completeTutorial: (id) => {
+    set({ doneMissions: saveDoneMission(id) });
   },
 
   // ── сетевой стол ──────────────────────────────────────────────────────────
