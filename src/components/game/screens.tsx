@@ -9,6 +9,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
+import { CheckCircle2, Target } from "lucide-react";
 import { DialogShell } from "@/components/ui/dialog-shell";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,8 @@ import { PLANTS } from "@/game/plants";
 import { CONTINENTS_TRAIT_IDS, FUNGI_TRAIT_IDS, MUTATIONS_TRAIT_IDS, PLANTS_TRAIT_IDS, TRAIT_ORDER } from "@/game/traits";
 import { TERRITORIES } from "@/game/types";
 import type { FloraKind, MarkKind, ModuleId, MutatorId, PlantKind, ScoreBreakdown, TerritoryId, TraitId } from "@/game/types";
+import { CHALLENGES } from "@/game/challenges";
+import { challengesGet, profileGet } from "@/lib/profile/api";
 import { sfx } from "@/lib/sfx";
 import { ACHIEVEMENTS, readStats } from "@/lib/stats";
 import {
@@ -75,6 +78,7 @@ const FOCUS_VISIBLE =
 export function MenuScreen({ onRules }: { onRules: () => void }) {
   const tt = useT();
   const [statsOpen, setStatsOpen] = useState(false);
+  const [challengesOpen, setChallengesOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const netFatal = useGameStore((s) => s.netFatal);
   const clearNetFatal = useGameStore((s) => s.clearNetFatal);
@@ -121,6 +125,10 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
             <BookOpen className="size-4" />
             <span className="hidden sm:inline">{tt("topbar.rules")}</span>
           </Button>
+          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("challenges.title")} title={tt("challenges.title")} onClick={() => setChallengesOpen(true)}>
+            <Target className="size-4" />
+            <span className="hidden sm:inline">{tt("challenges.title")}</span>
+          </Button>
           <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.stats")} title={tt("topbar.stats")} onClick={openStats}>
             <BarChart3 className="size-4" />
             <span className="hidden sm:inline">{tt("topbar.stats")}</span>
@@ -163,6 +171,7 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
       </div>
       {tutorialOpen ? <TutorialScreen onClose={closeTutorial} /> : null}
       {statsOpen ? <StatsScreen onClose={closeStats} /> : null}
+      {challengesOpen ? <ChallengesScreen onClose={() => setChallengesOpen(false)} /> : null}
     </>
   );
 }
@@ -1279,6 +1288,123 @@ const MUTATOR_NAME_KEYS: Record<MutatorId, TKey> = {
   scavengers: "lobby.mutator.scavengers",
   rapidEvolution: "lobby.mutator.rapidEvolution",
 };
+
+/**
+ * «Вызовы» (волна 3а, дизайн-пакет §4.1В): сеть целей с тирами поверх любых
+ * партий. Прогресс и баланс — с сервера (профиль волны 0), каталог — общий
+ * модуль src/game/challenges.ts; награда «Ископаемыми» начисляется сервером
+ * идемпотентно, тир не может упасть дважды.
+ */
+export function ChallengesScreen({ onClose }: { onClose: () => void }) {
+  const tt = useT();
+  const titleId = useId();
+  const [loaded, setLoaded] = useState<
+    | { ok: false }
+    | { ok: true; progress: Record<string, number>; claimed: string[]; featsDone: string[]; balance: number }
+    | null
+  >(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const [ch, prof] = await Promise.all([challengesGet(), profileGet()]);
+        if (!alive) return;
+        if (!ch.ok || !prof.ok) {
+          setLoaded({ ok: false });
+          return;
+        }
+        setLoaded({
+          ok: true,
+          progress: ch.progress,
+          claimed: ch.claimed,
+          featsDone: ch.featsDone,
+          balance: prof.balance,
+        });
+      } catch {
+        if (alive) setLoaded({ ok: false });
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return (
+    <DialogShell
+      titleId={titleId}
+      overlayClassName="fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-0 sm:items-center sm:p-6"
+      panelClassName="max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-t-[var(--radius-xl)] border border-border bg-surface p-5 sm:rounded-[var(--radius-xl)] sm:p-8"
+      onBackdropClick={onClose}
+    >
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <h2 id={titleId} tabIndex={-1} className="text-2xl">{tt("challenges.title")}</h2>
+          <p className="mt-1 text-xs text-muted">{tt("challenges.subtitle")}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {loaded?.ok ? (
+            <span className="rounded-[var(--radius-sm)] border border-border bg-bg px-2 py-1 text-xs tabular-nums text-fg">
+              {tt("challenges.balance", { n: loaded.balance })}
+            </span>
+          ) : null}
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            {tt("common.close")}
+          </Button>
+        </div>
+      </div>
+      {loaded === null ? (
+        <p className="py-8 text-center text-sm text-muted">…</p>
+      ) : !loaded.ok ? (
+        <p role="alert" className="py-8 text-center text-sm text-danger">
+          {tt("tutorial.startError")}
+        </p>
+      ) : (
+        <ul className="grid gap-2">
+          {CHALLENGES.map((ch) => {
+            const isFeat = Boolean(ch.feat);
+            const done = isFeat ? loaded.featsDone.includes(ch.id) : false;
+            const value = loaded.progress[ch.id] ?? 0;
+            const claimedTiers = ch.tiers.filter((_, i) => loaded.claimed.includes(`${ch.id}:${i}`));
+            const nextTier = ch.tiers.find((_, i) => !loaded.claimed.includes(`${ch.id}:${i}`));
+            const allDone = claimedTiers.length === ch.tiers.length;
+            return (
+              <li
+                key={ch.id}
+                className={cn(
+                  "flex items-center justify-between gap-3 rounded-[var(--radius-md)] border px-3 py-2.5",
+                  allDone || done
+                    ? "border-good/45 bg-good/10"
+                    : "border-border bg-bg/60",
+                )}
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm text-fg">{tt(ch.titleKey)}</p>
+                  <p className="text-xs text-muted">
+                    {isFeat
+                      ? done
+                        ? tt("challenges.done")
+                        : tt("challenges.progress", { value: 0, goal: 1 })
+                      : nextTier
+                        ? tt("challenges.progress", { value, goal: nextTier.n })
+                        : tt("challenges.done")}
+                  </p>
+                </div>
+                <div className="shrink-0 text-right">
+                  {nextTier && !isFeat ? (
+                    <span className="text-xs font-semibold tabular-nums text-accent">
+                      {tt("challenges.reward", { n: nextTier.coins })}
+                    </span>
+                  ) : allDone || done ? (
+                    <CheckCircle2 className="size-5 text-good" aria-hidden />
+                  ) : null}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </DialogShell>
+  );
+}
 
 /**
  * Очки места «докручиваются» от нуля на глазах: легче прочувствовать разрыв

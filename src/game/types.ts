@@ -69,6 +69,37 @@ export type Phase =
 export type ModuleId = "continents" | "plants" | "fungi" | "randomMutations";
 export type EnabledModules = Partial<Record<ModuleId, boolean>>;
 
+/**
+ * Метрики одной партии для своего игрока (волна 3а). Копятся в applyAction
+ * по событиям, финализируются в finishGame (игры/победы/место). Отчёт о них
+ * сервер считает входом «Вызовов» — предикаты каталога чистые и переиспользуем
+ * на сервере и клиенте (src/game/challenges.ts).
+ */
+export interface GameRunStats {
+  preyEaten: number;
+  defended: number;
+  fatStored: number;
+  traitsPlaced: number;
+  animalsPlaced: number;
+  animalsLost: number;
+  maxTraitsOnAnimal: number;
+  scavenges: number;
+  /** Годов с активным событием «Дикого мира», которые дожил до конца. */
+  wildYearsSurvived: number;
+  games: number;
+  wins: number;
+  bestPlace: number;
+  /** Победы с включёнными модулями (для вызовов «победа с модулем»). */
+  winsModule: Partial<Record<ModuleId, number>>;
+  /** Плоские счётчики побед с модулем — прямые ключи каталога вызовов. */
+  winsContinents?: number;
+  winsPlants?: number;
+  winsFungi?: number;
+  winsMutations?: number;
+  /** Победа, в которой у игрока было хищное животное с 3+ свойствами (feat). */
+  bigCarnivoreWin?: boolean;
+}
+
 // ── Волна 2: модификаторы стола ─────────────────────────────────────────────
 // Три уровня по дизайн-пакету (plans/design-expansion-pack.md §1): параметрические
 // столовые правила, структурные мутаторы и пак событий «Дикий мир». Все они
@@ -581,6 +612,18 @@ export interface GameState {
   eventSeq: number;
   /** События последнего применённого действия. */
   lastEvents: GameEvent[];
+  /**
+   * Накопитель метрик партии для «Вызовов» (волна 3а, дизайн-пакет §4.1В):
+   * счётчики СВОЕГО (humanId) игрока, растут по событиям действий.
+   * Опционален — старые сохранённые партии живут без него; движок заводит
+   * его лениво при первом событии. Часть состояния (jsonb комнаты), поэтому
+   * переживает F5 и реплей — то, чего не мог транзиентный lastEvents.
+   */
+  stats?: GameRunStats;
+  /** Год, за который «пережил дикий год» уже засчитан (анти-дубль trackStats). */
+  statsWildYearCredited?: number;
+  /** Финализация (games/wins/место) выполнена ровно один раз. */
+  statsFinalized?: boolean;
   /** Значение playSeq на старте развития года: свойства с большим playSeq вложены в этом году. */
   devStartPlaySeq: number;
   /** Животные, ожидающие гибели в показанной стадии вымирания. */

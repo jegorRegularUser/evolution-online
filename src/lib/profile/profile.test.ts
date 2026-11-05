@@ -24,12 +24,18 @@ before(async () => {
     "utf8",
   );
   await pg.exec(ddl);
+  const ddl2 = readFileSync(
+    fileURLToPath(new URL("../../../migrations/0013_challenges.sql", import.meta.url)),
+    "utf8",
+  );
+  await pg.exec(ddl2);
   const run = async <T>(text: string, params: unknown[] = []): Promise<T[]> =>
     (await pg.query<T>(text, params)).rows as T[];
   sql = { query: run } as unknown as SqlLike;
 });
 
-const svc = () => createProfileService(sql, { now: () => FIXED_NOW });
+const svc = (opts: Parameters<typeof createProfileService>[1] = {}) =>
+  createProfileService(sql, { now: () => FIXED_NOW, ...opts });
 
 const USER = "dev-user";
 const OTHER = "user-2";
@@ -190,5 +196,98 @@ describe("персистентность", () => {
     const p = await s2.getProfile(USER);
     assert.equal(p.balance, 70);
     assert.ok(p.owned.some((o) => o.itemId === "cardback.fossils"));
+  });
+});
+
+// ── Волна 3а: «Вызовы» ─────────────────────────────────────────────────────
+
+const baseStats = {
+  preyEaten: 0,
+  defended: 0,
+  fatStored: 0,
+  traitsPlaced: 0,
+  animalsPlaced: 0,
+  animalsLost: 0,
+  maxTraitsOnAnimal: 0,
+  scavenges: 0,
+  wildYearsSurvived: 0,
+  games: 1,
+  wins: 1,
+  bestPlace: 1,
+};
+
+describe("вызовы: отчёт партии", () => {
+  it("победа открывает тир 0 вызова «Победы» и платит ископаемыми", async () => {
+    const s = svc();
+    const res = await s.reportChallenges("ch-user-1", { stats: { ...baseStats }, feats: [] });
+    const winClaim = res.claimed.find((c) => c.id === "wins" && c.tier === 0);
+    assert.ok(winClaim, "тир 0 «Побед» получен");
+    assert.ok(res.balance >= winClaim.coins, "баланс вырос на награду");
+  });
+
+  it("повторный отчёт той же партии не платит дважды (PK claims)", async () => {
+    const s = svc();
+    const first = await s.reportChallenges("ch-user-2", { stats: { ...baseStats }, feats: [] });
+    const second = await s.reportChallenges("ch-user-2", { stats: { ...baseStats }, feats: [] });
+    const firstWins = first.claimed.filter((c) => c.id === "wins").length;
+    const secondWins = second.claimed.filter((c) => c.id === "wins").length;
+    assert.equal(firstWins, 1);
+    assert.equal(secondWins, 0, "тир уже оплачен");
+  });
+
+  it("метрики суммируются между партиями: 5 побед открывают тир 1", async () => {
+    const s = svc({ challengeDailyCoins: 100_000 });
+    const user = "ch-user-3";
+    for (let i = 0; i < 5; i++) {
+      await s.reportChallenges(user, { stats: { ...baseStats }, feats: [] });
+    }
+    const snap = await s.getChallenges(user);
+    assert.equal(snap.progress["wins"], 5);
+    assert.ok(snap.claimed.includes("wins:1"), "тир 1 «Побед» открыт");
+  });
+
+  it("подвиг платит один раз и помечается в featsDone", async () => {
+    const s = svc({ challengeDailyCoins: 100_000 });
+    const user = "ch-user-4";
+    const stats = { ...baseStats, bigCarnivoreWin: true };
+    const first = await s.reportChallenges(user, { stats, feats: ["bigCarnivoreWin"] });
+    const second = await s.reportChallenges(user, { stats, feats: ["bigCarnivoreWin"] });
+    const f1 = first.claimed.filter((c) => c.id === "bigCarnivoreWin").length;
+    const f2 = second.claimed.filter((c) => c.id === "bigCarnivoreWin").length;
+    assert.equal(f1, 1);
+    assert.equal(f2, 0);
+    const snap = await s.getChallenges(user);
+    assert.ok(snap.featsDone.includes("bigCarnivoreWin"));
+  });
+
+  it("ретро-достижение открывает соответствующий тир задним числом", async () => {
+    const s = svc();
+    const s2 = svc({ challengeDailyCoins: 100_000 });
+    const res = await s2.reportChallenges("ch-user-5", {
+      stats: { ...baseStats },
+      feats: [],
+      retro: ["first-win", "wins-5"],
+    });
+    const snap = await s2.getChallenges("ch-user-5");
+    assert.ok(snap.claimed.includes("wins:0"), "first-win → тир 0 «Побед»");
+    assert.ok(snap.claimed.includes("wins:1"), "wins-5 → тир 1 «Побед»");
+    assert.ok(res.balance > 0);
+  });
+
+  it("дневной кап останавливает выплаты, тиры остаются неснятыми", async () => {
+    const s = svc();
+    const user = "ch-user-6";
+    // Много побед подряд: кап 300/день упирается после нескольких тиров.
+    let capped = false;
+    let claimedCoins = 0;
+    for (let i = 0; i < 40 && !capped; i++) {
+      const res = await s.reportChallenges(user, { stats: { ...baseStats }, feats: [] });
+      claimedCoins = res.claimed.reduce((sum, c) => sum + c.coins, 0);
+      capped = res.capped;
+    }
+    assert.ok(claimedCoins <= 300, `в день не больше 300, выдано ${claimedCoins}`);
+    assert.equal(capped, true, "кап сработал");
+    const snap = await s.getChallenges(user);
+    assert.ok(snap.progress["wins"] > 0, "прогресс копится несмотря на кап");
   });
 });

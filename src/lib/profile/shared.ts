@@ -69,3 +69,74 @@ export interface ProfileSnapshot {
   owned: OwnedItem[];
   equipped: EquippedItem[];
 }
+
+// ── Волна 3а: «Вызовы» ─────────────────────────────────────────────────────
+
+/** Метрики одной партии (GameRunStats в сообщении). */
+export interface ChallengeReportInput {
+  stats: {
+    preyEaten: number;
+    defended: number;
+    fatStored: number;
+    traitsPlaced: number;
+    animalsPlaced: number;
+    animalsLost: number;
+    maxTraitsOnAnimal: number;
+    scavenges: number;
+    wildYearsSurvived: number;
+    games: number;
+    wins: number;
+    bestPlace: number;
+    winsModule?: Record<string, number>;
+    bigCarnivoreWin?: boolean;
+  };
+  /** Подвиги этой партии (id из каталога feat-вызовов). */
+  feats: string[];
+  /** Старые достижения (stats.ts) — миграция задним числом, один раз. */
+  retro?: string[];
+}
+
+export interface ChallengeClaimResult {
+  id: string;
+  tier: number;
+  coins: number;
+}
+
+export interface ChallengesReportResult {
+  balance: number;
+  claimed: ChallengeClaimResult[];
+  /** Дневной кап: часть тиров осталась на завтра (§3.2 анти-фарм). */
+  capped: boolean;
+}
+
+/** Zod-форма отчёта партии: белые списки полей метрик и id-подвигов. */
+export const challengeReportInputSchema = z.object({
+  stats: z.object({
+    preyEaten: z.number().int().min(0).max(500),
+    defended: z.number().int().min(0).max(500),
+    fatStored: z.number().int().min(0).max(500),
+    traitsPlaced: z.number().int().min(0).max(500),
+    animalsPlaced: z.number().int().min(0).max(500),
+    animalsLost: z.number().int().min(0).max(500),
+    maxTraitsOnAnimal: z.number().int().min(0).max(20),
+    scavenges: z.number().int().min(0).max(500),
+    wildYearsSurvived: z.number().int().min(0).max(100),
+    games: z.number().int().min(0).max(5),
+    wins: z.number().int().min(0).max(5),
+    bestPlace: z.number().int().min(1).max(9),
+    winsModule: z.record(z.string(), z.number().int().min(0).max(5)).optional(),
+    bigCarnivoreWin: z.boolean().optional(),
+  }),
+  feats: z.array(z.string().regex(/^[a-z][a-zA-Z]+$/)).max(8),
+  retro: z.array(z.string().regex(/^[a-z0-9-]+$/)).max(32).optional(),
+});
+
+/** Прогресс вызовов: накопленные значения по id вызова + полученные тиры. */
+export interface ChallengesSnapshot {
+  /** challenge_id → накопленное значение (для cumulative-вызовов). */
+  progress: Record<string, number>;
+  /** Ключ "id:tier" уже оплаченных тиров. */
+  claimed: string[];
+  /** Подвиги, засчитанные хоть раз (для галочек феатов). */
+  featsDone: string[];
+}

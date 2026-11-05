@@ -1252,6 +1252,33 @@ export const ru = {
   "tutorial.obj.forecast": "Прочитайте прогноз события года",
   "tutorial.obj.scavenge": "Заберите карту по «Падальщикам»",
 
+  // ── волна 3а: «Вызовы» ───────────────────────────────────────────────────
+  "challenges.title": "Вызовы",
+  "challenges.subtitle": "Цели копятся в любых партиях — с людьми и с ботами. Награда: ископаемые.",
+  "challenges.balance": "Ископаемые: {n}",
+  "challenges.progress": "{value} / {goal}",
+  "challenges.done": "Выполнено",
+  "challenges.reward": "+{n}",
+  "challenges.claimed": "Награда получена",
+  "challenges.dailyCap": "Дневной предел наград исчерпан — вызовы продолжают копиться",
+  "challenges.retro": "Старые достижения зачтены",
+  "challenge.preyEaten": "Хищник: съесть добычу",
+  "challenge.defended": "Выжить: отразить охоту",
+  "challenge.fatStored": "Запасы: отложить жир",
+  "challenge.traitsPlaced": "Эволюция: вложить свойства",
+  "challenge.animalsPlaced": "Фауна: выложить животных",
+  "challenge.scavenges": "Падальщики: забрать карты",
+  "challenge.wildYears": "Дикий мир: пережить события",
+  "challenge.wins": "Победы",
+  "challenge.games": "Партии",
+  "challenge.winsContinents": "Победа с «Континентами»",
+  "challenge.winsPlants": "Победа с «Растениями»",
+  "challenge.winsFungi": "Победа с «Травой и грибами»",
+  "challenge.winsMutations": "Победа со «Случайными мутациями»",
+  "challenge.bigCarnivoreWin": "Крупный хищник: победа с хищником 3+ свойств",
+  "challenge.survivorWin": "Без потерь: победа без погибших животных",
+  "challenge.richFaunaWin": "Богатая фауна: победа с животным 4+ свойств",
+
   // ── экран ошибки приложения (error-component) ────────────────────────────
   "error.title": "Что-то пошло не так",
   "error.body":

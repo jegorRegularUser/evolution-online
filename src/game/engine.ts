@@ -4,7 +4,8 @@ import { METEORITE_CHANCE, METEORITE_PITY, WILD_EVENTS, hasMutator, startingHand
 import { assertModifierCompatibility } from "./modifier-compatibility.ts";
 import { growthTarget, plantTable, plantDeckKinds, PLANTS, shelterCapacity } from "./plants.ts";
 import { dieFor, nextRandom, shuffled } from "./rng.ts";
-import { TRAITS } from "./traits.ts";
+import { CARNIVORE_LIKE, TRAITS } from "./traits.ts";
+import type { GameRunStats } from "./types.ts";
 import { TERRITORIES } from "./types.ts";
 import type { TraitDef } from "./traits.ts";
 import type { TKey } from "../lib/i18n/ru.ts";
@@ -1880,6 +1881,109 @@ function resolveNoDefense(state: GameState) {
   finishHuntSuccess(state, carnivore, prey, 2, atk.rage ? { rage: true } : undefined);
 }
 
+/**
+ * Накопитель метрик «Вызовов» (волна 3а, дизайн-пакет §4.1В): растёт по
+ * событиям применённого действия, только для своего (humanId) игрока.
+ * Живёт в состоянии — переживает F5/реплей, чего не умел транзиентный
+ * lastEvents. Заводится лениво; старые партии без stats живут как жили.
+ */
+function trackStats(state: GameState): void {
+  if (!state.lastEvents.length) return;
+  const s = (state.stats ??= {
+    preyEaten: 0,
+    defended: 0,
+    fatStored: 0,
+    traitsPlaced: 0,
+    animalsPlaced: 0,
+    animalsLost: 0,
+    maxTraitsOnAnimal: 0,
+    scavenges: 0,
+    wildYearsSurvived: 0,
+    games: 0,
+    wins: 0,
+    bestPlace: 99,
+    winsModule: {},
+  });
+  const ownerOf = (animalId: string) =>
+    state.players.find((p) => p.animals.some((a) => a.id === animalId))?.id;
+  for (const e of state.lastEvents) {
+    switch (e.kind) {
+      case "preyKilled": {
+        if (ownerOf(e.carnivoreId) === state.humanId) s.preyEaten += 1;
+        break;
+      }
+      case "defenseUsed": {
+        // Отразил охоту: у жертвы было НЕ пустое средство защиты (running/
+        // tailLoss/mimicry) — «none» значит «не защищалось, съедено».
+        if (e.defense !== "none" && ownerOf(e.preyId) === state.humanId) s.defended += 1;
+        break;
+      }
+      case "foodToFat": {
+        if (ownerOf(e.animalId) === state.humanId) s.fatStored += 1;
+        break;
+      }
+      case "traitPlaced": {
+        if (ownerOf(e.animalId) !== state.humanId) break;
+        s.traitsPlaced += 1;
+        const animal = state.players[state.humanId]?.animals.find((a) => a.id === e.animalId);
+        if (animal) s.maxTraitsOnAnimal = Math.max(s.maxTraitsOnAnimal, animal.traits.length);
+        break;
+      }
+      case "animalPlaced": {
+        if (e.ownerId === state.humanId) s.animalsPlaced += 1;
+        break;
+      }
+      case "animalDied": {
+        if (ownerOf(e.animalId) === state.humanId) s.animalsLost += 1;
+        break;
+      }
+      case "scavenged": {
+        if (e.playerId === state.humanId) s.scavenges += 1;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  // Пережил год с активным событием «Дикого мира»: вымирание завершено
+  // (переход к росту/раздаче), у игрока осталось хоть одно животное.
+  if (state.wildWorld?.active && (state.phase === "growth" || state.phase === "development")) {
+    const human = state.players[state.humanId];
+    if (human && human.animals.length > 0) {
+      // Один год — одно начисление: событие сбрасывается при смене года.
+      if ((state.statsWildYearCredited ?? -1) !== state.year) {
+        state.statsWildYearCredited = state.year;
+        s.wildYearsSurvived += 1;
+      }
+    }
+  }
+  // Финализация — ровно один раз на партию (§4.1В: игры/победы/место/модули).
+  if (state.phase === "gameOver" && !state.statsFinalized) {
+    state.statsFinalized = true;
+    s.games += 1;
+    const ranked = (state.scores ?? []).filter((x) => x.playerId !== -1);
+    const mine = ranked.findIndex((x) => x.playerId === state.humanId);
+    if (mine >= 0) s.bestPlace = Math.min(s.bestPlace, mine + 1);
+    if (state.winnerIds?.includes(state.humanId)) {
+      s.wins += 1;
+      for (const m of Object.keys(state.modules) as ModuleId[]) {
+        if (!state.modules[m]) continue;
+        s.winsModule[m] = (s.winsModule[m] ?? 0) + 1;
+        // Плоский дубль под ключ каталога вызовов (winsContinents и т.д.).
+        const flat = `wins${m[0]!.toUpperCase()}${m.slice(1)}` as keyof GameRunStats;
+        const bag = s as unknown as Record<string, number | undefined>;
+        bag[flat] = (bag[flat] ?? 0) + 1;
+      }
+      // Подвиг «крупный хищник»: хищное животное с 3+ свойствами в финале.
+      const human = state.players[state.humanId];
+      s.bigCarnivoreWin =
+        human?.animals.some(
+          (a) => a.traits.length >= 3 && a.traits.some((t) => CARNIVORE_LIKE.has(t.type)),
+        ) ?? false;
+    }
+  }
+}
+
 export function applyAction(state: GameState, action: GameAction): GameState {
   const next = clone(state);
   beginActionEffects();
@@ -1984,6 +2088,7 @@ export function applyAction(state: GameState, action: GameAction): GameState {
     default:
       throw new Error(`unknown action ${(action as GameAction).type}`);
   }
+  trackStats(next);
   return next;
 }
 

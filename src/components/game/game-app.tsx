@@ -65,6 +65,9 @@ import { SoundToggle } from "./sound-toggle";
 import { TopBar } from "./top-bar";
 import { TutorialScreen } from "./tutorial";
 import { TutorialHud } from "./tutorial-missions";
+import { CHALLENGES } from "@/game/challenges";
+import { challengesReport } from "@/lib/profile/api";
+import { readStats } from "@/lib/stats";
 
 const LazyDice3D = lazy(async () => {
   const module = await import("./dice-3d");
@@ -1479,6 +1482,39 @@ export function GameApp() {
     // хит-стоп/оверлеи в useActionFx — dataset напрямую.
     document.documentElement.dataset.anim = animMode;
   }, [animMode]);
+  // Отчёт «Вызовов» — один раз на финал (волна 3а): метрики из движка
+  // (сервер-авторитарные, пережили F5) + подвиги + разовая миграция старых
+  // достижений. Тиры оплачивает сервер идемпотентно, кап в день — на нём.
+  const challengesReportedRef = useRef(false);
+  useEffect(() => {
+    if (state?.phase !== "gameOver" || challengesReportedRef.current) return;
+    challengesReportedRef.current = true;
+    const stats = state.stats;
+    if (!stats) return; // старые сейвы без накопителя — вызовы не теряют ничего
+    const feats = CHALLENGES.filter((c) => c.feat && c.feat(stats)).map((c) => c.id);
+    let retro: string[] | undefined;
+    try {
+      if (!localStorage.getItem("evo-retro-challenges")) {
+        retro = Object.keys(readStats().achievements);
+        localStorage.setItem("evo-retro-challenges", "1");
+      }
+    } catch {
+      retro = undefined;
+    }
+    challengesReport({ data: { stats, feats, retro } })
+      .then((res) => {
+        if (!res.ok) return;
+        const coins = res.claimed.reduce((sum, c) => sum + c.coins, 0);
+        if (coins > 0) {
+          sfx.play("cheer");
+          toast(res.capped ? t("challenges.dailyCap") : t("challenges.reward", { n: coins }));
+        }
+      })
+      .catch(() => {
+        // Оффлайн/ошибка сети: метрики не теряются (в состоянии комнаты),
+        // отчёт уйдёт с следующей завершённой партией.
+      });
+  }, [state?.phase, state?.stats, t]);
   useEffect(() => {
     // Модалки не должны переезжать вместе с новым столом после ухода/возврата.
     setTutorialOpen(false);

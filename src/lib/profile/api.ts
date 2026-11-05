@@ -15,10 +15,11 @@
  * fail-closed (см. verify.server.ts) — это ожидаемое поведение, а не баг.
  */
 import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
 import { authMiddleware } from "../auth/middleware";
 import { getSql } from "../db";
 import { createProfileService, ProfileError } from "./service.server";
-import { equipInputSchema } from "./shared";
+import { challengeReportInputSchema, equipInputSchema } from "./shared";
 
 /**
  * Похоже ли это на ProfileError. instanceof в dev ненадёжен: serverFn
@@ -42,11 +43,40 @@ const fail = (e: unknown) => {
   return { ok: false as const, error: "invalidResponse", code: "invalidResponse" as const };
 };
 
+/**
+ * Мягкий rate-limit endpoints профиля (находка аудита волны 0: их не было).
+ * В памяти процесса — защита от спама, не суточная квота; источник запроса
+ * тот же, что у сетевого слоя (IP прокси или «local»).
+ */
+const RATE_MAX = 60;
+const RATE_WINDOW_MS = 60_000;
+const rateHits = new Map<string, number[]>();
+
+async function allowRequest(): Promise<boolean> {
+  let source = "local";
+  try {
+    const { getRequestIP } = await import("@tanstack/react-start/server");
+    source = getRequestIP({ xForwardedFor: true }) || "local";
+  } catch {
+    // вне запроса (тесты/сборка) — считаем «local», лимит не режет
+  }
+  const nowMs = Date.now();
+  const hits = (rateHits.get(source) ?? []).filter((t) => nowMs - t < RATE_WINDOW_MS);
+  if (hits.length >= RATE_MAX) {
+    rateHits.set(source, hits);
+    return false;
+  }
+  hits.push(nowMs);
+  rateHits.set(source, hits);
+  return true;
+}
+
 /** Полный кадр профиля: баланс «Ископаемых», владение, экипировка. */
 export const profileGet = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     try {
+      if (!(await allowRequest())) return { ok: false as const, error: "rate-limited", code: "rate-limited" as const };
       const service = createProfileService(await getSql());
       return { ok: true as const, ...(await service.getProfile(context.userId)) };
     } catch (e) {
@@ -60,6 +90,7 @@ export const cosmeticsEquip = createServerFn({ method: "POST" })
   .validator(equipInputSchema)
   .handler(async ({ context, data }) => {
     try {
+      if (!(await allowRequest())) return { ok: false as const, error: "rate-limited", code: "rate-limited" as const };
       const service = createProfileService(await getSql());
       if (data.itemId === null) {
         await service.unequipSlot(context.userId, data.slot);
@@ -67,6 +98,38 @@ export const cosmeticsEquip = createServerFn({ method: "POST" })
         await service.equipItem(context.userId, data.slot, data.itemId);
       }
       return { ok: true as const };
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+/** Прогресс «Вызовов»: накопленные значения + полученные тиры. */
+export const challengesGet = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    try {
+      if (!(await allowRequest())) return { ok: false as const, error: "rate-limited", code: "rate-limited" as const };
+      const service = createProfileService(await getSql());
+      return { ok: true as const, ...(await service.getChallenges(context.userId)) };
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+/**
+ * Отчёт партии (вызывает клиент один раз на финале, см. GameApp):
+ * прибавляет метрики, оценивает тиры, выдаёт «Ископаемые». Валютных ручек
+ * начисления здесь по-прежнему нет — награда следует из отчёта, тир
+ * оплачивается один раз, кап в день держит фарма.
+ */
+export const challengesReport = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(challengeReportInputSchema)
+  .handler(async ({ context, data }) => {
+    try {
+      if (!(await allowRequest())) return { ok: false as const, error: "rate-limited", code: "rate-limited" as const };
+      const service = createProfileService(await getSql());
+      return { ok: true as const, ...(await service.reportChallenges(context.userId, data)) };
     } catch (e) {
       return fail(e);
     }

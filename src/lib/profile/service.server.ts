@@ -13,15 +13,20 @@
  * server functions (api.ts) с user_id, проверенным authMiddleware; сам сервис
  * контекстом запроса не располагает и userId трактует как уже проверенный.
  */
+import { CHALLENGES, LEGACY_ACHIEVEMENT_MAP, challengeById } from "../../game/challenges.ts";
+import type { GameRunStats } from "../../game/types.ts";
 import {
   cosmeticItemIdSchema,
   cosmeticSlotSchema,
+  type ChallengesReportResult,
+  type ChallengesSnapshot,
   type CosmeticSlot,
   type EquippedItem,
   type OwnedItem,
   type ProfileErrorCode,
   type ProfileSnapshot,
   type SqlLike,
+  type ChallengeReportInput,
 } from "./shared.ts";
 
 /** Ошибка сервиса с машинным кодом: клиент переводит код в локальный текст. */
@@ -40,11 +45,18 @@ const GRANT_MIN = 1;
 const GRANT_MAX = 10_000;
 /** Верхняя граница источника выдачи («daily-first-win», «challenge», …). */
 const SOURCE_MAX = 32;
+/**
+ * Дневной кап «Ископаемых» за вызовы (анти-фарм §3.2): полный каталог
+ * выкупается за квартал активной игры, фарму одной лёгкой миссии кап не даёт.
+ */
+const CHALLENGE_DAILY_COINS = 300;
 
 export type GrantSource = string;
 
 export interface ProfileServiceOptions {
   now?: () => Date;
+  /** Дневной кап «Ископаемых» за вызовы (по умолчанию 300, §3.2). */
+  challengeDailyCoins?: number;
 }
 
 interface WalletRow {
@@ -86,6 +98,7 @@ function assertSource(source: GrantSource): string {
 
 export function createProfileService(sql: SqlLike, options: ProfileServiceOptions = {}) {
   const now = options.now ?? (() => new Date());
+  const challengeDailyCoins = options.challengeDailyCoins ?? CHALLENGE_DAILY_COINS;
 
   /** Создаёт профиль и кошелёк, если их ещё нет. Идемпотентно. */
   async function ensurePlayer(userId: string): Promise<void> {
@@ -226,6 +239,133 @@ export function createProfileService(sql: SqlLike, options: ProfileServiceOption
         userId,
         parsedSlot.data,
       ]);
+    },
+
+    // ── Волна 3а: «Вызовы» ────────────────────────────────────────────────
+
+    /** Снимок прогресса: накопленные значения + оплаченные тиры. */
+    async getChallenges(userId: string): Promise<ChallengesSnapshot> {
+      await ensurePlayer(userId);
+      const rows = await sql.query<{ challenge_id: string; value: number }>(
+        "select challenge_id, value from evo_challenge_progress where user_id = $1",
+        [userId],
+      );
+      const progress: Record<string, number> = {};
+      for (const row of rows) progress[row.challenge_id] = Number(row.value);
+      const claimedRows = await sql.query<{ challenge_id: string; tier: number }>(
+        "select challenge_id, tier from evo_challenge_claims where user_id = $1",
+        [userId],
+      );
+      const featsRows = await sql.query<{ challenge_id: string }>(
+        "select distinct challenge_id from evo_challenge_claims where user_id = $1",
+        [userId],
+      );
+      return {
+        progress,
+        claimed: claimedRows.map((r) => `${r.challenge_id}:${r.tier}`),
+        featsDone: featsRows.map((r) => r.challenge_id),
+      };
+    },
+
+    /**
+     * Отчёт партии: прибавить метрики, оценить тиры, выдать «Ископаемые».
+     * Идемпотентность тирам даёт PK (user_id, challenge_id, tier) — повторный
+     * отчёт той же партии награду не удваивает. Кап в день: тиры сверх капа
+     * остаются неснятыми и приезжают завтра (§3.2, анти-фарм).
+     */
+    async reportChallenges(
+      userId: string,
+      report: ChallengeReportInput,
+    ): Promise<ChallengesReportResult> {
+      await ensurePlayer(userId);
+      const stats = report.stats as GameRunStats;
+      const now2 = now();
+      const today = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-${String(now2.getDate()).padStart(2, "0")}`;
+
+      // Приращение cumulative-метрик: прирост читается по counterKey отчёта.
+      for (const ch of CHALLENGES) {
+        if (!ch.counterKey) continue;
+        const raw = stats[ch.counterKey];
+        const delta = Math.max(0, Math.floor(Number(raw) || 0));
+        if (delta <= 0) continue;
+        await sql.query(
+          "insert into evo_challenge_progress (user_id, challenge_id, value, updated_at) values ($1, $2, $3, $4) on conflict (user_id, challenge_id) do update set value = evo_challenge_progress.value + excluded.value, updated_at = excluded.updated_at",
+          [userId, ch.id, delta, now2],
+        );
+      }
+
+      // Дневной кап: сколько уже выдано сегодня за вызовы.
+      const daily = await sql.query<{ coins: number }>(
+        "select coins from evo_challenge_daily where user_id = $1 and day = $2",
+        [userId, today],
+      );
+      let usedToday = Number(daily[0]?.coins ?? 0);
+      const claimed: ChallengesReportResult["claimed"] = [];
+      let total = 0;
+      let capped = false;
+
+      const tryClaim = async (challengeId: string, tier: number, coins: number): Promise<boolean> => {
+        if (usedToday + coins > challengeDailyCoins) {
+          capped = true;
+          return false;
+        }
+        const inserted = await sql.query<{ challenge_id: string }>(
+          "insert into evo_challenge_claims (user_id, challenge_id, tier) values ($1, $2, $3) on conflict do nothing returning challenge_id",
+          [userId, challengeId, tier],
+        );
+        if (!inserted.length) return false; // тир уже оплачен раньше
+        usedToday += coins;
+        total += coins;
+        claimed.push({ id: challengeId, tier, coins });
+        return true;
+      };
+
+      // Тиры cumulative — по накопленным значениям прогресса.
+      const progressRows = await sql.query<{ challenge_id: string; value: number }>(
+        "select challenge_id, value from evo_challenge_progress where user_id = $1",
+        [userId],
+      );
+      const valueOf = new Map(progressRows.map((r) => [r.challenge_id, Number(r.value)]));
+      for (const ch of CHALLENGES) {
+        if (!ch.counterKey) continue;
+        const value = valueOf.get(ch.id) ?? 0;
+        for (let tier = 0; tier < ch.tiers.length; tier++) {
+          if (value < ch.tiers[tier]!.n) break;
+          await tryClaim(ch.id, tier, ch.tiers[tier]!.coins);
+          if (capped) break;
+        }
+        if (capped) break;
+      }
+      // Старые достижения → тиры задним числом (дизайн-пакет §4.1В: не
+      // оставлять два непересекающихся прогресса). Через ту же кассу: кап
+      // и идемпотентность общие, «первый-вход» больше не повторится.
+      for (const legacy of report.retro ?? []) {
+        for (const target of LEGACY_ACHIEVEMENT_MAP[legacy] ?? []) {
+          const ch = challengeById(target.id);
+          const coins = ch?.tiers[target.tier]?.coins;
+          if (coins === undefined) continue;
+          await tryClaim(target.id, target.tier, coins);
+        }
+      }
+      // Подвиги партии: сервер проверяет форму и идемпотентность; тир — нулевой.
+      for (const featId of report.feats) {
+        const ch = challengeById(featId);
+        if (!ch?.feat || !ch.tiers.length) continue;
+        await tryClaim(ch.id, 0, ch.tiers[0]!.coins);
+      }
+
+      if (total > 0) {
+        await sql.query(
+          "insert into evo_challenge_daily (user_id, day, coins) values ($1, $2, $3) on conflict (user_id, day) do update set coins = evo_challenge_daily.coins + excluded.coins",
+          [userId, today, total],
+        );
+        await this.grantCoins(userId, total, "challenge");
+      }
+      const wallet = await sql.query<{ balance: number }>(
+        "select balance from evo_wallets where user_id = $1",
+        [userId],
+      );
+      return { balance: Number(wallet[0]?.balance ?? 0), claimed, capped };
     },
   };
 }
