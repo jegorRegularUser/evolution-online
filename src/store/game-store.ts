@@ -416,6 +416,13 @@ interface GameStore {
    * Ходы ботов и автофазы двигает сервер — на них скорость не влияет.
    */
   speed: GameSpeed;
+  /**
+   * Режим анимаций (волна 1, дизайн-пакет §2.3): «full» — все живые эффекты,
+   * «fast» — укороченные, «off» — выключены (CSS читает [data-anim] на <html>,
+   * атрибут ставит GameApp). Настольная аудитория старше среднего — настройка
+   * обязана существовать.
+   */
+  animMode: AnimMode;
   net: NetUiState | null;
   /** Текст фатальной сетевой ошибки (кик/закрытый стол) после выхода в меню. */
   netFatal: string | null;
@@ -426,6 +433,7 @@ interface GameStore {
   setRulesOpen: (v: boolean) => void;
   setLogOpen: (v: boolean) => void;
   setSpeed: (v: GameSpeed) => void;
+  setAnimMode: (v: AnimMode) => void;
   startNetCreate: (cfg: NetCreateConfig) => Promise<void>;
   /** Войти за стол; password — только для приватного (см. NetClientError). */
   startNetJoin: (code: string, name: string, password?: string) => Promise<void>;
@@ -739,6 +747,19 @@ export function loadSpeed(): GameSpeed {
   return "normal";
 }
 
+/** Режим живых анимаций стола (волна 1): полный, быстрый, выключенный. */
+export type AnimMode = "full" | "fast" | "off";
+
+export function loadAnimMode(): AnimMode {
+  try {
+    const v = localStorage.getItem("evo-anim");
+    if (v === "full" || v === "fast" || v === "off") return v;
+  } catch {
+    // localStorage может быть недоступен — полные анимации по умолчанию.
+  }
+  return "full";
+}
+
 /** RoomStatus → NetStatus для кадров зрителя (в session.ts та же логика). */
 function statusOfNet(status: "lobby" | "playing" | "finished"): NetStatus {
   if (status === "playing") return "playing";
@@ -798,6 +819,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   logOpen: false,
   logUnread: 0,
   speed: "normal",
+  animMode: loadAnimMode(),
   net: null,
   netFatal: null,
   rooms: [],
@@ -847,6 +869,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
       // приватный режим — скорость просто не сохранится
     }
     set({ speed });
+  },
+
+  setAnimMode: (animMode) => {
+    try {
+      localStorage.setItem("evo-anim", animMode);
+    } catch {
+      // приватный режим — режим анимаций просто не сохранится
+    }
+    set({ animMode });
   },
 
   // ── сетевой стол ──────────────────────────────────────────────────────────

@@ -1205,6 +1205,26 @@ export const ru = {
   "log.wild.started.meteorite": "Год {year}: Метеорит — каждое животное теряет фишку жира (потеряно: {n}).",
   "log.wild.started.wildfire": "Год {year}: Пожар — флора теряет по 2 фишки (сгорело: {n}).",
 
+  // ── волна 1: «Дикий мир» в живых эффектах и спотлайте, режим анимаций ────
+  "wild.name.iceAge": "Ледниковый период",
+  "wild.name.goldenAge": "Золотой век",
+  "wild.name.resettlement": "Переселение",
+  "wild.name.cropFailure": "Неурожай",
+  "wild.name.meteorite": "Метеорит",
+  "wild.name.wildfire": "Пожар",
+  "fx.scavenge": "Падаль: карта из сброса",
+  "fx.wildPlanned": "Прогноз года {year}: {event}",
+  "fx.wildStart": "{event} — год {year}",
+  "fx.meteoriteLoss": "−жир ×{n}",
+  "fx.resettle": "Передано карт: {n}",
+  "fx.wildfire": "Пожар: сгорело {n}",
+  "spot.wild.planned": "Прогноз «Дикого мира»",
+  "spot.wild.meteorite": "Потеряно жира: {n}",
+  "anim.mode": "Анимации",
+  "anim.mode.full": "Полные",
+  "anim.mode.fast": "Быстрые",
+  "anim.mode.off": "Выкл",
+
   // ── экран ошибки приложения (error-component) ────────────────────────────
   "error.title": "Что-то пошло не так",
   "error.body":

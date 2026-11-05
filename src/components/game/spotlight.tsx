@@ -75,6 +75,36 @@ const TONE_BORDER: Record<SpotlightItem["tone"], string> = {
  */
 const QUEUE_CAP = 12;
 
+/** Имена событий «Дикого мира» — общий словарь бейджей и спотлайта. */
+const WILD_NAME_KEYS = {
+  iceAge: "wild.name.iceAge",
+  goldenAge: "wild.name.goldenAge",
+  resettlement: "wild.name.resettlement",
+  cropFailure: "wild.name.cropFailure",
+  meteorite: "wild.name.meteorite",
+  wildfire: "wild.name.wildfire",
+} as const;
+
+/** Тексты эффектов события — готовые ключи волны 2 (log.wild.*). */
+const WILD_LOG_KEYS = {
+  planned: {
+    iceAge: "log.wild.planned.iceAge",
+    goldenAge: "log.wild.planned.goldenAge",
+    resettlement: "log.wild.planned.resettlement",
+    cropFailure: "log.wild.planned.cropFailure",
+    meteorite: "log.wild.planned.meteorite",
+    wildfire: "log.wild.planned.wildfire",
+  },
+  started: {
+    iceAge: "log.wild.started.iceAge",
+    goldenAge: "log.wild.started.goldenAge",
+    resettlement: "log.wild.started.resettlement",
+    cropFailure: "log.wild.started.cropFailure",
+    meteorite: "log.wild.started.meteorite",
+    wildfire: "log.wild.started.wildfire",
+  },
+} as const;
+
 /** Больше истории животных, чем нужно для отложенного показа, не держим. */
 const ANIMAL_REGISTRY_CAP = 256;
 
@@ -226,6 +256,39 @@ function buildItems(
           note: t("spot.cannotAttack", { a: labelOf(carn) }),
           versus: { left: TRAIT_ART.nematocysts, right: carn?.art },
           ms: 2300,
+        });
+        break;
+      }
+      // ── Волна 2/1: «Дикий мир» (дизайн-пакет §1.3, §2.2) ──
+      case "wildEventPlanned": {
+        // Прогноз — общий вход события: карточка говорит «готовься».
+        items.push({
+          id: nextId(),
+          tone: "info",
+          title: t("spot.wild.planned"),
+          note: t(WILD_LOG_KEYS.planned[e.event], { year: e.year }),
+          ms: 2400,
+        });
+        break;
+      }
+      case "wildEventStarted": {
+        if (e.event === "meteorite") break; // у метеорита своя эпик-карточка ниже
+        items.push({
+          id: nextId(),
+          tone: "info",
+          title: t(WILD_NAME_KEYS[e.event]),
+          note: t(WILD_LOG_KEYS.started[e.event], { year: e.year }),
+          ms: 2400,
+        });
+        break;
+      }
+      case "wildMeteorite": {
+        items.push({
+          id: nextId(),
+          tone: "death",
+          title: t(WILD_NAME_KEYS.meteorite),
+          note: t("spot.wild.meteorite", { n: e.affected }),
+          ms: 2800,
         });
         break;
       }

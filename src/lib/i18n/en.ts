@@ -1206,6 +1206,26 @@ export const en: Record<keyof RuDict, string> = {
   "log.wild.started.meteorite": "Year {year}: Meteorite — every animal loses a fat token (lost: {n}).",
   "log.wild.started.wildfire": "Year {year}: Wildfire — flora loses 2 tokens each (burned: {n}).",
 
+  // ── wave 1: Wild World in live effects and spotlight, animation mode ─────
+  "wild.name.iceAge": "Ice Age",
+  "wild.name.goldenAge": "Golden Age",
+  "wild.name.resettlement": "Resettlement",
+  "wild.name.cropFailure": "Crop Failure",
+  "wild.name.meteorite": "Meteorite",
+  "wild.name.wildfire": "Wildfire",
+  "fx.scavenge": "Carrion: a card from the discard",
+  "fx.wildPlanned": "Year {year} forecast: {event}",
+  "fx.wildStart": "{event} — year {year}",
+  "fx.meteoriteLoss": "−fat ×{n}",
+  "fx.resettle": "Cards passed: {n}",
+  "fx.wildfire": "Wildfire: {n} burned",
+  "spot.wild.planned": "Wild World forecast",
+  "spot.wild.meteorite": "Fat lost: {n}",
+  "anim.mode": "Animations",
+  "anim.mode.full": "Full",
+  "anim.mode.fast": "Fast",
+  "anim.mode.off": "Off",
+
   // ── app error screen (error-component) ───────────────────────────────────
   "error.title": "Something went wrong",
   "error.body": "Couldn't open the game. Try again — if the error keeps coming back, return to the menu.",

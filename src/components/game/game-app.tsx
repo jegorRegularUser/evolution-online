@@ -22,7 +22,7 @@ import { Toaster, toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DialogShell } from "@/components/ui/dialog-shell";
 import { TRAITS } from "@/game/traits";
-import type { Animal, Card, FloraCard, GameAction, GameEvent, GameState, LogEntry, Plant, Player, TerritoryId, TraitId } from "@/game/types";
+import type { Animal, Card, FloraCard, GameAction, GameEvent, GameState, LogEntry, Plant, Player, TerritoryId, TraitId, WildEventId } from "@/game/types";
 import { TERRITORIES } from "@/game/types";
 import { currentActor, feedBlockReasonInfo, legalDefenseActions, legalDevActions, legalFeedActions } from "@/game/engine";
 import { canAttack, canPlantAttackTarget, canReceiveFood, canRageAttack, findAnimal, foodNeeded, hasTrait, isFed, liveScore, player } from "@/game/queries";
@@ -429,13 +429,137 @@ const FX_TONE: Record<FxBadge["tone"], string> = {
   info: "border-border-strong bg-surface text-fg",
 };
 
-function shakeEl(el: Element | null) {
+function shakeEl(el: Element | null, tier: 1 | 2 | 3 = 2) {
   if (!el) return;
-  el.classList.remove("anim-shake");
+  const cls = tier === 1 ? "anim-shake-1" : tier === 2 ? "anim-shake" : "anim-shake-3";
+  el.classList.remove("anim-shake-1", "anim-shake", "anim-shake-3");
   // Перезапуск анимации, если элемент уже трясся на этом кадре.
   void (el as HTMLElement).offsetWidth;
-  el.classList.add("anim-shake");
-  setTimeout(() => el.classList.remove("anim-shake"), 600);
+  el.classList.add(cls);
+  setTimeout(() => el.classList.remove(cls), 600);
+}
+
+// ── Волна 1: слои моментной библиотеки (дизайн-пакет §2) ──────────────────
+
+/** Последние известные габариты карточек животных и число их свойств: к
+ *  моменту эффекта гибели элемент уже снят со стола (состояние пост-фактум),
+ *  привидение и «крупная охота» работают по последнему известному кадру. */
+const lastAnimalRects = new Map<string, { x: number; y: number; w: number; h: number }>();
+const lastTraitCounts = new Map<string, number>();
+
+/** Одноразовые оверлеи (окаменение, иней, вспышка, огонь): живут вне React —
+ *  эффекты не требуют перерендера и сами убираются по таймеру. */
+function spawnOverlay(className: string, ms: number, style?: Partial<CSSStyleDeclaration>) {
+  if (document.documentElement.dataset.anim === "off") return;
+  const el = document.createElement("div");
+  el.className = className;
+  if (style) Object.assign(el.style, style);
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), ms);
+}
+
+/** Имя события «Дикий мир»: общий словарь для бейджей и спотлайта. */
+const WILD_NAME_KEYS: Record<WildEventId, TKey> = {
+  iceAge: "wild.name.iceAge",
+  goldenAge: "wild.name.goldenAge",
+  resettlement: "wild.name.resettlement",
+  cropFailure: "wild.name.cropFailure",
+  meteorite: "wild.name.meteorite",
+  wildfire: "wild.name.wildfire",
+};
+
+/** Полёт карты из руки к животному (§2.2, FLIP через WAAPI — тот же идиом,
+ *  что у food-fly, без новой зависимости motion): перед dispatch копируем
+ *  карточку и её габарит, на событии traitPlaced/animalPlaced доигрываем
+ *  полёт до цели. dnd-kit-овский DragOverlay не трогаем — конфликта нет. */
+let cardFlight: { cardId: string; node: HTMLElement; rect: DOMRect } | null = null;
+
+function animMult(): number {
+  return document.documentElement.dataset.anim === "fast" ? 0.45 : 1;
+}
+
+function captureCardFlight(cardId: string) {
+  if (document.documentElement.dataset.anim === "off") {
+    cardFlight = null;
+    return;
+  }
+  const el = document.querySelector<HTMLElement>(`[data-card-id="${CSS.escape(cardId)}"]`);
+  if (!el) {
+    cardFlight = null;
+    return;
+  }
+  const rect = el.getBoundingClientRect();
+  cardFlight = { cardId, node: el.cloneNode(true) as HTMLElement, rect };
+}
+
+function playCardFlight(animalId: string) {
+  const flight = cardFlight;
+  cardFlight = null;
+  if (!flight) return;
+  const target = document.querySelector(`[data-animal-id="${animalId}"]`);
+  if (!target) return;
+  const t = target.getBoundingClientRect();
+  const node = flight.node;
+  node.removeAttribute("data-card-id");
+  Object.assign(node.style, {
+    position: "fixed",
+    left: "0",
+    top: "0",
+    margin: "0",
+    zIndex: "61",
+    pointerEvents: "none",
+    width: `${flight.rect.width}px`,
+    height: `${flight.rect.height}px`,
+    willChange: "transform",
+  });
+  document.body.appendChild(node);
+  const dx = t.left + t.width / 2 - (flight.rect.left + flight.rect.width / 2);
+  const dy = t.top + t.height / 2 - (flight.rect.top + flight.rect.height / 2);
+  const scale = Math.min(1, (t.width * 0.45) / flight.rect.width);
+  // Дуга: подъём над серединой пути — anticipation/дуга из Disney-12 (§2.2).
+  const anim = node.animate(
+    [
+      { transform: `translate(${flight.rect.left}px, ${flight.rect.top}px) scale(1)`, opacity: 1 },
+      {
+        transform: `translate(${flight.rect.left + dx * 0.4}px, ${flight.rect.top + dy * 0.4 - 34}px) scale(${(1 + scale) / 2})`,
+        opacity: 1,
+      },
+      { transform: `translate(${flight.rect.left + dx}px, ${flight.rect.top + dy}px) scale(${scale})`, opacity: 0.2 },
+    ],
+    { duration: Math.round(380 * animMult()), easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" },
+  );
+  const cleanup = () => node.remove();
+  anim.onfinish = cleanup;
+  anim.oncancel = cleanup;
+}
+
+/** Хит-стоп: короткая заморозка сукна в момент удара — 50-100 мс (§2.1). */
+function hitStop(ms: number) {
+  if (document.documentElement.dataset.anim === "off") return;
+  const felt = document.querySelector(".felt");
+  if (!felt) return;
+  felt.classList.add("hit-stop");
+  setTimeout(() => felt.classList.remove("hit-stop"), ms);
+}
+
+/** Рывок хищника к жертве (§2.2 lunge): вектор между карточками в CSS-переменные,
+ *  transform-only; рыскает только хищник — жертву встряхивает тир шейка. */
+function lungeToward(carnEl: Element | null, preyEl: Element | null) {
+  if (!carnEl || !preyEl || document.documentElement.dataset.anim === "off") return;
+  const a = carnEl.getBoundingClientRect();
+  const b = preyEl.getBoundingClientRect();
+  const dx = b.left + b.width / 2 - (a.left + a.width / 2);
+  const dy = b.top + b.height / 2 - (a.top + a.height / 2);
+  // Дальние цели не тянут карточку через весь стол — короткий выпад по направлению.
+  const len = Math.hypot(dx, dy) || 1;
+  const reach = Math.min(len * 0.3, 90);
+  const el = carnEl as HTMLElement;
+  el.style.setProperty("--lunge-x", `${Math.round((dx / len) * reach)}px`);
+  el.style.setProperty("--lunge-y", `${Math.round((dy / len) * reach)}px`);
+  el.classList.remove("anim-lunge");
+  void el.offsetWidth;
+  el.classList.add("anim-lunge");
+  setTimeout(() => el.classList.remove("anim-lunge"), 500);
 }
 
 /**
@@ -462,6 +586,15 @@ function useActionFx(state: GameState | null): FxBadge[] {
     const floraEl = (id: string) => document.querySelector(`[data-flora-id="${id}"]`);
     const sectionEl = (id: number) => document.querySelector(`[data-player-section="${id}"]`);
 
+    // Кэш габаритов/свойств живых животных: после действия элемент уже снят,
+    // эффекты гибели работают по последнему известному кадру (см. ниже).
+    for (const el of document.querySelectorAll<HTMLElement>("[data-animal-id]")) {
+      const id = el.dataset.animalId!;
+      const r = el.getBoundingClientRect();
+      if (r.width > 0) lastAnimalRects.set(id, { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) });
+    }
+    for (const p of state.players) for (const a of p.animals) lastTraitCounts.set(a.id, a.traits.length);
+
     const created: FxBadge[] = [];
     const push = (point: { x: number; y: number }, text: string, tone: FxBadge["tone"], image?: string) => {
       idRef.current += 1;
@@ -471,14 +604,29 @@ function useActionFx(state: GameState | null): FxBadge[] {
     for (const e of state.lastEvents) {
       switch (e.kind) {
         case "huntDeclared": {
-          shakeEl(animalEl(e.carnivoreId));
-          shakeEl(animalEl(e.preyId));
-          push(anchorOf(animalEl(e.preyId) ?? animalEl(e.carnivoreId)), liveT("fx.attack"), "attack");
+          // Слоёная атака (§2.2): рывок хищника к жертве, жертву встряхивает
+          // тир 2. Раньше тряслись оба — теперь хищник движется.
+          const carnEl = animalEl(e.carnivoreId);
+          const preyEl = animalEl(e.preyId);
+          lungeToward(carnEl, preyEl);
+          shakeEl(preyEl, 2);
+          push(anchorOf(preyEl ?? carnEl), liveT("fx.attack"), "attack");
           break;
         }
-        case "preyKilled":
+        case "preyKilled": {
+          // Крупная добыча (3+ свойства) — эпик-слой: хит-стоп 100 мс и шейк
+          // тира 3; обычная — 60 мс и прежний удар (§2.1). Эпик сам себя
+          // дозирует: три свойства на жертве — редкость.
+          const big = (lastTraitCounts.get(e.preyId) ?? 0) >= 3;
+          if (big) {
+            hitStop(100);
+            shakeEl(document.querySelector(".felt"), 3);
+          } else {
+            hitStop(60);
+          }
           push(anchorOf(animalEl(e.carnivoreId)), liveT("fx.preyEaten"), "attack");
           break;
+        }
         case "defenseUsed": {
           const prey = animalEl(e.preyId);
           if (e.defense === "tailLoss") {
@@ -593,6 +741,69 @@ function useActionFx(state: GameState | null): FxBadge[] {
           push(anchorOf(sectionEl(e.playerId)), caption, tone, MUTATION_ART.flip);
           break;
         }
+        // ── Волна 2: «Падальщики» и «Дикий мир» (эффекты — волна 1, §2.2) ──
+        case "scavenged":
+          push(anchorOf(sectionEl(e.playerId)), liveT("fx.scavenge"), "good");
+          break;
+        case "traitPlaced":
+          // Полёт карты из руки (кэш заполнен только при СВОЁМ дропе:
+          // чужие traitPlaced проходят без полёта — снапшот чужой руки невидим).
+          playCardFlight(e.animalId);
+          break;
+        case "animalPlaced":
+          playCardFlight(e.animalId);
+          break;
+        case "wildEventPlanned":
+          // Прогноз виден всем и заранее (input randomness, §1.3): бейдж по
+          // центру верхней кромки, где его найдёт каждый.
+          push({ x: Math.round(window.innerWidth / 2), y: 88 }, liveT("fx.wildPlanned", { year: e.year, event: liveT(WILD_NAME_KEYS[e.event]) }), "info");
+          break;
+        case "wildEventStarted": {
+          const felt = document.querySelector(".felt");
+          if (e.event === "iceAge") {
+            spawnOverlay("frost-veil", 1700);
+            shakeEl(felt, 1);
+          } else if (e.event === "goldenAge") {
+            if (felt) {
+              felt.classList.remove("anim-felt-gold");
+              void (felt as HTMLElement).offsetWidth;
+              felt.classList.add("anim-felt-gold");
+              setTimeout(() => felt.classList.remove("anim-felt-gold"), 1000);
+            }
+          }
+          push({ x: Math.round(window.innerWidth / 2), y: 88 }, liveT("fx.wildStart", { year: e.year, event: liveT(WILD_NAME_KEYS[e.event]) }), e.event === "goldenAge" ? "good" : "info");
+          break;
+        }
+        case "wildMeteorite": {
+          spawnOverlay("meteor-flash", 1150);
+          shakeEl(document.querySelector(".felt"), 3);
+          const feltAnchor = anchorOf(document.querySelector(".felt"));
+          // Число потерь — канал данных: масштаб потери читается до текста (§2.1).
+          const dmg = document.createElement("div");
+          dmg.className = "fx-damage";
+          dmg.textContent = liveT("fx.meteoriteLoss", { n: e.affected });
+          dmg.style.left = `${feltAnchor.x}px`;
+          dmg.style.top = `${feltAnchor.y}px`;
+          if (document.documentElement.dataset.anim !== "off") {
+            document.body.appendChild(dmg);
+            setTimeout(() => dmg.remove(), 950);
+          }
+          break;
+        }
+        case "wildResettlement": {
+          const moved = new Set<number>();
+          for (const m of e.moves) {
+            moved.add(m.fromPlayerId);
+            moved.add(m.toPlayerId);
+          }
+          for (const id of moved) shakeEl(sectionEl(id), 1);
+          push({ x: Math.round(window.innerWidth / 2), y: 88 }, liveT("fx.resettle", { n: e.moves.length }), "info");
+          break;
+        }
+        case "wildWildfire":
+          spawnOverlay("fire-edge", 1450);
+          push({ x: Math.round(window.innerWidth / 2), y: 88 }, liveT("fx.wildfire", { n: e.burned }), "bad");
+          break;
         default:
           break;
       }
@@ -607,6 +818,13 @@ function useActionFx(state: GameState | null): FxBadge[] {
         void (felt as HTMLElement).offsetWidth;
         felt.classList.add("anim-felt-flash");
         setTimeout(() => felt.classList.remove("anim-felt-flash"), 1000);
+      }
+      // Привидение-окаменелость на месте каждой карточки (§2.2: смерть честная,
+      // не насмешливая) — по последнему известному габариту карточки.
+      for (const e of state.lastEvents) {
+        if (e.kind !== "animalDied") continue;
+        const r = lastAnimalRects.get(e.animalId);
+        if (r) spawnOverlay("fossil-ghost", 980, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
       }
     }
 
@@ -669,7 +887,9 @@ function eventSfx(state: GameState, e: GameEvent): SfxId | null {
     case "plantAttack":
       return "hunt";
     case "preyKilled":
-      return "kill";
+      // Крупная добыча (3+ свойства) — эпик-звук (§2.2, «5% моментов»);
+      // счётчик свойств добычи — последний известный живой кадр.
+      return (lastTraitCounts.get(e.preyId) ?? 0) >= 3 ? "bigKill" : "kill";
     case "defenseUsed":
       return e.defense === "running" ? "defense" : e.defense === "none" ? null : "dodge";
     case "foodFromBank":
@@ -724,15 +944,27 @@ function eventSfx(state: GameState, e: GameEvent): SfxId | null {
       return "leave";
     case "paralyzed":
       return "dodge";
-    // ── Волна 2 (модификаторы, «Дикий мир»): события молчат до волны
-    // анимаций — звуки и баннеры им назначит моментная библиотека (§2.2).
+    // ── Волна 2 + волна 1 (дизайн-пакет §2.2): звук — слой моментной
+    // библиотеки. Прогноз тихий: его говорят бейдж и карточка спотлайта;
+    // «Переселение» звучит стартом события (relocate) — дубль не нужен.
     case "scavenged":
+      return "scavenge";
     case "wildEventPlanned":
-    case "wildEventStarted":
-    case "wildResettlement":
-    case "wildMeteorite":
-    case "wildWildfire":
       return null;
+    case "wildEventStarted":
+      return e.event === "iceAge"
+        ? "frost"
+        : e.event === "goldenAge"
+          ? "golden"
+          : e.event === "resettlement"
+            ? "relocate"
+            : null;
+    case "wildResettlement":
+      return null;
+    case "wildMeteorite":
+      return "meteor";
+    case "wildWildfire":
+      return "wildfire";
     case "gameFinished":
       return null;
   }
@@ -1230,6 +1462,7 @@ export function GameApp() {
   const net = useGameStore((s) => s.net);
   const netAgain = useGameStore((s) => s.netAgain);
   const leaveNet = useGameStore((s) => s.leaveNet);
+  const animMode = useGameStore((s) => s.animMode);
   const t = useT();
   const [confirmAgain, setConfirmAgain] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
@@ -1240,6 +1473,11 @@ export function GameApp() {
   useEffect(() => {
     if (state?.phase !== "gameOver") setConfirmAgain(false);
   }, [state?.phase]);
+  useEffect(() => {
+    // Режим живых эффектов (волна 1): CSS читает [data-anim] на <html>,
+    // хит-стоп/оверлеи в useActionFx — dataset напрямую.
+    document.documentElement.dataset.anim = animMode;
+  }, [animMode]);
   useEffect(() => {
     // Модалки не должны переезжать вместе с новым столом после ухода/возврата.
     setTutorialOpen(false);
@@ -2307,11 +2545,17 @@ function Table({
       // Пара: первый зверь уже выбран — этот бросок кладёт свойство на второго.
       if (intent.kind === "playPair" && intent.cardId === cardId && intent.first && intent.first !== animalId) {
         const act = acts.find((a) => a.type === "devPlayPair" && a.a === intent.first && a.b === animalId);
-        if (act) return dispatch(act);
+        if (act) {
+          captureCardFlight(cardId);
+          return dispatch(act);
+        }
         return rejectDrop(dropReasonForTarget(target), point);
       }
       const simple = acts.find((a) => a.type === "devPlayTrait" && a.animalId === animalId);
-      if (simple) return dispatch(simple);
+      if (simple) {
+        captureCardFlight(cardId);
+        return dispatch(simple);
+      }
       // Парная грань без первого зверя: бросок выбирает первого, второй — дальше.
       const pair = acts.find((a) => a.type === "devPlayPair" && a.a === animalId);
       if (pair) {
@@ -2330,7 +2574,10 @@ function Table({
           a.cardId === cardId &&
           (target.kind === "zone" ? a.zoneId === target.zoneId : a.zoneId === undefined),
       );
-      if (act) return dispatch(act);
+      if (act) {
+        captureCardFlight(cardId);
+        return dispatch(act);
+      }
       return rejectDrop("drop", point);
     }
 

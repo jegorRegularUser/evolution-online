@@ -46,7 +46,15 @@ export type SfxId =
   | "chat" // новое сообщение в чате/журнале: мягкий «дзинь»
   | "reaction" // реакция зрителя: лёгкий позитивный блип
   | "cheer" // поощрение: тёплый аккорд с аплодисментным всплеском
-  | "crack"; // очень тихий сухой треск «слома» (анимация карты)
+  | "crack" // очень тихий сухой треск «слома» (анимация карты)
+  // ── Волна 1: «Дикий мир» и слоёная атака (дизайн-пакет §2.1) ──
+  | "bigKill" // крупная охота: эпик-слой удара, глубже и толще kill
+  | "meteor" // «Метеорит»: бас-удар падения с шумовым хвостом
+  | "frost" // «Ледниковый период»: хрустальный нисходящий перезвон
+  | "relocate" // «Переселение»: стайка карт уходит шелестом
+  | "golden" // «Золотой век»: тёплый мажорный блип
+  | "wildfire" // «Пожар»: треск сухой флоры
+  | "scavenge"; // «Падальщики»: мягкий низкий «пок» возврата карты
 
 /** Настроения фонового эмбиента (не музыка — медленные дрон-слои). */
 export type AmbientMood = "development" | "feeding" | "extinction" | "final";
@@ -417,6 +425,13 @@ function recipeSourceCount(id: SfxId): number {
     roll: 5,
     hunt: 5,
     kill: 3,
+    bigKill: 4,
+    meteor: 4,
+    frost: 4,
+    relocate: 3,
+    golden: 3,
+    wildfire: 5,
+    scavenge: 2,
     food: 2,
     foodBlue: 2,
     fat: 1,
@@ -1265,6 +1280,87 @@ function perform(c: AudioContext, id: SfxId, delay: number, out: Out) {
         out,
       );
       tone(c, { freq: 120, to: 90, dur: 0.46, gain: 0.05, type: "sine", delay: delay + 0.05 }, out);
+      break;
+    // ── Волна 1: «Дикий мир» и слоёная атака ──
+    case "bigKill": {
+      // Эпик-охота (§2.2, «5% моментов»): удар толще и ниже kill, под ним
+      // басовый хвост — звук в паре с хит-стопом и шейком тира 3.
+      burst(c, { dur: 0.16, gain: 0.24, band: "low", freq: 150, delay }, out);
+      tone(c, { freq: vary(70), to: 38, dur: 0.42, gain: 0.2, type: "sine", delay }, out);
+      sweep(c, { dur: 0.34, gain: 0.06, freq: 1200, to: 200, attack: 0.02, delay: delay + 0.04 }, out);
+      burst(c, { dur: 0.3, gain: 0.06, band: "low", freq: 320, attack: 0.08, delay: delay + 0.1 }, out);
+      break;
+    }
+    case "meteor": {
+      // «Метеорит»: вход сверху (свист), бас-удар падения, дрожащий низ.
+      sweep(c, { dur: 0.5, gain: 0.07, freq: 2600, to: 500, attack: 0.01, delay }, out);
+      burst(c, { dur: 0.2, gain: 0.24, band: "low", freq: 120, delay: delay + 0.5 }, out);
+      tone(c, { freq: 64, to: 30, dur: 0.7, gain: 0.22, type: "sine", delay: delay + 0.5 }, out);
+      burst(c, { dur: 0.9, gain: 0.05, band: "low", freq: 200, attack: 0.15, delay: delay + 0.55 }, out);
+      break;
+    }
+    case "frost": {
+      // «Ледниковый период»: хрустальный нисходящий перезвон — четыре высоких
+      // синуса со стаггером, как иней creeping по краям.
+      for (let i = 0; i < 4; i++) {
+        tone(
+          c,
+          {
+            freq: 1900 - i * 330,
+            to: (1900 - i * 330) * 0.82,
+            dur: 0.34,
+            gain: 0.055,
+            type: "sine",
+            attack: 0.015,
+            delay: delay + i * 0.11,
+          },
+          out,
+        );
+      }
+      burst(c, { dur: 0.7, gain: 0.035, band: "high", freq: 3200, attack: 0.2, delay }, out);
+      break;
+    }
+    case "relocate":
+      // «Переселение»: стайка карт — три шелеста с подъёмом, как передаёт
+      // сосед по часовой.
+      for (let i = 0; i < 3; i++) {
+        sweep(
+          c,
+          {
+            dur: 0.11,
+            gain: 0.06,
+            freq: 1500 + i * 260,
+            to: 2300 + i * 260,
+            attack: 0.02,
+            delay: delay + i * 0.09,
+          },
+          out,
+        );
+      }
+      break;
+    case "golden":
+      // «Золотой век»: тёплый мажорный блип — до-мажорное трезвучие мягко.
+      tone(c, { freq: 523, dur: 0.22, gain: 0.06, type: "sine", attack: 0.02, delay }, out);
+      tone(c, { freq: 659, dur: 0.22, gain: 0.05, type: "sine", attack: 0.03, delay: delay + 0.06 }, out);
+      tone(c, { freq: 784, dur: 0.3, gain: 0.05, type: "sine", attack: 0.04, delay: delay + 0.12 }, out);
+      break;
+    case "wildfire": {
+      // «Пожар»: треск сухой флоры — серия коротких шумовых щелчков с
+      // нисходящим гулом.
+      for (let i = 0; i < 5; i++) {
+        burst(
+          c,
+          { dur: 0.05, gain: 0.09, band: "band", freq: vary(1700) + i * 90, delay: delay + i * 0.09 },
+          out,
+        );
+      }
+      burst(c, { dur: 0.7, gain: 0.05, band: "low", freq: 420, attack: 0.1, delay }, out);
+      break;
+    }
+    case "scavenge":
+      // «Падальщики»: возврат карты из сброса — низкий «пок» food, суше.
+      tone(c, { freq: 380, to: 300, dur: 0.1, gain: 0.12, delay }, out);
+      tone(c, { freq: 190, dur: 0.06, gain: 0.05, type: "sine", delay }, out);
       break;
     case "join":
       // Игрок сел за стол: короткий восходящий блип.

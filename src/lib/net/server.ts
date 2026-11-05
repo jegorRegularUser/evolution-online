@@ -943,6 +943,10 @@ const SPOTLIGHT_MS: Partial<Record<GameEvent["kind"], number>> = {
   preyKilled: 3000,
   plantAttack: 2500,
   paralyzed: 2300,
+  // ── Волна 1/2: «Дикий мир» (зеркало карточек spotlight.tsx) ──
+  wildEventPlanned: 2400,
+  wildEventStarted: 2400,
+  wildMeteorite: 2800,
 };
 /** Защита добычи: бросок «Быстрого» — самый длинный показ с вердиктом. */
 const SPOTLIGHT_DEFENSE_MS: Record<"running" | "mimicry" | "tailLoss" | "none", number> = {
