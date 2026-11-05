@@ -278,6 +278,37 @@
   animation: felt-flash-kf 0.9s var(--ease-out);
 }
 
+/* ── Волна 3б: скины сукна (магазин, каталог cosmetics.ts) ──────────────
+   База .felt задаёт текстуру и blend; скины перекрашивают подложку
+   (5 скинов из 1 файла через переменные — §3.4). */
+.felt-skin-tundra {
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in oklab, #9fc4d8 30%, transparent), transparent 55%),
+    radial-gradient(140% 110% at 50% 115%, color-mix(in oklab, #000 45%, transparent), transparent 60%),
+    url("/img/bg/texture-felt.jpg"),
+    linear-gradient(160deg, #243239, #1a2429 55%, #141c20);
+  background-size: auto, auto, 420px, auto;
+  background-blend-mode: normal, normal, soft-light, normal;
+}
+.felt-skin-savanna {
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in oklab, #d8b46a 32%, transparent), transparent 55%),
+    radial-gradient(140% 110% at 50% 115%, color-mix(in oklab, #000 45%, transparent), transparent 60%),
+    url("/img/bg/texture-felt.jpg"),
+    linear-gradient(160deg, #3a3020, #2b2416 55%, #201a10);
+  background-size: auto, auto, 420px, auto;
+  background-blend-mode: normal, normal, soft-light, normal;
+}
+.felt-skin-glacial {
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in oklab, #cfe4f4 42%, transparent), transparent 55%),
+    radial-gradient(140% 110% at 50% 115%, color-mix(in oklab, #000 40%, transparent), transparent 60%),
+    url("/img/bg/texture-felt.jpg"),
+    linear-gradient(160deg, #2c3c4c, #1f2c39 55%, #17212c);
+  background-size: auto, auto, 420px, auto;
+  background-blend-mode: normal, normal, soft-light, normal;
+}
+
 /* ── Волна 1: моментная библиотека (дизайн-пакет §2) ─────────────────── */
 
 /* Режим анимаций (дизайн-пакет §2.3): data-anim на <html> ставит game-store

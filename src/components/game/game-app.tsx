@@ -66,7 +66,7 @@ import { TopBar } from "./top-bar";
 import { TutorialScreen } from "./tutorial";
 import { TutorialHud } from "./tutorial-missions";
 import { CHALLENGES } from "@/game/challenges";
-import { challengesReport } from "@/lib/profile/api";
+import { challengesReport, profileGet } from "@/lib/profile/api";
 import { readStats } from "@/lib/stats";
 
 const LazyDice3D = lazy(async () => {
@@ -1467,6 +1467,8 @@ export function GameApp() {
   const netAgain = useGameStore((s) => s.netAgain);
   const leaveNet = useGameStore((s) => s.leaveNet);
   const animMode = useGameStore((s) => s.animMode);
+  const setEquippedCosmetics = useGameStore((s) => s.setEquippedCosmetics);
+  const equippedCosmetics = useGameStore((s) => s.equippedCosmetics);
   const t = useT();
   const [confirmAgain, setConfirmAgain] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
@@ -1482,6 +1484,18 @@ export function GameApp() {
     // хит-стоп/оверлеи в useActionFx — dataset напрямую.
     document.documentElement.dataset.anim = animMode;
   }, [animMode]);
+  // Экипированная косметика (волна 3б): один запрос на сессию; сукно и кубик
+  // применяются по item id из каталога. Тихо при оффлайне — косметика не критична.
+  useEffect(() => {
+    profileGet()
+      .then((res) => {
+        if (!res.ok) return;
+        const map: Partial<Record<string, string>> = {};
+        for (const e of res.equipped) map[e.slot] = e.itemId;
+        setEquippedCosmetics(map);
+      })
+      .catch(() => {});
+  }, [setEquippedCosmetics]);
   // Отчёт «Вызовов» — один раз на финал (волна 3а): метрики из движка
   // (сервер-авторитарные, пережили F5) + подвиги + разовая миграция старых
   // достижений. Тиры оплачивает сервер идемпотентно, кап в день — на нём.
@@ -1938,6 +1952,7 @@ function Table({
   tutorialLabel?: string;
 }) {
   const state = useGameStore((s) => s.state)!;
+  const equippedCosmetics = useGameStore((s) => s.equippedCosmetics);
   const intent = useGameStore((s) => s.intent);
   const logOpen = useGameStore((s) => s.logOpen);
   const logUnread = useGameStore((s) => s.logUnread);
@@ -3174,6 +3189,7 @@ function Table({
         <CenterField
           style={wideSeats ? { gridArea: "felt" } : undefined}
           wide={wideSeats}
+          feltSkin={FELT_SKINS[equippedCosmetics.felt ?? ""]}
           year={state.year}
           lastYear={state.lastYear}
           phase={state.phase}
@@ -4437,6 +4453,7 @@ function CenterField({
   floraInfo,
   style,
   wide,
+  feltSkin,
 }: {
   year: number;
   lastYear: boolean;
@@ -4456,6 +4473,8 @@ function CenterField({
   style?: React.CSSProperties;
   /** Широкая раскладка: колонка 1fr, но само сукно не растягивается бесконечно. */
   wide?: boolean;
+  /** Экипированное сукно (волна 3б): CSS-класс предмета каталога. */
+  feltSkin?: string;
 }) {
   const t = useT();
   const plantsSolo = Boolean(plantsInfo) && !territoryFood;
@@ -4476,6 +4495,7 @@ function CenterField({
         // Сукно тянется по колонке 1fr, но не шире читаемой панели: тайлы банка
         // и ряды фишек должны оставаться крупными, а не растягиваться на весь экран.
         wide && "lg:w-full lg:max-w-[680px] lg:justify-self-center",
+        feltSkin,
       )}
     >
       <img
@@ -4648,8 +4668,23 @@ function usePrefersReducedMotionForTable(): boolean {
   return reduced;
 }
 
+/** Тон граней кубика по экипированному скину (волна 3б, каталог cosmetics). */
+const DICE_TINTS: Record<string, string | undefined> = {
+  "dice.bone": undefined, // классика — дефолтный красный кормовой базы
+  "dice.amber": "#c9861f",
+  "dice.obsidian": "#4a4452",
+};
+/** Класс сукна по экипированному предмету (styles.css, волна 3б). */
+const FELT_SKINS: Record<string, string | undefined> = {
+  "felt.classic": undefined,
+  "felt.tundra": "felt-skin-tundra",
+  "felt.savanna": "felt-skin-savanna",
+  "felt.glacial": "felt-skin-glacial",
+};
+
 function DiceTray({ roll, bank }: { roll: number[] | null; bank: number }) {
   const t = useT();
+  const equippedDice = useGameStore((s) => s.equippedCosmetics.dice);
   const reducedMotion = usePrefersReducedMotionForTable();
   const [rolling, setRolling] = useState(Boolean(roll) && !reducedMotion);
   const rollId = roll?.join(",") ?? "";
@@ -4713,6 +4748,7 @@ function DiceTray({ roll, bank }: { roll: number[] | null; bank: number }) {
           values={roll}
           rolling={rolling}
           dieSize={44}
+          tint={DICE_TINTS[equippedDice ?? ""]}
           ariaLabel={t("game.diceAria", { dice: roll.join(", ") })}
         />
       </Suspense>

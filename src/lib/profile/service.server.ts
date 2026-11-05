@@ -15,6 +15,7 @@
  */
 import { CHALLENGES, LEGACY_ACHIEVEMENT_MAP, challengeById } from "../../game/challenges.ts";
 import type { GameRunStats } from "../../game/types.ts";
+import { COSMETIC_PRICES, cosmeticById } from "../cosmetics.ts";
 import {
   cosmeticItemIdSchema,
   cosmeticSlotSchema,
@@ -241,9 +242,42 @@ export function createProfileService(sql: SqlLike, options: ProfileServiceOption
       ]);
     },
 
-    // ── Волна 3а: «Вызовы» ────────────────────────────────────────────────
+    // ── Волна 3б: магазин (только earned-валюта, §3.2) ────────────────────
 
-    /** Снимок прогресса: накопленные значения + оплаченные тиры. */
+    /**
+     * Покупка предмета за «Ископаемые». Цена берётся с СЕРВЕРНОГО каталога
+     * (клиентский ценник не верифицирует ничего), списание — CAS-расходом,
+     * выдача — тем же grantItem. Бесплатная «классика» слота не продаётся —
+     * она и так у каждого (код "free-item").
+     */
+    async buyItem(userId: string, itemId: string): Promise<{ balance: number; alreadyOwned: boolean }> {
+      const price = COSMETIC_PRICES[itemId];
+      const item = cosmeticById(itemId);
+      if (!item || price === undefined) {
+        throw new ProfileError("bad-item", `Предмет не продаётся: ${JSON.stringify(itemId)}`);
+      }
+      if (price <= 0) {
+        // Классика слота бесплатна и уже у каждого — «покупка» бессмысленна.
+        throw new ProfileError("free-item", `Предмет бесплатен: ${itemId}`);
+      }
+      await ensurePlayer(userId);
+      const owned = await sql.query<{ item_id: string }>(
+        "select item_id from evo_cosmetics_owned where user_id = $1 and item_id = $2",
+        [userId, itemId],
+      );
+      if (owned.length) {
+        throw new ProfileError("already-owned", `Предмет уже куплен: ${itemId}`);
+      }
+      await this.spendCoins(userId, price, "shop");
+      const granted = await this.grantItem(userId, itemId, "shop");
+      const wallet = await sql.query<{ balance: number }>(
+        "select balance from evo_wallets where user_id = $1",
+        [userId],
+      );
+      return { balance: Number(wallet[0]?.balance ?? 0), alreadyOwned: granted.alreadyOwned };
+    },
+
+    // ── Волна 3а: «Вызовы» ────────────────────────────────────────────────    /** Снимок прогресса: накопленные значения + оплаченные тиры. */
     async getChallenges(userId: string): Promise<ChallengesSnapshot> {
       await ensurePlayer(userId);
       const rows = await sql.query<{ challenge_id: string; value: number }>(

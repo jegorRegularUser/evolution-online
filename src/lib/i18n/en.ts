@@ -1280,6 +1280,26 @@ export const en: Record<keyof RuDict, string> = {
   "challenge.survivorWin": "No Losses: win without losing an animal",
   "challenge.richFaunaWin": "Rich Fauna: win with a 4+ trait animal",
 
+  // ── wave 3b: shop v1 (earned currency only, visible items only) ──────────
+  "shop.title": "Shop",
+  "shop.declaration": "0% pay-to-win: cosmetics only, like table accessories. Everything for fossils earned in game.",
+  "shop.slot.felt": "Table felt",
+  "shop.slot.dice": "Food base dice",
+  "shop.free": "Classic — for everyone",
+  "shop.price": "{n} fossils",
+  "shop.buy": "Buy",
+  "shop.equip": "Equip",
+  "shop.equipped": "Equipped",
+  "shop.err.funds": "Not enough fossils — challenges and games will earn them",
+  "shop.err.generic": "Purchase failed — try again",
+  "shop.felt.classic": "Classic felt",
+  "shop.felt.tundra": "Tundra",
+  "shop.felt.savanna": "Savanna",
+  "shop.felt.glacial": "Glacial Lake",
+  "shop.dice.bone": "Bone (classic)",
+  "shop.dice.amber": "Amber",
+  "shop.dice.obsidian": "Volcanic Glass",
+
   // ── app error screen (error-component) ───────────────────────────────────
   "error.title": "Something went wrong",
   "error.body": "Couldn't open the game. Try again — if the error keeps coming back, return to the menu.",

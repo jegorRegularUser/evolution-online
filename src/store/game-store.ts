@@ -440,6 +440,9 @@ interface GameStore {
   setLogOpen: (v: boolean) => void;
   setSpeed: (v: GameSpeed) => void;
   setAnimMode: (v: AnimMode) => void;
+  /** Экипированная косметика (волна 3б): слот → item id; грузится profileGet. */
+  equippedCosmetics: Partial<Record<string, string>>;
+  setEquippedCosmetics: (v: Partial<Record<string, string>>) => void;
   /** Обучение (волна 1.5): активная миссия поверх обычной сетевой партии. */
   tutorialMission: TutorialMissionId | null;
   /** Пройденные миссии (localStorage evo-tutorial) — галочки в меню. */
@@ -833,6 +836,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   logUnread: 0,
   speed: "normal",
   animMode: loadAnimMode(),
+  /** Экипированная косметика (волна 3б): слот → item id; грузится профилем. */
+  equippedCosmetics: {},
+  setEquippedCosmetics: (v) => set({ equippedCosmetics: v }),
   tutorialMission: null,
   doneMissions: loadDoneMissions(),
   net: null,

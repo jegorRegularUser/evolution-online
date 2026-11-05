@@ -291,3 +291,36 @@ describe("вызовы: отчёт партии", () => {
     assert.ok(snap.progress["wins"] > 0, "прогресс копится несмотря на кап");
   });
 });
+
+describe("магазин: покупка за ископаемые", () => {
+  it("покупка списывает цену и выдаёт предмет", async () => {
+    const s = svc();
+    await s.grantCoins("shop-1", 200, "test");
+    const res = await s.buyItem("shop-1", "felt.tundra");
+    assert.equal(res.alreadyOwned, false);
+    const p = await s.getProfile("shop-1");
+    assert.equal(p.balance, 50);
+    assert.ok(p.owned.some((o) => o.itemId === "felt.tundra"));
+  });
+
+  it("повторная покупка — already-owned, деньги не списываются", async () => {
+    const s = svc();
+    await s.grantCoins("shop-2", 500, "test");
+    await s.buyItem("shop-2", "felt.savanna");
+    const before = (await s.getProfile("shop-2")).balance;
+    await rejectsCode(() => s.buyItem("shop-2", "felt.savanna"), "already-owned");
+    assert.equal((await s.getProfile("shop-2")).balance, before);
+  });
+
+  it("не хватает средств — insufficient-funds", async () => {
+    const s = svc();
+    await rejectsCode(() => s.buyItem("shop-3", "felt.glacial"), "insufficient-funds");
+  });
+
+  it("бесплатная классика и неизвестный id не продаются", async () => {
+    const s = svc();
+    await s.grantCoins("shop-4", 500, "test");
+    await rejectsCode(() => s.buyItem("shop-4", "felt.classic"), "free-item");
+    await rejectsCode(() => s.buyItem("shop-4", "cardback.mystery"), "bad-item");
+  });
+});

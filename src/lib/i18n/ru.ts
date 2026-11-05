@@ -1279,6 +1279,26 @@ export const ru = {
   "challenge.survivorWin": "Без потерь: победа без погибших животных",
   "challenge.richFaunaWin": "Богатая фауна: победа с животным 4+ свойств",
 
+  // ── волна 3б: магазин v1 (только earned-валюта, только видимое) ──────────
+  "shop.title": "Магазин",
+  "shop.declaration": "0% pay-to-win: только косметика, как аксессуары к настолке. Всё — за ископаемые из игры.",
+  "shop.slot.felt": "Сукно стола",
+  "shop.slot.dice": "Кубик кормовой базы",
+  "shop.free": "Классика — у каждого",
+  "shop.price": "{n} ископаемых",
+  "shop.buy": "Купить",
+  "shop.equip": "Экипировать",
+  "shop.equipped": "Надето",
+  "shop.err.funds": "Не хватает ископаемых — вызовы и партии их принесут",
+  "shop.err.generic": "Покупка не прошла — попробуйте ещё раз",
+  "shop.felt.classic": "Классическое сукно",
+  "shop.felt.tundra": "Тундра",
+  "shop.felt.savanna": "Саванна",
+  "shop.felt.glacial": "Ледниковое озеро",
+  "shop.dice.bone": "Кость (классика)",
+  "shop.dice.amber": "Янтарь",
+  "shop.dice.obsidian": "Вулканическое стекло",
+
   // ── экран ошибки приложения (error-component) ────────────────────────────
   "error.title": "Что-то пошло не так",
   "error.body":

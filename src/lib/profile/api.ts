@@ -103,6 +103,20 @@ export const cosmeticsEquip = createServerFn({ method: "POST" })
     }
   });
 
+/** Покупка предмета за «Ископаемые» (цена и наличие — на сервере). */
+export const cosmeticsBuy = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ itemId: z.string().min(1).max(64) }))
+  .handler(async ({ context, data }) => {
+    try {
+      if (!(await allowRequest())) return { ok: false as const, error: "rate-limited", code: "rate-limited" as const };
+      const service = createProfileService(await getSql());
+      return { ok: true as const, ...(await service.buyItem(context.userId, data.itemId)) };
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
 /** Прогресс «Вызовов»: накопленные значения + полученные тиры. */
 export const challengesGet = createServerFn({ method: "GET" })
   .middleware([authMiddleware])

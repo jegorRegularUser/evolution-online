@@ -41,7 +41,9 @@ export type ProfileErrorCode =
   | "bad-item"
   | "bad-slot"
   | "not-owned"
-  | "insufficient-funds";
+  | "insufficient-funds"
+  | "already-owned"
+  | "free-item";
 
 /** Вход cosmeticsEquip: itemId === null — снять экипировку слота. */
 export const equipInputSchema = z.object({

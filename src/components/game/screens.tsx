@@ -9,7 +9,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Target } from "lucide-react";
+import { CheckCircle2, ShoppingBag, Target } from "lucide-react";
 import { DialogShell } from "@/components/ui/dialog-shell";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -19,8 +19,10 @@ import { PLANTS } from "@/game/plants";
 import { CONTINENTS_TRAIT_IDS, FUNGI_TRAIT_IDS, MUTATIONS_TRAIT_IDS, PLANTS_TRAIT_IDS, TRAIT_ORDER } from "@/game/traits";
 import { TERRITORIES } from "@/game/types";
 import type { FloraKind, MarkKind, ModuleId, MutatorId, PlantKind, ScoreBreakdown, TerritoryId, TraitId } from "@/game/types";
+import type { CosmeticSlot } from "@/lib/profile/shared";
 import { CHALLENGES } from "@/game/challenges";
-import { challengesGet, profileGet } from "@/lib/profile/api";
+import { COSMETIC_ITEMS, cosmeticById } from "@/lib/cosmetics";
+import { challengesGet, cosmeticsBuy, cosmeticsEquip, profileGet } from "@/lib/profile/api";
 import { sfx } from "@/lib/sfx";
 import { ACHIEVEMENTS, readStats } from "@/lib/stats";
 import {
@@ -79,6 +81,7 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
   const tt = useT();
   const [statsOpen, setStatsOpen] = useState(false);
   const [challengesOpen, setChallengesOpen] = useState(false);
+  const [shopOpen, setShopOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const netFatal = useGameStore((s) => s.netFatal);
   const clearNetFatal = useGameStore((s) => s.clearNetFatal);
@@ -129,6 +132,10 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
             <Target className="size-4" />
             <span className="hidden sm:inline">{tt("challenges.title")}</span>
           </Button>
+          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("shop.title")} title={tt("shop.title")} onClick={() => setShopOpen(true)}>
+            <ShoppingBag className="size-4" />
+            <span className="hidden sm:inline">{tt("shop.title")}</span>
+          </Button>
           <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.stats")} title={tt("topbar.stats")} onClick={openStats}>
             <BarChart3 className="size-4" />
             <span className="hidden sm:inline">{tt("topbar.stats")}</span>
@@ -172,6 +179,7 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
       {tutorialOpen ? <TutorialScreen onClose={closeTutorial} /> : null}
       {statsOpen ? <StatsScreen onClose={closeStats} /> : null}
       {challengesOpen ? <ChallengesScreen onClose={() => setChallengesOpen(false)} /> : null}
+      {shopOpen ? <ShopScreen onClose={() => setShopOpen(false)} /> : null}
     </>
   );
 }
@@ -1288,6 +1296,155 @@ const MUTATOR_NAME_KEYS: Record<MutatorId, TKey> = {
   scavengers: "lobby.mutator.scavengers",
   rapidEvolution: "lobby.mutator.rapidEvolution",
 };
+
+/**
+ * Магазин v1 (волна 3б, дизайн-пакет §3): только earned-валюта, только
+ * видимое за столом (сукно и кубик), полный каталог без ротации, декларация
+ * «0% pay-to-win» в шапке. Покупка — серверная (цена из серверного каталога),
+ * экипировка — cosmeticsEquip, применение — через equippedCosmetics в сторе.
+ */
+export function ShopScreen({ onClose }: { onClose: () => void }) {
+  const tt = useT();
+  const titleId = useId();
+  const setEquippedCosmetics = useGameStore((s) => s.setEquippedCosmetics);
+  const equipped = useGameStore((s) => s.equippedCosmetics);
+  const [balance, setBalance] = useState<number | null>(null);
+  const [owned, setOwned] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const [prof, ch] = await Promise.all([profileGet(), challengesGet()]);
+        if (!alive) return;
+        if (!prof.ok || !ch.ok) {
+          setError(tt("tutorial.startError"));
+          return;
+        }
+        setBalance(prof.balance);
+        setOwned(new Set(prof.owned.map((o) => o.itemId)));
+        const map: Partial<Record<string, string>> = {};
+        for (const e of prof.equipped) map[e.slot] = e.itemId;
+        setEquippedCosmetics(map);
+      } catch {
+        if (alive) setError(tt("tutorial.startError"));
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [tt, setEquippedCosmetics]);
+
+  const buy = async (itemId: string) => {
+    setBusy(itemId);
+    setError(null);
+    try {
+      const res = await cosmeticsBuy({ data: { itemId } });
+      if (!res.ok) {
+        setError(res.code === "insufficient-funds" ? tt("shop.err.funds") : tt("shop.err.generic"));
+        return;
+      }
+      setBalance(res.balance);
+      setOwned((prev) => new Set(prev).add(itemId));
+      sfx.play("cheer");
+      await equip(itemId);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const equip = async (itemId: string) => {
+    const item = cosmeticById(itemId);
+    if (!item) return;
+    const res = await cosmeticsEquip({ data: { slot: item.slot, itemId } });
+    if (res.ok) {
+      setEquippedCosmetics({ ...equipped, [item.slot]: itemId });
+      sfx.play("click");
+    }
+  };
+
+  const slots: CosmeticSlot[] = ["felt", "dice"];
+  return (
+    <DialogShell
+      titleId={titleId}
+      overlayClassName="fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-0 sm:items-center sm:p-6"
+      panelClassName="max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-t-[var(--radius-xl)] border border-border bg-surface p-5 sm:rounded-[var(--radius-xl)] sm:p-8"
+      onBackdropClick={onClose}
+    >
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <h2 id={titleId} tabIndex={-1} className="text-2xl">{tt("shop.title")}</h2>
+          <p className="mt-1 text-xs text-muted">{tt("shop.declaration")}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {balance !== null ? (
+            <span className="rounded-[var(--radius-sm)] border border-border bg-bg px-2 py-1 text-xs tabular-nums text-fg">
+              {tt("challenges.balance", { n: balance })}
+            </span>
+          ) : null}
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            {tt("common.close")}
+          </Button>
+        </div>
+      </div>
+      {error ? (
+        <p role="alert" className="mb-3 rounded-[var(--radius-sm)] border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-clay">
+          {error}
+        </p>
+      ) : null}
+      {slots.map((slot) => (
+        <section key={slot} className="mb-5">
+          <h3 className="mb-2 text-xs uppercase tracking-[0.18em] text-muted">
+            {tt(slot === "felt" ? "shop.slot.felt" : "shop.slot.dice")}
+          </h3>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {COSMETIC_ITEMS.filter((item) => item.slot === slot).map((item) => {
+              const isOwned = item.price === 0 || owned.has(item.id);
+              const isEquipped = equipped[item.slot] === item.id;
+              return (
+                <div
+                  key={item.id}
+                  className={cn(
+                    "flex items-center gap-3 rounded-[var(--radius-md)] border p-3",
+                    isEquipped ? "border-accent bg-accent/10" : "border-border bg-bg/60",
+                  )}
+                >
+                  <span
+                    aria-hidden
+                    className={cn("h-10 w-14 shrink-0 rounded-[var(--radius-sm)] border border-ink/20", item.cssClass)}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm text-fg">{tt(item.titleKey)}</p>
+                    <p className="text-xs text-muted tabular-nums">
+                      {item.price === 0 ? tt("shop.free") : tt("shop.price", { n: item.price })}
+                    </p>
+                  </div>
+                  {isEquipped ? (
+                    <span className="shrink-0 text-xs text-accent">{tt("shop.equipped")}</span>
+                  ) : isOwned ? (
+                    <Button variant="secondary" size="sm" disabled={busy !== null} onClick={() => equip(item.id)}>
+                      {tt("shop.equip")}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="default"
+                      size="sm"
+                      disabled={busy !== null || (balance !== null && balance < item.price)}
+                      onClick={() => buy(item.id)}
+                    >
+                      {tt("shop.buy")}
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+    </DialogShell>
+  );
+}
 
 /**
  * «Вызовы» (волна 3а, дизайн-пакет §4.1В): сеть целей с тирами поверх любых
