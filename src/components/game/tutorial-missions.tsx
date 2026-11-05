@@ -98,6 +98,15 @@ export function TutorialHud() {
   const [completed, setCompleted] = useState(false);
   const completedRef = useRef(false);
   const wasInTableRef = useRef(false);
+  // Смена миссии — чистый прогресс: иначе счётчики прошлой миссии (животные,
+  // свойства) засчитывались бы в следующую (нашло ревью волны 4).
+  const missionKeyRef = useRef<string>("");
+  const missionKey = missionId ?? campaignMissionId ?? "";
+  if (missionKeyRef.current !== missionKey) {
+    missionKeyRef.current = missionKey;
+    if (missionKey) progressRef.current = makeMissionProgress();
+    completedRef.current = false;
+  }
 
   // Миссия приходит из одной из двух систем: обучение (волна 1.5) или
   // кампания «Эры» (волна 4а). Форма целей одинаковая.

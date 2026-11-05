@@ -1501,6 +1501,14 @@ export function GameApp() {
   // (сервер-авторитарные, пережили F5) + подвиги + разовая миграция старых
   // достижений. Тиры оплачивает сервер идемпотентно, кап в день — на нём.
   const challengesReportedRef = useRef(false);
+  // Отчёт — раз на ПАРТИЮ: смена стола сбрасывает флаг, иначе вторая партия
+  // в этой сессии ушла бы без отчёта (нашло ревью волны 4).
+  const reportedForRoomRef = useRef<string>("");
+  const roomCodeNow = net?.code ?? "";
+  if (roomCodeNow && reportedForRoomRef.current !== roomCodeNow) {
+    reportedForRoomRef.current = roomCodeNow;
+    challengesReportedRef.current = false;
+  }
   useEffect(() => {
     if (state?.phase !== "gameOver" || challengesReportedRef.current) return;
     challengesReportedRef.current = true;

@@ -1687,6 +1687,9 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         ...(input.rules ? { rules: input.rules } : {}),
         ...(input.mutators ? { mutators: input.mutators } : {}),
         ...(input.wildWorld ? { wildWorld: true } : {}),
+        // Волна 4а: сценарий изверга живёт в settings комнаты — иначе старт
+        // (effectiveSettings) его не увидит и изверг выйдет без правила.
+        ...(input.scenario ? { scenario: input.scenario } : {}),
       };
       for (let attempt = 0; attempt < 6; attempt++) {
         const code = makeCode();
@@ -2396,9 +2399,14 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
           mutators: mutatorList(cfg.mutators),
           wildWorld: cfg.wildWorld,
         },
-        // Волна 4а: сценарий изверга (кампания). Босс-место — ИИ по определению;
-        // сервер валидирует сид от чужих сценариев вручную собранных комнат.
-        cfg.scenario && cfg.scenario.seat > 0 && cfg.scenario.seat < room.capacity
+        // Волна 4а: сценарий изверга (кампания). Правило применяется только
+        // если место босса РЕАЛЬНО занято ИИ на момент старта: хост мог
+        // пересадить места или убрать бота в лобби — тогда сценарий тихо
+        // снимается, вместо ломающего правила на живом человеке.
+        cfg.scenario &&
+        cfg.scenario.seat > 0 &&
+        cfg.scenario.seat < defs.length &&
+        defs[cfg.scenario.seat]?.isAI
           ? cfg.scenario
           : undefined,
       );

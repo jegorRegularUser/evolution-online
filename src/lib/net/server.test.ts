@@ -81,6 +81,43 @@ describe("module compatibility gates", () => {
       }
     });
   }
+  it("сценарий изверга доезжает до состояния партии (волна 4а)", async () => {
+    const s = svc();
+    const host = await s.create({
+      name: "QA",
+      capacity: 2 as const,
+      botSeats: 1,
+      difficulty: "normal" as const,
+      scenario: { seat: 1, bossFeedsExtra: true },
+    });
+    // Сценарий сохранён в settings комнаты (P0-фикс ревью: раньше терялся).
+    const room = (await _internals.readRoom(sql, host.code))!;
+    assert.deepEqual(room.settings.scenario, { seat: 1, bossFeedsExtra: true });
+    await s.start(host.code, host.token);
+    assert.equal((await s.rejoin(host.code, host.token)).room.status, "playing");
+    // Каноническое состояние партии несёт сценарий — движок применит правило
+    // (raw jsonb: rejoin-вид состояние не отдаёт, читаем комнату напрямую).
+    const started = (await _internals.readRoom(sql, host.code))!;
+    assert.deepEqual(started.state?.scenario, { seat: 1, bossFeedsExtra: true });
+  });
+
+  it("сценарий снимается, если место босса — человек (seat 0, host)", async () => {
+    const s = svc();
+    // Сценарий указывает на место 0 — это человек-хост: сервер обязан снять
+    // ломающее правило (оно только для ИИ-боссов).
+    const host = await s.create({
+      name: "QA",
+      capacity: 2 as const,
+      botSeats: 1,
+      difficulty: "normal" as const,
+      scenario: { seat: 0, doubleHunt: true },
+    });
+    await s.start(host.code, host.token);
+    const started = (await _internals.readRoom(sql, host.code))!;
+    assert.equal(started.status, "playing");
+    assert.equal(started.state?.scenario, undefined, "ломающее правило не достаётся человеку");
+  });
+
   it("legacy lobby remains readable/editable but incompatible start is rejected", async () => {
     const s = svc();
     const host = await s.create({ name: "QA", capacity: 2, botSeats: 1, difficulty: "normal" });

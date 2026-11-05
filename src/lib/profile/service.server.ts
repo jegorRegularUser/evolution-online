@@ -388,6 +388,21 @@ export function createProfileService(sql: SqlLike, options: ProfileServiceOption
         await tryClaim(ch.id, 0, ch.tiers[0]!.coins);
       }
 
+      // «Первая победа дня» (§3.2 — основной источник дохода): выигрыш в
+      // ЛЮБОЙ партии, раз в день. Отдельная таблица = по построению анти-фарм
+      // (пересоздал стол с ботами — строка на день уже стоит).
+      let dailyFirstWin = 0;
+      if ((stats.wins ?? 0) > 0) {
+        const inserted = await sql.query<{ user_id: string }>(
+          "insert into evo_daily_first_win (user_id, day) values ($1, $2) on conflict (user_id, day) do nothing returning user_id",
+          [userId, today],
+        );
+        if (inserted.length) {
+          dailyFirstWin = 50;
+          await this.grantCoins(userId, dailyFirstWin, "daily-first-win");
+        }
+      }
+
       if (total > 0) {
         await sql.query(
           "insert into evo_challenge_daily (user_id, day, coins) values ($1, $2, $3) on conflict (user_id, day) do update set coins = evo_challenge_daily.coins + excluded.coins",
@@ -399,7 +414,7 @@ export function createProfileService(sql: SqlLike, options: ProfileServiceOption
         "select balance from evo_wallets where user_id = $1",
         [userId],
       );
-      return { balance: Number(wallet[0]?.balance ?? 0), claimed, capped };
+      return { balance: Number(wallet[0]?.balance ?? 0), claimed, capped, dailyFirstWin };
     },
   };
 }

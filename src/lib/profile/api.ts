@@ -51,6 +51,18 @@ const fail = (e: unknown) => {
 const RATE_MAX = 60;
 const RATE_WINDOW_MS = 60_000;
 const rateHits = new Map<string, number[]>();
+/** Периодическая уборка пустых/протухших ключей: карта не должна расти вечной
+ *  (нашло ревью — длинный сессии набивали Map адресами). */
+let lastPrune = 0;
+function pruneRateHits(nowMs: number): void {
+  if (nowMs - lastPrune < RATE_WINDOW_MS) return;
+  lastPrune = nowMs;
+  for (const [key, hits] of rateHits) {
+    const fresh = hits.filter((t) => nowMs - t < RATE_WINDOW_MS);
+    if (fresh.length === 0) rateHits.delete(key);
+    else rateHits.set(key, fresh);
+  }
+}
 
 async function allowRequest(): Promise<boolean> {
   let source = "local";
@@ -61,6 +73,7 @@ async function allowRequest(): Promise<boolean> {
     // вне запроса (тесты/сборка) — считаем «local», лимит не режет
   }
   const nowMs = Date.now();
+  pruneRateHits(nowMs);
   const hits = (rateHits.get(source) ?? []).filter((t) => nowMs - t < RATE_WINDOW_MS);
   if (hits.length >= RATE_MAX) {
     rateHits.set(source, hits);

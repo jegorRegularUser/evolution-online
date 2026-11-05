@@ -1322,6 +1322,7 @@ export const ru = {
   "campaign.start": "Начать",
   "campaign.hard": "Хард",
   "campaign.hard.done": "Хард ✓",
+  "campaign.locked": "Пройди предыдущую миссию",
   "bestiarium.title": "Бестиарий",
   "bestiarium.subtitle": "Именованные животные из твоих партий — память, а не сила",
   "bestiarium.empty": "Пока пусто. Дай животному кличку за столом (карандаш на карточке) — и после партии оно поселится здесь.",

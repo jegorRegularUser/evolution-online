@@ -1569,7 +1569,14 @@ export function CampaignScreen({ onClose }: { onClose: () => void }) {
               {missions.map((m) => {
                 const done = progress.done.includes(m.id);
                 const hardDone = progress.hard.includes(m.id);
-                const prevDone = true; // 4а: миссии эпохи доступны сразу (лесенка — 4б)
+                // Лесенка (§4.1А): миссия открыта, если выполнена предыдущая
+                // миссия ЭТОЙ ЖЕ эпохи (первая миссия эпохи — всегда открыта).
+                const eraMissions = Object.values(CAMPAIGN_MISSIONS).filter((x) => x.era === m.era);
+                const index = eraMissions.findIndex((x) => x.id === m.id);
+                const prevDone =
+                  index <= 0 ||
+                  progress.done.includes(eraMissions[index - 1]!.id) ||
+                  done;
                 return (
                   <div
                     key={m.id}
@@ -1594,9 +1601,10 @@ export function CampaignScreen({ onClose }: { onClose: () => void }) {
                           variant={done ? "secondary" : "default"}
                           size="sm"
                           disabled={busy || !prevDone}
+                          title={prevDone ? undefined : tt("campaign.locked")}
                           onClick={() => start(m.id, false)}
                         >
-                          {tt("campaign.start")}
+                          {prevDone ? tt("campaign.start") : tt("campaign.locked")}
                         </Button>
                         {done ? (
                           <Button variant="secondary" size="sm" disabled={busy} onClick={() => start(m.id, true)}>

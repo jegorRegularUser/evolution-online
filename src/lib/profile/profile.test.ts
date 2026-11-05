@@ -29,6 +29,11 @@ before(async () => {
     "utf8",
   );
   await pg.exec(ddl2);
+  const ddl3 = readFileSync(
+    fileURLToPath(new URL("../../../migrations/0014_daily_first_win.sql", import.meta.url)),
+    "utf8",
+  );
+  await pg.exec(ddl3);
   const run = async <T>(text: string, params: unknown[] = []): Promise<T[]> =>
     (await pg.query<T>(text, params)).rows as T[];
   sql = { query: run } as unknown as SqlLike;
@@ -322,5 +327,24 @@ describe("магазин: покупка за ископаемые", () => {
     await s.grantCoins("shop-4", 500, "test");
     await rejectsCode(() => s.buyItem("shop-4", "felt.classic"), "free-item");
     await rejectsCode(() => s.buyItem("shop-4", "cardback.mystery"), "bad-item");
+  });
+});
+
+describe("первая победа дня", () => {
+  it("первый выигрыш дня платит 50, повторный — нет", async () => {
+    const s = svc();
+    const first = await s.reportChallenges("dfw-1", { stats: { ...baseStats }, feats: [] });
+    assert.equal(first.dailyFirstWin, 50);
+    const second = await s.reportChallenges("dfw-1", { stats: { ...baseStats }, feats: [] });
+    assert.equal(second.dailyFirstWin, 0);
+  });
+
+  it("проигранная партия не платит за первую победу", async () => {
+    const s = svc();
+    const res = await s.reportChallenges("dfw-2", {
+      stats: { ...baseStats, wins: 0 },
+      feats: [],
+    });
+    assert.equal(res.dailyFirstWin, 0);
   });
 });

@@ -1323,6 +1323,7 @@ export const en: Record<keyof RuDict, string> = {
   "campaign.start": "Start",
   "campaign.hard": "Hard",
   "campaign.hard.done": "Hard ✓",
+  "campaign.locked": "Complete the previous mission",
   "bestiarium.title": "Bestiarium",
   "bestiarium.subtitle": "Named animals from your games — memory, not power",
   "bestiarium.empty": "Empty for now. Give an animal a nickname at the table (the pencil on its card) — after the game it moves in here.",

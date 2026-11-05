@@ -109,6 +109,8 @@ export interface ChallengesReportResult {
   claimed: ChallengeClaimResult[];
   /** Дневной кап: часть тиров осталась на завтра (§3.2 анти-фарм). */
   capped: boolean;
+  /** «Первая победа дня» (§3.2): 50 ископаемых за первый выигрыш дня. */
+  dailyFirstWin: number;
 }
 
 /** Zod-форма отчёта партии: белые списки полей метрик и id-подвигов. */
