@@ -9,7 +9,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Compass, ShoppingBag, Swords, Target } from "lucide-react";
+import { BookMarked, CheckCircle2, Compass, ShoppingBag, Star, Swords, Target } from "lucide-react";
 import { DialogShell } from "@/components/ui/dialog-shell";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,7 @@ import type { CosmeticSlot } from "@/lib/profile/shared";
 import { CHALLENGES } from "@/game/challenges";
 import { COSMETIC_ITEMS, cosmeticById } from "@/lib/cosmetics";
 import { CAMPAIGN_ERAS, CAMPAIGN_MISSIONS, type CampaignMissionId } from "@/game/campaign";
+import { loadBestiarium, type BestiariumEntry } from "@/game/bestiarium";
 import { challengesGet, cosmeticsBuy, cosmeticsEquip, profileGet } from "@/lib/profile/api";
 import { sfx } from "@/lib/sfx";
 import { ACHIEVEMENTS, readStats } from "@/lib/stats";
@@ -84,6 +85,7 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
   const [challengesOpen, setChallengesOpen] = useState(false);
   const [shopOpen, setShopOpen] = useState(false);
   const [campaignOpen, setCampaignOpen] = useState(false);
+  const [bestiariumOpen, setBestiariumOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const netFatal = useGameStore((s) => s.netFatal);
   const clearNetFatal = useGameStore((s) => s.clearNetFatal);
@@ -129,6 +131,10 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
           <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.rules")} title={tt("topbar.rules")} onClick={onRules}>
             <BookOpen className="size-4" />
             <span className="hidden sm:inline">{tt("topbar.rules")}</span>
+          </Button>
+          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("bestiarium.title")} title={tt("bestiarium.title")} onClick={() => setBestiariumOpen(true)}>
+            <BookMarked className="size-4" />
+            <span className="hidden sm:inline">{tt("bestiarium.title")}</span>
           </Button>
           <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("campaign.title")} title={tt("campaign.title")} onClick={() => setCampaignOpen(true)}>
             <Compass className="size-4" />
@@ -187,6 +193,7 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
       {challengesOpen ? <ChallengesScreen onClose={() => setChallengesOpen(false)} /> : null}
       {shopOpen ? <ShopScreen onClose={() => setShopOpen(false)} /> : null}
       {campaignOpen ? <CampaignScreen onClose={() => setCampaignOpen(false)} /> : null}
+      {bestiariumOpen ? <BestiariumScreen onClose={() => setBestiariumOpen(false)} /> : null}
     </>
   );
 }
@@ -1451,6 +1458,63 @@ export function ShopScreen({ onClose }: { onClose: () => void }) {
       ))}
     </DialogShell>
   );
+}
+
+/**
+ * Бестиарий натуралиста (волна 4б, §4.1Д): альбом именованных животных.
+ * Карточка = кличка + свойства + итог партии; никакой силы, только память
+ * и статус. Пустой альбом объясняет, как завести первого питомца.
+ */
+export function BestiariumScreen({ onClose }: { onClose: () => void }) {
+  const tt = useT();
+  const titleId = useId();
+  const [entries] = useState<BestiariumEntry[]>(() => loadBestiarium());
+  return (
+    <DialogShell
+      titleId={titleId}
+      overlayClassName="fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-0 sm:items-center sm:p-6"
+      panelClassName="max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-t-[var(--radius-xl)] border border-border bg-surface p-5 sm:rounded-[var(--radius-xl)] sm:p-8"
+      onBackdropClick={onClose}
+    >
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <h2 id={titleId} tabIndex={-1} className="text-2xl">{tt("bestiarium.title")}</h2>
+          <p className="mt-1 text-xs text-muted">{tt("bestiarium.subtitle")}</p>
+        </div>
+        <Button variant="ghost" size="sm" onClick={onClose}>{tt("common.close")}</Button>
+      </div>
+      {entries.length === 0 ? (
+        <p className="rounded-[var(--radius-md)] border border-border bg-bg/60 px-4 py-6 text-center text-sm text-muted">
+          {tt("bestiarium.empty")}
+        </p>
+      ) : (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {entries.map((e, i) => (
+            <div key={`${e.name}-${e.at}-${i}`} className="rounded-[var(--radius-md)] border border-border bg-bg/60 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="truncate font-display text-sm tracking-wide text-fg">{e.name}</p>
+                {e.won ? (
+                  <span className="flex shrink-0 items-center gap-1 text-xs text-accent">
+                    <Star className="size-3.5" aria-hidden />
+                    {tt("bestiarium.won")}
+                  </span>
+                ) : null}
+              </div>
+              <p className="mt-1 truncate text-xs text-muted">
+                {e.traits.length ? e.traits.map((t) => tt(traitTitleKey(t))).join(" · ") : tt("bestiarium.noTraits")}
+              </p>
+              <p className="mt-0.5 text-[11px] text-subtle">{tt("bestiarium.year", { n: e.year })}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </DialogShell>
+  );
+}
+
+/** Ключ имени свойства — термины живут в terms.ts, отсюда литеральный ключ. */
+function traitTitleKey(t: TraitId): TKey {
+  return ("trait." + t) as TKey;
 }
 
 /**

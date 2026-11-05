@@ -68,6 +68,7 @@ import { TutorialHud } from "./tutorial-missions";
 import { CHALLENGES } from "@/game/challenges";
 import { challengesReport, profileGet } from "@/lib/profile/api";
 import { readStats } from "@/lib/stats";
+import { collectSpecimens, saveSpecimens } from "@/game/bestiarium";
 
 const LazyDice3D = lazy(async () => {
   const module = await import("./dice-3d");
@@ -1514,6 +1515,14 @@ export function GameApp() {
       }
     } catch {
       retro = undefined;
+    }
+    // Бестиарий (волна 4б): именованные животные попадают в альбом.
+    try {
+      const mode = "net" as const;
+      const specimens = collectSpecimens(state, mode);
+      if (specimens.length) saveSpecimens(specimens);
+    } catch {
+      // альбом — не критичный путь
     }
     challengesReport({ data: { stats, feats, retro } })
       .then((res) => {
