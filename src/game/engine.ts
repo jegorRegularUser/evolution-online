@@ -187,6 +187,8 @@ export function createGame(
    * раньше, но прямо здесь защита тоже стоит.
    */
   expansion?: { rules?: TableRules; mutators?: MutatorId[]; wildWorld?: boolean },
+  /** Волна 4а: сценарий изверга (сид + ломающее правило). */
+  scenario?: { seat: number; doubleHunt?: boolean; bossFeedsExtra?: boolean },
 ): GameState {
   const rules = expansion?.rules;
   const mutators = expansion?.mutators?.length ? [...expansion.mutators] : undefined;
@@ -236,6 +238,10 @@ export function createGame(
     devActionsUsed: 0,
     paralyzed: modules?.continents ? [] : undefined,
     turnUse: freshTurnUse(),
+    scenario:
+      scenario && scenario.seat >= 0 && scenario.seat < playerCount
+        ? { seat: scenario.seat, doubleHunt: scenario.doubleHunt, bossFeedsExtra: scenario.bossFeedsExtra }
+        : undefined,
   };
   state.deck = shuffled(state, buildScaledDeck(state, deckSize));
   if (state.modules.plants) {
@@ -1813,6 +1819,27 @@ function finishHuntSuccess(
   if (opts?.rage) {
     // При любом исходе раунд бешенства заканчивается.
     advanceFeed(state);
+  } else if (
+    state.scenario?.doubleHunt &&
+    state.currentPlayerId === state.scenario.seat &&
+    state.lastEvents.some((e) => e.kind === "preyKilled") &&
+    !state.turnUse.doubleHuntUsed
+  ) {
+    // Сценарий «Атроксабилис» (волна 4а): после удачной охоты босс охотится
+    // второй раз в тот же ход. Ход не передаётся; если второй цели нет —
+    // ход завершится сам на следующей проверке легальных действий.
+    state.turnUse.doubleHuntUsed = true;
+    state.turnUse.combatUsed = false;
+    // Хищник должен смочь атаковать снова: снимаем отметку «уже охотился» —
+    // и из turnUse, и huntedYear года (иначе второй feedHunt отсечётся).
+    for (const e of state.lastEvents) {
+      if (e.kind !== "preyKilled") continue;
+      const killer = state.players[state.scenario.seat]?.animals.find((a) => a.id === e.carnivoreId);
+      if (killer && killer.huntedYear === state.year) killer.huntedYear = undefined;
+    }
+    state.turnUse.carnivores = state.turnUse.carnivores.filter((id) =>
+      !state.lastEvents.some((e) => e.kind === "preyKilled" && e.carnivoreId === id),
+    );
   } else {
     maybeEndTurn(state);
   }
@@ -2962,6 +2989,18 @@ function beginFeeding(state: GameState) {
   state.madTurn = undefined;
   state.rageTurn = null;
   state.migratedThisPhase = [];
+  // Сценарий «Костолом» (волна 4а): в начале каждой фазы кормления животные
+  // босса получают +1 еды — ломающее правило босса, подсчёт очков не тронут.
+  if (state.scenario?.bossFeedsExtra) {
+    const boss = state.players[state.scenario.seat];
+    if (boss?.isAI) {
+      for (const a of boss.animals) {
+        a.blueFood += 1;
+        ev(state, { kind: "blueFood", animalId: a.id, reason: "scenario" });
+      }
+      log(state, `«Костолом»: животные босса получают +1 еды в начале кормления.`, "log.bossFeedsExtra", {}, "bad");
+    }
+  }
   feedTurn(state, state.firstPlayerId);
 }
 

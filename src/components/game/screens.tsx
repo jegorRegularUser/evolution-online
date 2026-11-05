@@ -9,7 +9,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
-import { CheckCircle2, ShoppingBag, Target } from "lucide-react";
+import { CheckCircle2, Compass, ShoppingBag, Swords, Target } from "lucide-react";
 import { DialogShell } from "@/components/ui/dialog-shell";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,7 @@ import type { FloraKind, MarkKind, ModuleId, MutatorId, PlantKind, ScoreBreakdow
 import type { CosmeticSlot } from "@/lib/profile/shared";
 import { CHALLENGES } from "@/game/challenges";
 import { COSMETIC_ITEMS, cosmeticById } from "@/lib/cosmetics";
+import { CAMPAIGN_ERAS, CAMPAIGN_MISSIONS, type CampaignMissionId } from "@/game/campaign";
 import { challengesGet, cosmeticsBuy, cosmeticsEquip, profileGet } from "@/lib/profile/api";
 import { sfx } from "@/lib/sfx";
 import { ACHIEVEMENTS, readStats } from "@/lib/stats";
@@ -82,6 +83,7 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
   const [statsOpen, setStatsOpen] = useState(false);
   const [challengesOpen, setChallengesOpen] = useState(false);
   const [shopOpen, setShopOpen] = useState(false);
+  const [campaignOpen, setCampaignOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const netFatal = useGameStore((s) => s.netFatal);
   const clearNetFatal = useGameStore((s) => s.clearNetFatal);
@@ -127,6 +129,10 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
           <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.rules")} title={tt("topbar.rules")} onClick={onRules}>
             <BookOpen className="size-4" />
             <span className="hidden sm:inline">{tt("topbar.rules")}</span>
+          </Button>
+          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("campaign.title")} title={tt("campaign.title")} onClick={() => setCampaignOpen(true)}>
+            <Compass className="size-4" />
+            <span className="hidden sm:inline">{tt("campaign.title")}</span>
           </Button>
           <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("challenges.title")} title={tt("challenges.title")} onClick={() => setChallengesOpen(true)}>
             <Target className="size-4" />
@@ -180,6 +186,7 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
       {statsOpen ? <StatsScreen onClose={closeStats} /> : null}
       {challengesOpen ? <ChallengesScreen onClose={() => setChallengesOpen(false)} /> : null}
       {shopOpen ? <ShopScreen onClose={() => setShopOpen(false)} /> : null}
+      {campaignOpen ? <CampaignScreen onClose={() => setCampaignOpen(false)} /> : null}
     </>
   );
 }
@@ -1442,6 +1449,106 @@ export function ShopScreen({ onClose }: { onClose: () => void }) {
           </div>
         </section>
       ))}
+    </DialogShell>
+  );
+}
+
+/**
+ * Кампания «Эры» (волна 4а, дизайн-пакет §4.1А): эпохи → миссии → изверги.
+ * Прогресс — localStorage (evo-campaign) через стор; «Хард» открывается после
+ * «Нормы». Миссия запускает обычную комнату с лёгким/обычным/тяжёлым ботом;
+ * у изверга — сценарное ломающее правило (GameScenario в движке).
+ */
+export function CampaignScreen({ onClose }: { onClose: () => void }) {
+  const tt = useT();
+  const titleId = useId();
+  const name = "Evo";
+  const progress = useGameStore((s) => s.campaignProgress);
+  const startCampaign = useGameStore((s) => s.startCampaign);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const start = async (id: CampaignMissionId, hard: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await startCampaign(id, hard, name);
+      onClose();
+    } catch {
+      setError(tt("tutorial.startError"));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <DialogShell
+      titleId={titleId}
+      overlayClassName="fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-0 sm:items-center sm:p-6"
+      panelClassName="max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-t-[var(--radius-xl)] border border-border bg-surface p-5 sm:rounded-[var(--radius-xl)] sm:p-8"
+      onBackdropClick={onClose}
+    >
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <h2 id={titleId} tabIndex={-1} className="text-2xl">{tt("campaign.title")}</h2>
+          <p className="mt-1 text-xs text-muted">{tt("campaign.subtitle")}</p>
+        </div>
+        <Button variant="ghost" size="sm" onClick={onClose}>{tt("common.close")}</Button>
+      </div>
+      {error ? (
+        <p role="alert" className="mb-3 rounded-[var(--radius-sm)] border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-clay">{error}</p>
+      ) : null}
+      {CAMPAIGN_ERAS.map((era) => {
+        const missions = Object.values(CAMPAIGN_MISSIONS).filter((m) => m.era === era.id);
+        return (
+          <section key={era.id} className="mb-5">
+            <h3 className="mb-2 font-display text-sm uppercase tracking-[0.18em] text-muted">{tt(era.titleKey)}</h3>
+            <div className="grid gap-2">
+              {missions.map((m) => {
+                const done = progress.done.includes(m.id);
+                const hardDone = progress.hard.includes(m.id);
+                const prevDone = true; // 4а: миссии эпохи доступны сразу (лесенка — 4б)
+                return (
+                  <div
+                    key={m.id}
+                    className={cn(
+                      "rounded-[var(--radius-md)] border p-3",
+                      done ? "border-good/45 bg-good/10" : "border-border bg-bg/60",
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="flex min-w-0 items-center gap-2 text-sm text-fg">
+                        {done ? <CheckCircle2 className="size-4 shrink-0 text-good" aria-hidden /> : null}
+                        <span className="truncate">{tt(m.titleKey)}</span>
+                        {m.boss ? (
+                          <span className="inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] border border-danger/40 bg-danger/10 px-1.5 py-0.5 text-[10px] text-clay">
+                            {m.boss.scenario.doubleHunt ? <Swords className="size-3" aria-hidden /> : <Lock className="size-3" aria-hidden />}
+                            {tt(m.boss.nameKey)}
+                          </span>
+                        ) : null}
+                      </p>
+                      <div className="flex shrink-0 gap-1.5">
+                        <Button
+                          variant={done ? "secondary" : "default"}
+                          size="sm"
+                          disabled={busy || !prevDone}
+                          onClick={() => start(m.id, false)}
+                        >
+                          {tt("campaign.start")}
+                        </Button>
+                        {done ? (
+                          <Button variant="secondary" size="sm" disabled={busy} onClick={() => start(m.id, true)}>
+                            {hardDone ? tt("campaign.hard.done") : tt("campaign.hard")}
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                    <p className="mt-1.5 text-xs leading-snug text-muted">{tt(m.diaryKey)}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
     </DialogShell>
   );
 }

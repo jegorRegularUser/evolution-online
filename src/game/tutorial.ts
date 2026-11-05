@@ -31,6 +31,12 @@ export interface MissionProgress {
   wildPlannedSeen: boolean;
   /** «Падальщики» сработали на животном игрока. */
   scavengedSeen: boolean;
+  /** Съедена флора/растение (миссии с модулем «Растения»). */
+  plantFoodTaken: number;
+  /** Потеряно своих животных за партию (объект «мало потерь»). */
+  animalsLost: number;
+  /** Партия выиграна (gameFinished и игрок среди победителей). */
+  gameWon: boolean;
   /** Год, до которого доиграли. */
   year: number;
 }
@@ -46,6 +52,9 @@ export function makeMissionProgress(): MissionProgress {
     maxTraitsOnAnimal: 0,
     wildPlannedSeen: false,
     scavengedSeen: false,
+    plantFoodTaken: 0,
+    animalsLost: 0,
+    gameWon: false,
     year: 1,
   };
 }
@@ -55,6 +64,11 @@ export function makeMissionProgress(): MissionProgress {
  * на каждом состоянии, дубль кадра не двигает счётчики (события последнего
  * действия добавляются ровно один раз — транзиентный lastEvents).
  */
+/** Владелец животного по id — события пост-фактум, карточка уже снята. */
+function ownerOfAnimal(state: GameState, animalId: string): number | undefined {
+  return state.players.find((p) => p.animals.some((a) => a.id === animalId))?.id;
+}
+
 export function absorbState(progress: MissionProgress, state: GameState): void {
   if (state.eventSeq === progress.eventSeq) return;
   progress.eventSeq = state.eventSeq;
@@ -74,6 +88,9 @@ export function absorbState(progress: MissionProgress, state: GameState): void {
     if (e.kind === "wildEventPlanned") progress.wildPlannedSeen = true;
     // «Падальщики» сработали у ИГРОКА: его животное вернуло карту из сброса.
     if (e.kind === "scavenged" && mine(e.playerId)) progress.scavengedSeen = true;
+    if (e.kind === "plantFoodTaken" && mine(e.playerId)) progress.plantFoodTaken += 1;
+    if (e.kind === "animalDied" && ownerOfAnimal(state, e.animalId) === state.humanId) progress.animalsLost += 1;
+    if (e.kind === "gameFinished" && e.winnerIds.includes(state.humanId)) progress.gameWon = true;
   }
   // Максимум свойств на одном СВОЁМ животном — по срезу состояния, не по
   // событиям (событие traitPlaced не знает итогового числа на карточке).

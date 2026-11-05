@@ -1,12 +1,19 @@
 import { create } from "zustand";
 import { legalDefenseActions, legalDevActions, legalFeedActions } from "@/game/engine";
-import type { Difficulty, GameAction, GameSpeed, GameState, ModuleId, MutatorId, TableRules } from "@/game/types";
+import type { Difficulty, GameAction, GameScenario, GameSpeed, GameState, ModuleId, MutatorId, TableRules } from "@/game/types";
 import {
   TUTORIAL_MISSIONS,
   loadDoneMissions,
   saveDoneMission,
   type TutorialMissionId,
 } from "@/game/tutorial";
+import {
+  CAMPAIGN_MISSIONS,
+  loadCampaignProgress,
+  saveCampaignProgress,
+  type CampaignMissionId,
+  type CampaignProgress,
+} from "@/game/campaign";
 import { t, type TParams, type TKey } from "@/lib/i18n";
 import { NetClientError, NetSession, fetchRoomList, forgetSession, hasStoredSeatSession, hasStoredSession, loadName, type NetHooks, type NetStatus, type PendingNetItem } from "@/lib/net/session";
 import type {
@@ -366,6 +373,8 @@ export interface NetCreateConfig {
   rules?: TableRules;
   mutators?: Partial<Record<MutatorId, boolean>>;
   wildWorld?: boolean;
+  /** Волна 4а: сценарий изверга (кампания) — сервер валидирует сид. */
+  scenario?: GameScenario;
   /** Приватный стол: вход по паролю, колонка «Закрытые» в меню. */
   isPrivate?: boolean;
   /** Пароль приватного стола; пусто — сервер сгенерирует 4 цифры. */
@@ -450,6 +459,13 @@ interface GameStore {
   startTutorial: (id: TutorialMissionId, name: string) => Promise<void>;
   clearTutorial: () => void;
   completeTutorial: (id: TutorialMissionId) => void;
+  /** Кампания «Эры» (волна 4а): активная миссия + режим хард. */
+  campaignMission: CampaignMissionId | null;
+  campaignHard: boolean;
+  campaignProgress: CampaignProgress;
+  startCampaign: (id: CampaignMissionId, hard: boolean, name: string) => Promise<void>;
+  clearCampaign: () => void;
+  completeCampaignMission: (id: CampaignMissionId, hard: boolean) => void;
   startNetCreate: (cfg: NetCreateConfig) => Promise<void>;
   /** Войти за стол; password — только для приватного (см. NetClientError). */
   startNetJoin: (code: string, name: string, password?: string) => Promise<void>;
@@ -841,6 +857,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setEquippedCosmetics: (v) => set({ equippedCosmetics: v }),
   tutorialMission: null,
   doneMissions: loadDoneMissions(),
+  campaignMission: null,
+  campaignHard: false,
+  campaignProgress: loadCampaignProgress(),
   net: null,
   netFatal: null,
   rooms: [],
@@ -927,6 +946,37 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   completeTutorial: (id) => {
     set({ doneMissions: saveDoneMission(id) });
+  },
+
+  // ── кампания «Эры» (волна 4а) ───────────────────────────────────────────
+  startCampaign: async (id, hard, name) => {
+    const m = CAMPAIGN_MISSIONS[id];
+    set({ campaignMission: id, campaignHard: hard });
+    try {
+      await get().startNetCreate({
+        name: name || "Evo",
+        capacity: 2,
+        botSeats: 1,
+        difficulty: hard ? "hard" : m.difficulty,
+        modules: m.modules,
+        mutators: m.mutators,
+        wildWorld: m.wildWorld,
+        scenario: m.boss ? { seat: 1, ...m.boss.scenario } : undefined,
+      });
+    } catch (e) {
+      set({ campaignMission: null, campaignHard: false });
+      throw e;
+    }
+  },
+
+  clearCampaign: () => set({ campaignMission: null, campaignHard: false }),
+
+  completeCampaignMission: (id, hard) => {
+    const progress = hard
+      ? { ...get().campaignProgress, hard: get().campaignProgress.hard.includes(id) ? get().campaignProgress.hard : [...get().campaignProgress.hard, id] }
+      : { ...get().campaignProgress, done: get().campaignProgress.done.includes(id) ? get().campaignProgress.done : [...get().campaignProgress.done, id] };
+    saveCampaignProgress(progress);
+    set({ campaignProgress: progress });
   },
 
   // ── сетевой стол ──────────────────────────────────────────────────────────

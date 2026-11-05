@@ -70,6 +70,20 @@ export type ModuleId = "continents" | "plants" | "fungi" | "randomMutations";
 export type EnabledModules = Partial<Record<ModuleId, boolean>>;
 
 /**
+ * Сценарий изверга (волна 4а, дизайн-пакет §4.2): сид босса + ОДНО ломающее
+ * правило. Правило действует только на место босса (ИИ) — самая дешёвая и
+ * «настольно-легальная» эскалация; подсчёт очков не искажается.
+ */
+export interface GameScenario {
+  /** Место босса (ИИ) в комнате. */
+  seat: number;
+  /** «Атроксабилис»: после удачной охоты хищник босса охотится второй раз в тот же ход. */
+  doubleHunt?: boolean;
+  /** «Костолом»: в начале каждой фазы кормления животные босса получают +1 еды. */
+  bossFeedsExtra?: boolean;
+}
+
+/**
  * Метрики одной партии для своего игрока (волна 3а). Копятся в applyAction
  * по событиям, финализируются в finishGame (игры/победы/место). Отчёт о них
  * сервер считает входом «Вызовов» — предикаты каталога чистые и переиспользуем
@@ -407,7 +421,7 @@ export type GameEvent =
     }
   | { kind: "foodFromBank"; animalId: string; playerId: number; via: "take" | "communication" }
   | { kind: "foodToFat"; animalId: string }
-  | { kind: "blueFood"; animalId: string; reason: "hunt" | "cooperation" | "scavenger" | "tailLoss" | "piracy" | "fat" | "soaring" | "beetle" | "nutritious" }
+  | { kind: "blueFood"; animalId: string; reason: "hunt" | "cooperation" | "scavenger" | "tailLoss" | "piracy" | "fat" | "soaring" | "beetle" | "nutritious" | "scenario" }
   | { kind: "traitPlaced"; animalId: string; type: TraitId; hidden: boolean }
   | { kind: "animalPlaced"; animalId: string; ownerId: number; zoneId?: TerritoryId }
   | { kind: "huntDeclared"; carnivoreId: string; preyId: string }
@@ -525,6 +539,11 @@ export interface FeedTurnUse {
   /** В этот ход уже были боевые действия (хищник/пират) — еду брать нельзя. */
   combatUsed: boolean;
   /**
+   * Сценарий изверга «Атроксабилис» (волна 4а): вторая охота в этом ходу уже
+   * использована — иначе босс с двойной охотой не передавал бы ход никогда.
+   */
+  doubleHuntUsed?: boolean;
+  /**
    * «Континенты»: объявлена «Миграция» — этот ход потрачен на переезд;
    * больше ничего (кроме свойств мигрирующих) использовать нельзя.
    */
@@ -624,6 +643,8 @@ export interface GameState {
   statsWildYearCredited?: number;
   /** Финализация (games/wins/место) выполнена ровно один раз. */
   statsFinalized?: boolean;
+  /** Сценарий изверга (волна 4а): сид босса + ломающее правило. */
+  scenario?: GameScenario;
   /** Значение playSeq на старте развития года: свойства с большим playSeq вложены в этом году. */
   devStartPlaySeq: number;
   /** Животные, ожидающие гибели в показанной стадии вымирания. */

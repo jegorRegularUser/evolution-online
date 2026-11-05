@@ -8,6 +8,7 @@ import type {
   Difficulty,
   EnabledModules,
   GameAction,
+  GameScenario,
   GameEvent,
   GameState,
   ModuleId,
@@ -113,6 +114,8 @@ export interface RoomSettings {
   mutators?: Partial<Record<MutatorId, boolean>>;
   /** Волна 2: пак событий «Дикий мир» (§1.3), занимает один слот. */
   wildWorld?: boolean;
+  /** Волна 4а: сценарий изверга (кампания) — сид босса + ломающее правило. */
+  scenario?: GameScenario;
 }
 
 /** Ключи столовых правил — для UI лобби (порядок как в modifiers.ts). */
@@ -434,6 +437,14 @@ export const createRoomInput = z.object({
   deckSize: z.number().int().min(20).max(400).optional(),
   /** Волна 2: модификаторы стола (правила, мутаторы, «Дикий мир»). */
   rules: TABLE_RULES.optional(),
+  /** Волна 4а: сценарий изверга — сид босса + ломающее правило (кампания). */
+  scenario: z
+    .object({
+      seat: z.number().int().min(0).max(7),
+      doubleHunt: z.boolean().optional(),
+      bossFeedsExtra: z.boolean().optional(),
+    })
+    .optional(),
   mutators: MUTATORS.optional(),
   wildWorld: z.boolean().optional(),
   /** Приватный стол: вход по паролю, в меню виден в колонке «Закрытые». */

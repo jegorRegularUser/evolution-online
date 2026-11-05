@@ -229,7 +229,14 @@ export function canAttack(state: GameState, carnivore: Animal, prey: Animal): bo
   if (!isCarnivoreLike(carnivore)) return false;
   if (carnivore.hibernating) return false;
   // Накормленный хищник не нападает: свойства сытого животного не работают.
-  if (isFed(carnivore)) return false;
+  // Исключение — сценарий изверга «Атроксабилис» (волна 4а): между первой и
+  // второй охотой того же хода босс сыт, но вторая охота ему разрешена.
+  const bossSecondHunt =
+    state.scenario?.doubleHunt === true &&
+    state.scenario.seat === state.currentPlayerId &&
+    state.turnUse.doubleHuntUsed === true &&
+    state.players[state.scenario.seat]?.animals.some((a) => a.id === carnivore.id);
+  if (isFed(carnivore) && !bossSecondHunt) return false;
   // Парализованный стрекательными клетками — не хищник вовсе.
   if (isParalyzed(state, carnivore.id)) return false;
   // «Растения»: жетон убежища защищает даже от хищника с острым зрением.

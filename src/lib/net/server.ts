@@ -2396,6 +2396,11 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
           mutators: mutatorList(cfg.mutators),
           wildWorld: cfg.wildWorld,
         },
+        // Волна 4а: сценарий изверга (кампания). Босс-место — ИИ по определению;
+        // сервер валидирует сид от чужих сценариев вручную собранных комнат.
+        cfg.scenario && cfg.scenario.seat > 0 && cfg.scenario.seat < room.capacity
+          ? cfg.scenario
+          : undefined,
       );
       // Ожидающие при старте автоматически становятся зрителями: место не
       // занимают, но стол видят. Токен и имя сохраняются — клиент продолжает

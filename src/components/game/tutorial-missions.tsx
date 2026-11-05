@@ -12,6 +12,8 @@ import {
   type MissionProgress,
   type TutorialMissionId,
 } from "@/game/tutorial";
+import { CAMPAIGN_MISSIONS } from "@/game/campaign";
+import type { TKey } from "@/lib/i18n";
 
 /**
  * Обучение (волна 1.5, дизайн-пакет §5): интерактивные миссии поверх обычной
@@ -20,6 +22,13 @@ import {
  * целей поверх стола. Прогресс — чистый аккумулятор из src/game/tutorial.ts
  * (там же тесты), здесь только показ и проводка.
  */
+
+/** Общая форма миссии для HUD: заголовок, описание, цели. */
+interface MissionDef {
+  titleKey: TKey;
+  descKey: TKey;
+  objectives: ReadonlyArray<{ id: string; textKey: TKey; done: (p: MissionProgress) => boolean }>;
+}
 
 /** Блок «Обучение» в меню: три миссии с галочками пройденных. */
 export function TutorialMissionBlock({ name, busy }: { name: string; busy: boolean }) {
@@ -71,14 +80,18 @@ export function TutorialMissionBlock({ name, busy }: { name: string; busy: boole
   );
 }
 
-/** Живой список целей поверх учебной партии; «Прервать» уводит в меню. */
+/** Живой список целей поверх миссии (учебной или кампании); «Прервать» — в меню. */
 export function TutorialHud() {
   const tt = useT();
   const state = useGameStore((s) => s.state);
   const net = useGameStore((s) => s.net);
   const missionId = useGameStore((s) => s.tutorialMission);
+  const campaignMissionId = useGameStore((s) => s.campaignMission);
+  const campaignHard = useGameStore((s) => s.campaignHard);
   const clearTutorial = useGameStore((s) => s.clearTutorial);
   const completeTutorial = useGameStore((s) => s.completeTutorial);
+  const clearCampaign = useGameStore((s) => s.clearCampaign);
+  const completeCampaignMission = useGameStore((s) => s.completeCampaignMission);
   const leaveNet = useGameStore((s) => s.leaveNet);
   const progressRef = useRef<MissionProgress>(makeMissionProgress());
   const [, forceTick] = useState(0);
@@ -86,7 +99,14 @@ export function TutorialHud() {
   const completedRef = useRef(false);
   const wasInTableRef = useRef(false);
 
-  const mission = missionId ? TUTORIAL_MISSIONS[missionId] : null;
+  // Миссия приходит из одной из двух систем: обучение (волна 1.5) или
+  // кампания «Эры» (волна 4а). Форма целей одинаковая.
+  const isCampaign = Boolean(campaignMissionId);
+  const mission: MissionDef | null = missionId
+    ? TUTORIAL_MISSIONS[missionId]
+    : campaignMissionId
+      ? CAMPAIGN_MISSIONS[campaignMissionId]
+      : null;
 
   // Прогресс: абсорбция кадра идемпотентна по eventSeq — эффект может
   // срабатывать сколько угодно часто.
@@ -96,15 +116,19 @@ export function TutorialHud() {
     forceTick((v) => v + 1);
   }, [state, mission]);
 
-  // Миссия выполнена: звук-награда, отметка в localStorage, показ финала.
+  // Миссия выполнена: звук-награда, отметка прогресса, показ финала.
   useEffect(() => {
     if (!mission || completedRef.current) return;
-    if (!missionComplete(mission, progressRef.current)) return;
+    if (!mission.objectives.every((o) => o.done(progressRef.current))) return;
     completedRef.current = true;
     sfx.play("cheer");
-    completeTutorial(mission.id);
+    if (isCampaign && campaignMissionId) {
+      completeCampaignMission(campaignMissionId, campaignHard);
+    } else if (missionId) {
+      completeTutorial(missionId);
+    }
     setCompleted(true);
-  }, [mission, completeTutorial, state]);
+  }, [mission, completeTutorial, completeCampaignMission, isCampaign, campaignMissionId, campaignHard, missionId, state]);
 
   // Ушли со стола (сдача, кик, «Прервать») — миссия больше не активна.
   // Сигнал — ПЕРЕХОД «были за столом → вышли»: в окне создания (миссия уже
@@ -115,12 +139,15 @@ export function TutorialHud() {
       wasInTableRef.current = true;
       return;
     }
-    if (wasInTableRef.current && missionId) clearTutorial();
+    if (wasInTableRef.current && (missionId || campaignMissionId)) {
+      if (isCampaign) clearCampaign();
+      else clearTutorial();
+    }
     wasInTableRef.current = false;
-  }, [net, state, missionId, clearTutorial]);
+  }, [net, state, missionId, campaignMissionId, isCampaign, clearTutorial, clearCampaign]);
 
   if (!mission || !state) return null;
-  const done = completed || missionComplete(mission, progressRef.current);
+  const done = completed || mission.objectives.every((o) => o.done(progressRef.current));
 
   return (
     <aside
