@@ -17,7 +17,7 @@ import { FLORA, MARKS } from "@/game/flora";
 import { PLANTS } from "@/game/plants";
 import { CONTINENTS_TRAIT_IDS, FUNGI_TRAIT_IDS, MUTATIONS_TRAIT_IDS, PLANTS_TRAIT_IDS, TRAIT_ORDER } from "@/game/traits";
 import { TERRITORIES } from "@/game/types";
-import type { FloraKind, MarkKind, PlantKind, ScoreBreakdown, TerritoryId, TraitId } from "@/game/types";
+import type { FloraKind, MarkKind, ModuleId, MutatorId, PlantKind, ScoreBreakdown, TerritoryId, TraitId } from "@/game/types";
 import { sfx } from "@/lib/sfx";
 import { ACHIEVEMENTS, readStats } from "@/lib/stats";
 import {
@@ -1193,6 +1193,7 @@ export function GameOverScreen({
               {tt("final.again")}
             </Button>
           ) : null}
+          <ShareReportButton />
           <Button variant="secondary" className="flex-1" size="md" onClick={onMenu}>
             {onAgain ? tt("final.menu") : tt("final.leave")}
           </Button>
@@ -1201,6 +1202,83 @@ export function GameOverScreen({
     </div>
   );
 }
+
+/**
+ * «Скопировать отчёт» (волна 1.5, дизайн-пакет §5): текстовый матч-отчёт в
+ * буфер — победители, места с разбивкой, год, модули/модификаторы и сид
+ * (партии по сиду воспроизводимы — отчёт позволяет переиграть и сверить).
+ * Реплей-таймлайн — отдельная крупная ставка из старых планов, сюда не входит.
+ */
+function ShareReportButton() {
+  const tt = useT();
+  const state = useGameStore((s) => s.state);
+  const [copied, setCopied] = useState(false);
+  if (!state?.scores || !state.winnerIds) return null;
+  const copy = async () => {
+    const rows = [...state.scores!].sort((a, b) => b.total - a.total || b.discard - a.discard);
+    const winnerNames = rows
+      .filter((r) => state.winnerIds!.includes(r.playerId))
+      .map((r) => r.name);
+    const lines: string[] = [];
+    lines.push(tt("final.report.head"));
+    lines.push(tt("final.report.winners", { names: winnerNames.join(", ") }));
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i]!;
+      lines.push(
+        tt("final.report.line", {
+          place: i + 1,
+          name: r.name,
+          total: r.total,
+          animals: r.animals,
+          traits: r.traits,
+          discard: r.discard,
+        }),
+      );
+    }
+    const modules = (Object.entries(state.modules) as Array<[ModuleId, boolean]>)
+      .filter(([, on]) => on)
+      .map(([id]) => tt(MODULE_NAME_KEYS[id]));
+    const mods: string[] = [];
+    if (state.rules?.pack) mods.push(tt("lobby.rule.pack"));
+    if (state.rules?.hungrySeason) mods.push(tt("lobby.rule.hungrySeason"));
+    if (state.rules?.abundance) mods.push(tt("lobby.rule.abundance"));
+    if (state.rules?.startHand) mods.push(tt("lobby.rule.startHand"));
+    for (const m of state.mutators ?? []) mods.push(tt(MUTATOR_NAME_KEYS[m]));
+    if (state.wildWorld) mods.push(tt("lobby.wildWorld"));
+    lines.push(
+      tt("final.report.meta", {
+        year: state.year,
+        modules: modules.join(", ") || "—",
+        modifiers: mods.join(", ") || "—",
+      }),
+    );
+    lines.push(tt("final.report.seed", { seed: state.rngSeed }));
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      // Клипборд недоступен (не https или нет разрешения) — тихо игнорируем.
+    }
+  };
+  return (
+    <Button variant="secondary" className="flex-1" size="md" onClick={copy}>
+      {copied ? tt("final.report.copied") : tt("final.report.button")}
+    </Button>
+  );
+}
+
+/** Имена модулей и модификаторов для отчёта — литеральные ключи (типобезопасный i18n). */
+const MODULE_NAME_KEYS: Record<ModuleId, TKey> = {
+  continents: "module.continents",
+  plants: "module.plants",
+  fungi: "module.fungi",
+  randomMutations: "module.randomMutations",
+};
+const MUTATOR_NAME_KEYS: Record<MutatorId, TKey> = {
+  scavengers: "lobby.mutator.scavengers",
+  rapidEvolution: "lobby.mutator.rapidEvolution",
+};
 
 /**
  * Очки места «докручиваются» от нуля на глазах: легче прочувствовать разрыв

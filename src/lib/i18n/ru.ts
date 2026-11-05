@@ -1224,6 +1224,13 @@ export const ru = {
   "anim.mode.full": "Полные",
   "anim.mode.fast": "Быстрые",
   "anim.mode.off": "Выкл",
+  "final.report.head": "«Эволюция Онлайн» — итоги партии",
+  "final.report.winners": "Победа: {names}",
+  "final.report.line": "{place}. {name} — {total} очков (животные {animals}, свойства {traits}, сброс {discard})",
+  "final.report.meta": "Год {year}. Модули: {modules}. Модификаторы: {modifiers}",
+  "final.report.seed": "Сид: {seed}",
+  "final.report.button": "Скопировать отчёт",
+  "final.report.copied": "Отчёт скопирован",
 
   // ── экран ошибки приложения (error-component) ────────────────────────────
   "error.title": "Что-то пошло не так",

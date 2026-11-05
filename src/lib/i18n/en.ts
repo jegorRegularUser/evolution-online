@@ -1225,6 +1225,13 @@ export const en: Record<keyof RuDict, string> = {
   "anim.mode.full": "Full",
   "anim.mode.fast": "Fast",
   "anim.mode.off": "Off",
+  "final.report.head": "Evolution Online — game summary",
+  "final.report.winners": "Winners: {names}",
+  "final.report.line": "{place}. {name} — {total} points (animals {animals}, traits {traits}, discard {discard})",
+  "final.report.meta": "Year {year}. Modules: {modules}. Modifiers: {modifiers}",
+  "final.report.seed": "Seed: {seed}",
+  "final.report.button": "Copy report",
+  "final.report.copied": "Report copied",
 
   // ── app error screen (error-component) ───────────────────────────────────
   "error.title": "Something went wrong",
