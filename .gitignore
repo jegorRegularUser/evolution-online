@@ -71,3 +71,6 @@ artifacts/
 # Generated deployment output (kept on disk for local previews, never committed)
 .vercel/
 .grok/preview.pid
+
+# кэш TanStack Router/RSC-плагина (генерируется dev-сервером)
+.tanstack/
