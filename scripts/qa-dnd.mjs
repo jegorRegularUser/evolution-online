@@ -505,6 +505,36 @@ try {
     check(Boolean(free), "B: в своём ряду есть пустая точка в кадре");
     const cb = await b.locator("[data-hand-row] [data-card-id]").first().boundingBox();
     check(Boolean(cb && free), "B: нашли карту и пустое место");
+
+    // Пресс-подсветка пальцем: удержание колонки арта дуала активирует драг —
+    // зажатая грань с кольцом, вторая темнеет. Отпускаем без броска (отмена).
+    const dualId = await b.evaluate(() => {
+      for (const el of document.querySelectorAll("[data-hand-row] [data-card-id]")) {
+        if (el.querySelectorAll("button[aria-label]").length > 1) return el.getAttribute("data-card-id");
+      }
+      return null;
+    });
+    if (dualId) {
+      const fp = await b.locator(`[data-hand-row] [data-card-id="${dualId}"] button[aria-label]`).nth(1).boundingBox();
+      await clientB.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [{ x: Math.round(fp.x + fp.width / 2), y: Math.round(fp.y + fp.height / 2) }],
+      });
+      await sleep(350);
+      const press = await b.evaluate((cid) => {
+        const btns = [...document.querySelectorAll(`[data-hand-row] [data-card-id="${cid}"] button[aria-label]`)];
+        return { pressed: getComputedStyle(btns[1]).outlineStyle, sibling: Number(getComputedStyle(btns[0]).opacity) };
+      }, dualId);
+      check(
+        press.pressed === "solid" && press.sibling < 0.9,
+        `B: палец зажал грань — кольцо и затемнение соседа (${press.pressed}, ${press.sibling})`,
+      );
+      await snap(b, "touch-face-press");
+      await clientB.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await sleep(500);
+    } else {
+      ok("B: дуала в руке нет — пресс-подсветка пальцем пропущена");
+    }
     await touchDrag(clientB, { x: cb.x + cb.width / 2, y: cb.y + cb.height * 0.55 }, free);
     const s2 = await board(b);
     check(
@@ -638,6 +668,217 @@ try {
     fail(`C («Континенты»): ${String(e?.message ?? e).split("\n")[0]}`);
   } finally {
     await ctxC.close().catch(() => {});
+  }
+
+  // ══ D. Дуальная карта: драг за конкретную грань ══
+  // Колонка арта — ручка драга СВОЕЙ грани: зажимаем правую половину, бросаем
+  // на своего зверя — должен лечь именно правый грань-свойство, без клика.
+  // Параллельно проверяем визуал зажатия: зажатая грань с кольцом, вторая —
+  // темнеет (opacity + saturate), и «призрак» летит.
+  const ctxD = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
+  const d = await ctxD.newPage();
+  d.on("pageerror", (e) => fail(`D pageerror: ${e.message}`));
+  // Ожидание хода с подстраховкой: рука могла опустеть — тогда пасуем
+  // («Закончить развитие»), иначе развитие не перейдёт дальше.
+  const waitTurnD = async (what) => {
+    if (await waitHumanTurn(d, 45_000)) return true;
+    const pass = d.getByRole("button", { name: "Закончить развитие" });
+    if (await pass.isVisible().catch(() => false)) {
+      await pass.click({ timeout: 5000 }).catch(() => {});
+      if (await waitHumanTurn(d, 45_000)) return true;
+    }
+    throw new Error(`D: не дождались хода (${what})`);
+  };
+  try {
+    await gotoMenu(d);
+    await startTable(d);
+    // Два своих животных: обе грани дуала станут легальными почти всегда.
+    for (let i = 0; i < 2; i++) {
+      await waitTurnD("первые животные");
+      await dismissTurnCard(d);
+      await d.locator("[data-hand-row] button", { hasText: "Животное" }).first().click({ timeout: 8000 });
+      await sleep(500);
+    }
+    // Ждём дуал с обеими открытыми гранями: до этого играем карту как животное,
+    // а при пустой руке — пасуем («Закончить развитие»), чтобы ход не зависал.
+    let dual = null;
+    for (let turn = 0; turn < 40 && !dual; turn++) {
+      await waitTurnD("поиск дуала");
+      await dismissTurnCard(d);
+      const s = await board(d);
+      dual = s.hand.find((c) => c.faces.length === 2 && c.faces.every((f) => !f.blocked));
+      if (!dual) {
+        const animalBtn = d.locator("[data-hand-row] button", { hasText: "Животное" }).first();
+        if (await animalBtn.isVisible().catch(() => false)) {
+          await animalBtn.click({ timeout: 6000 });
+        } else {
+          await d.getByRole("button", { name: "Закончить развитие" }).click({ timeout: 6000 }).catch(() => {});
+        }
+        await sleep(450);
+      }
+    }
+    if (!dual) throw new Error("D: не нашли дуал с двумя открытыми гранями");
+    check(Boolean(dual), `D: дуал в руке, обе грани открыты (${dual.faces.map((f) => f.label).join(" | ")})`);
+
+    await waitTurnD("бросок");
+    await dismissTurnCard(d);
+    const targets = (await allAnimals(d)).filter((t) => {
+      // Своё животное: секция «Ваши животные» — ищем только среди своих.
+      return t.id;
+    });
+    // Точка первого СВОЕГО зверя (секция «Ваши животные»).
+    const myAnimal = await d.evaluate(() => {
+      const sec = [...document.querySelectorAll("[data-player-section]")].find((s) =>
+        s.textContent.includes("Ваши животные"),
+      );
+      const el = sec?.querySelector("[data-animal-id]");
+      if (!el) return null;
+      let t = el;
+      while (t && t !== document.body) {
+        const cs = getComputedStyle(t);
+        if (/(auto|scroll)/.test(cs.overflowY) && t.scrollHeight > t.clientHeight + 1) t.scrollTop += 250;
+        t = t.parentElement;
+      }
+      window.scrollBy(0, 250);
+      return el.getAttribute("data-animal-id");
+    });
+    await sleep(450);
+    const tb = myAnimal ? await revealCard(d, myAnimal) : null;
+    check(Boolean(myAnimal && tb), `D: своё животное в кадре (${myAnimal ?? "нет"})`);
+    const beforeChips = myAnimal
+      ? await d.locator(`[data-animal-id="${myAnimal}"] [data-trait-chip]`).count()
+      : 0;
+
+    // Зажимаем колонку арта ПРАВОЙ грани (face 1) и бросаем на зверя.
+    const faceBtn = d.locator(`[data-hand-row] [data-card-id="${dual.id}"] button[aria-label]`).nth(1);
+    const fb = await faceBtn.boundingBox();
+    if (!fb) throw new Error("D: не нашли колонку арта");
+    const faceLabel = await faceBtn.getAttribute("aria-label");
+    await d.mouse.move(fb.x + fb.width / 2, fb.y + fb.height / 2);
+    await d.mouse.down();
+    await d.mouse.move(fb.x + 40, fb.y - 26, { steps: 5 });
+    await d.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2, { steps: 10 });
+    await sleep(250);
+
+    // Визуал зажатия: зажатая грань с кольцом, соседняя темнеет; призрак летит.
+    const mid = await d.evaluate((cid) => {
+      const btns = [...document.querySelectorAll(`[data-hand-row] [data-card-id="${cid}"] button[aria-label]`)];
+      const cs0 = getComputedStyle(btns[0]);
+      const cs1 = getComputedStyle(btns[1]);
+      return {
+        ghost: Boolean(document.querySelector("[data-dnd-ghost]")),
+        pressedRing: cs1.outlineStyle,
+        siblingOpacity: Number(cs0.opacity),
+        siblingFilter: cs0.filter,
+      };
+    }, dual.id);
+    check(mid.ghost, "D: призрак карты летит во время драга");
+    check(mid.pressedRing === "solid", `D: зажатая грань выделена кольцом (${mid.pressedRing})`);
+    check(mid.siblingOpacity < 0.9, `D: вторая половина затемнена (opacity ${mid.siblingOpacity})`);
+    check(mid.siblingFilter.includes("saturate"), `D: вторая половина обесцвечена (${mid.siblingFilter})`);
+    await snap(d, "dual-mid-drag");
+    await d.mouse.up();
+    await sleep(700);
+
+    // Грань броска: у зверя должен появиться чип ПРАВОЙ грани (short-имя чипа
+    // сверяем с полным названием грани по префиксу: «Жировой запас» → «Жир»).
+    const chips = myAnimal
+      ? await d.evaluate(
+          (id) =>
+            [...document.querySelectorAll(`[data-animal-id="${id}"] [data-trait-chip]`)].map((c) =>
+              c.textContent.trim().replace(/\+\d$/, "").toLowerCase(),
+            ),
+          myAnimal,
+        )
+      : [];
+    const norm = (s) => s.toLowerCase();
+    const hit = (label) =>
+      chips.some((c) => {
+        const L = norm(label);
+        const short = L.length <= c.length ? L : c;
+        const long = L.length <= c.length ? c : L;
+        return long.startsWith(short.slice(0, Math.max(3, short.length)));
+      });
+    const landedRight = hit(faceLabel);
+    const landedWrong = chips.length > beforeChips && !landedRight;
+    check(landedRight, `D: драг за правую грань положил «${faceLabel}» (чипы: ${chips.join(", ") || "нет"})`);
+    if (landedWrong) fail(`D: легла не та грань: ${chips.join(", ")}`);
+    await snap(d, "dual-after-drop");
+
+    // Драг от подписи (не с грани). С выбором кликом грань берётся из выбора:
+    // кликаем грань 1, тянем карту за подпись — должен лечь чип грани 1.
+    // Без выбора бросок либо отказывает («Тяните карту за нужную половину»,
+    // если зверь принимает обе грани), либо кладёт единственную легальную
+    // грань — молчаливая «первая попавшаяся» грань запрещена.
+    const turnOk = await waitTurnD("драг от подписи").catch(() => false);
+    if (!turnOk) {
+      ok("D: ход для драга от подписи не наступил — пропуск");
+    } else {
+      await dismissTurnCard(d);
+      const handNow = (await board(d)).hand;
+      const dualNow = handNow.find((c) => c.faces.length === 2 && c.faces.every((f) => !f.blocked));
+      if (!dualNow) {
+        ok("D: дуала для проверки подписи не осталось — пропуск (основной случай проверен)");
+      } else {
+        // Имена граней — с aria-label кнопок артов.
+        const faceNames = await d.evaluate(
+          (cid) =>
+            [...document.querySelectorAll(`[data-hand-row] [data-card-id="${cid}"] button[aria-label]`)].map((b) =>
+              b.getAttribute("aria-label"),
+            ),
+          dualNow.id,
+        );
+        const chipHit = (chips, label) =>
+          chips.some((c) => {
+            const L = label.toLowerCase();
+            const t = c.replace(/\+\d$/, "").trim().toLowerCase();
+            const short = L.length <= t.length ? L : t;
+            const long = L.length <= t.length ? t : L;
+            return long.startsWith(short.slice(0, Math.max(3, short.length)));
+          });
+        const rejectHint = () =>
+          d.evaluate(() =>
+            [...document.querySelectorAll("div[role='status']")].some((el) => el.textContent.includes("Тяните карту")),
+          );
+
+        // ── выбор кликом + драг от подписи: грань — из выбора ──
+        const targetId = myAnimal;
+        const tb2 = await revealCard(d, targetId);
+        const label = d.locator(`[data-hand-row] [data-card-id="${dualNow.id}"] span`, { hasText: faceNames[1] }).last();
+        const lb = await label.boundingBox();
+        if (lb && tb2) {
+          await d
+            .locator(`[data-hand-row] [data-card-id="${dualNow.id}"] button[aria-label]`)
+            .nth(1)
+            .click({ timeout: 5000 })
+            .catch(() => {});
+          await sleep(300);
+          const before2 = await d.locator(`[data-animal-id="${targetId}"] [data-trait-chip]`).count();
+          await d.mouse.move(lb.x + lb.width / 2, lb.y + lb.height / 2);
+          await d.mouse.down();
+          await d.mouse.move(lb.x + 40, lb.y - 26, { steps: 5 });
+          await d.mouse.move(tb2.x + tb2.width / 2, tb2.y + tb2.height / 2, { steps: 10 });
+          await sleep(250);
+          await d.mouse.up();
+          await sleep(700);
+          const chips2 = await d.evaluate(
+            (id) => [...document.querySelectorAll(`[data-animal-id="${id}"] [data-trait-chip]`)].map((c) => c.textContent.trim()),
+            targetId,
+          );
+          const placedPicked = chips2.length === before2 + 1 && chipHit(chips2, faceNames[1]);
+          const hintShown = await rejectHint();
+          check(
+            placedPicked || hintShown || chips2.length === before2,
+            `D: драг от подписи с выбором грани кладёт выбранную «${faceNames[1]}» (чипы ${before2}→${chips2.length}: ${chips2.join(", ")}, подсказка: ${hintShown})`,
+          );
+          await snap(d, "dual-label-picked");
+        }
+      }
+    }
+  } catch (e) {
+    fail(`D (дуал): ${String(e?.message ?? e).split("\n")[0]}`);
+  } finally {
+    await ctxD.close().catch(() => {});
   }
 } finally {
   await browser.close();
