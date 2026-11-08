@@ -1,5 +1,6 @@
 import { BookOpen } from "lucide-react";
 import type { ReactNode } from "react";
+import { Link } from "@tanstack/react-router";
 import { LOGO } from "@/lib/art";
 import { cn } from "@/lib/utils";
 import { sfx } from "@/lib/sfx";
@@ -26,6 +27,12 @@ export interface TopBarProps {
    * одна компактная строка действий, разделы уходят в нижний таб-бар.
    */
   hideBrandOnMobile?: boolean;
+  /**
+   * Бренд — ссылка на главную: в меню и на страницах-разделах клик по
+   * «Эволюция» ведёт на /. За столом и в лобби не включается — клик по
+   * бренду не должен уносить из партии или из очереди.
+   */
+  homeLink?: boolean;
   className?: string;
 }
 
@@ -70,12 +77,45 @@ export function TopBar({
   children,
   left,
   hideBrandOnMobile,
+  homeLink,
   className,
 }: TopBarProps) {
   const t = useT();
   // Подпись обучения: явный проп или словарная — язык берём снапшотом useT,
   // чтобы разметка совпадала с SSR и менялась живо.
   const tutorialText = tutorialLabel ?? t("topbar.tutorial");
+  const brand = (
+    <>
+      <img
+        src={LOGO}
+        alt=""
+        className={cn(
+          "size-8 shrink-0 rounded-full border border-border object-cover",
+          hideBrandOnMobile && "max-sm:hidden",
+        )}
+      />
+      <div className={cn("min-w-0 flex-1", hideBrandOnMobile && "max-sm:hidden")}>
+        <div className="font-display text-lg leading-none">
+          {/* Название игры — тоже переводится, но длина почти не меняется. */}
+          {t("app.name")}
+        </div>
+        {/* На телефоне подпись переносится, а не обрезается: места в шапке
+            мало, а «Правильные игры · Кнорре» терять многоточие не должен. */}
+        {subtitle ? (
+          <div className="mt-1 text-xs leading-tight text-muted sm:truncate">
+            {subtitleShort ? (
+              <>
+                <span className="sm:hidden">{subtitleShort}</span>
+                <span className="hidden sm:inline">{subtitle}</span>
+              </>
+            ) : (
+              subtitle
+            )}
+          </div>
+        ) : null}
+      </div>
+    </>
+  );
   return (
     <header
       className={cn(
@@ -85,37 +125,17 @@ export function TopBar({
     >
       {left ? (
         <div className="flex min-w-0 flex-1 items-center gap-3">{left}</div>
+      ) : homeLink ? (
+        <Link
+          to="/"
+          title={t("nav.home")}
+          aria-label={t("nav.home")}
+          className="flex min-w-0 flex-1 items-center gap-3 rounded-[var(--radius-sm)] transition-opacity duration-[var(--motion-fast)] hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+        >
+          {brand}
+        </Link>
       ) : (
-        <>
-          <img
-            src={LOGO}
-            alt=""
-            className={cn(
-              "size-8 shrink-0 rounded-full border border-border object-cover",
-              hideBrandOnMobile && "max-sm:hidden",
-            )}
-          />
-          <div className={cn("min-w-0 flex-1", hideBrandOnMobile && "max-sm:hidden")}>
-            <div className="font-display text-lg leading-none">
-              {/* Название игры — тоже переводится, но длина почти не меняется. */}
-              {t("app.name")}
-            </div>
-            {/* На телефоне подпись переносится, а не обрезается: места в шапке
-                мало, а «Правильные игры · Кнорре» терять многоточие не должен. */}
-            {subtitle ? (
-              <div className="mt-1 text-xs leading-tight text-muted sm:truncate">
-                {subtitleShort ? (
-                  <>
-                    <span className="sm:hidden">{subtitleShort}</span>
-                    <span className="hidden sm:inline">{subtitle}</span>
-                  </>
-                ) : (
-                  subtitle
-                )}
-              </div>
-            ) : null}
-          </div>
-        </>
+        brand
       )}
       {/* Правый слот на узких экранах сжимается и переносится: шапка не
           задаёт документу минимальную ширину (иначе мобильный Chrome

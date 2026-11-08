@@ -269,7 +269,7 @@ export function FeaturePage({ titleKey, children }: { titleKey: TKey; children: 
         <div className="absolute inset-0 paper-desk opacity-[0.14]" />
       </div>
       <div className="relative flex min-h-dvh flex-col">
-        <TopBar subtitle={tt("app.brand")} hideBrandOnMobile>
+        <TopBar subtitle={tt("app.brand")} hideBrandOnMobile homeLink>
           <TopBarNav
             onTutorial={() => {
               sfx.play("modal");
@@ -369,7 +369,7 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
             раздел подсвечен). На телефоне (F7) шапка компактная: без лого
             и названия, без обучения и кнопок разделов (они ушли в нижний
             таб-бар с домиком) — остаются правила, статистика, звук и язык. */}
-        <TopBar subtitle={tt("app.brand")} hideBrandOnMobile>
+        <TopBar subtitle={tt("app.brand")} hideBrandOnMobile homeLink>
           <TopBarNav onTutorial={openTutorial} onRules={onRules} onStats={openStats} />
         </TopBar>
 
