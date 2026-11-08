@@ -312,6 +312,32 @@ function dndPointOf(e: PointerEvent | TouchEvent): { x: number; y: number } | nu
   return { x: e.clientX, y: e.clientY };
 }
 
+/**
+ * Бросок отпущен над рядом руки? Контейнер [data-hand-row] — цели броска там
+ * нет и быть не может: карта/зверь просто вернулись в руку. Возвращает false,
+ * если контейнера нет (фаза без руки) или точка не поймана.
+ */
+function pointInHand(point: { x: number; y: number } | null): boolean {
+  if (!point) return false;
+  const row = document.querySelector("[data-hand-row]");
+  if (!row) return false;
+  const r = row.getBoundingClientRect();
+  return point.x >= r.left && point.x <= r.right && point.y >= r.top && point.y <= r.bottom;
+}
+
+/**
+ * Жест был тапом, а не перетаскиванием: от исходного зажатия до броска палец
+ * почти не сместился. Порог больше допуска активации (tolerance 8) — тап с
+ * дрожанием пальца всё ещё тап. Мышь до порога 6px драг не включает вовсе,
+ поэтому ветка реально срабатывает только для «медленного тапа» пальцем.
+ */
+function isTapGesture(activatorEvent: Event | undefined, point: { x: number; y: number } | null): boolean {
+  if (!activatorEvent || !point) return false;
+  const start = dndPointOf(activatorEvent as PointerEvent | TouchEvent);
+  if (!start) return false;
+  return Math.hypot(point.x - start.x, point.y - start.y) < 10;
+}
+
 /** Куда встанет животное: до или после карточки-цели (по X пальца/курсора). */
 function dndSideOf(over: Over | null, point: { x: number; y: number } | null): "before" | "after" | null {
   const data = over?.data.current as DndData | undefined;
@@ -2554,6 +2580,29 @@ function Table() {
   };
 
   /**
+   * Выбор грани карты: свойство растения кладётся на растение (микориза — на
+   * два), парное — начинает пару, обычное — разыгрывается на зверя. Общая для
+   * клика по половине карты (док развития) и для «медленного тапа» пальцем,
+   * который днд-кит превращает в драг (см. handleDndEnd).
+   */
+  const selectCardFace = useCallback(
+    (cardId: string, face: number) => {
+      const card = human.hand.find((c) => c.id === cardId);
+      const trait = card?.faces[face] as TraitId | undefined;
+      if (!trait) return;
+      const def = TRAITS[trait];
+      if (def.plantTrait) {
+        if (trait === "micorrhiza") setIntent({ kind: "playPlantPair", cardId, face });
+        else setIntent({ kind: "playPlantTrait", cardId, face });
+        return;
+      }
+      if (def.isPair) setIntent({ kind: "playPair", cardId, face });
+      else setIntent({ kind: "playTrait", cardId, face });
+    },
+    [human.hand, setIntent],
+  );
+
+  /**
    * Что делать при броске. Легальность не дублируем: сверяемся с devActs
    * движка (devPlayAnimal / devPlayTrait / devPlayPair / devPlayPlantTrait /
    * devPlayPlantPair), а свои правила только выбираем подходящее действие.
@@ -2725,10 +2774,36 @@ function Table() {
     setDndActive(null);
     setDndOver(null);
     // Точка указателя нужна в performDndDrop (растение под броском), поэтому
-    // захватываем её до сброса — сам ref обнуляем сразу, как раньше.
-    const point = dndPointRef.current;
+    // захватываем её до сброса — сам ref обнуляем сразу, как раньше. Трекинг
+    // включается только с активацией драга, и «медленный тап» без движения ни
+    // одного move не дал: тогда точка броска — точка исходного зажатия.
+    const tracked = dndPointRef.current;
     dndPointRef.current = null;
+    const point = tracked ?? dndPointOf(e.activatorEvent as PointerEvent | TouchEvent);
     if (!active) return;
+    // ── Медленный тап по грани ── Датчик пальца включает драг после 220 мс
+    // удержания даже без движения: пользователь «кликает» половину карты
+    // (целится дольше порога), драг стартует, бросок без смещения падает в
+    // руку — и клик не выбирает грань. Тап без смещения выбирает зажатую
+    // грань, как обычный клик; заблокированной грани молча не выбираем —
+    // настоящий клик в этом случае сам покажет подсказку отказа.
+    if (isTapGesture(e.activatorEvent, point)) {
+      if (
+        active.kind === "card" &&
+        active.cardId &&
+        active.face != null &&
+        faceAvailable(active.cardId, active.face)
+      ) {
+        selectCardFace(active.cardId, active.face);
+        sfx.play("click");
+      }
+      return;
+    }
+    // ── Бросок над рукой ── цели под указателем нет и быть не может: тащимое
+    // вернулось в руку. Отменяем молча — ни подсказки «не туда», ни хода:
+    // пересечение «призрака» с карточками стола над доком не считается
+    // намеренным броском. (Двигали заметно — значит, промахнулись в руку.)
+    if (pointInHand(point)) return;
     if (!info || !dndTargetAllowed(active, info.data)) {
       rejectDrop(info ? dropReasonForTarget(info.data) : "drop", point);
       return;
@@ -3398,20 +3473,8 @@ function Table() {
               faceAvailable={faceAvailable}
               onPlayAnimal={(cardId, zoneId) => dispatch({ type: "devPlayAnimal", cardId, zoneId })}
               onPlaceAnimal={(cardId) => setIntent({ kind: "placeAnimal", cardId })}
-              onPickTrait={(cardId, face) => {
-                const card = human.hand.find((c) => c.id === cardId);
-                const trait = card?.faces[face] as TraitId | undefined;
-                if (!trait) return;
-                const def = TRAITS[trait];
-                if (def.plantTrait) {
-                  // Свойство растения кладётся на растение стола (микориза — на два).
-                  if (trait === "micorrhiza") setIntent({ kind: "playPlantPair", cardId, face });
-                  else setIntent({ kind: "playPlantTrait", cardId, face });
-                  return;
-                }
-                if (def.isPair) setIntent({ kind: "playPair", cardId, face });
-                else setIntent({ kind: "playTrait", cardId, face });
-              }}
+              // Выбор грани — общий с «медленным тапом» в handleDndEnd.
+              onPickTrait={selectCardFace}
               onPass={() => {
                 sfx.play("endTurn");
                 dispatch({ type: "devPass" });
@@ -3902,12 +3965,19 @@ function pairChains(animals: Animal[]): Animal[][] {
  * времени, чтобы сбитые часы устройства не врали. Слот фиксированного размера
  * зарезервирован всегда — табло не «прыгает», когда индикатора нет.
  * При `prefers-reduced-motion` остаётся только число (дуга скрыта).
+ *
+ * T1: тем же бейджем тикает и ход БОТА на его табло — метка там следующего
+ * шага сервера (botStepAt): у ботов нет дедлайна конца хода, есть темп шагов.
+ * У шага бота нет «аварийного» состояния (это не таймаут), у хода человека
+ * последние 5 секунд подсвечиваются красным с лёгкой пульсацией дуги.
  */
 const TurnTimer = memo(function TurnTimer({
   deadlineAt,
   offsetMs,
   who,
   isHuman,
+  isBotStep = false,
+  totalMs = PACE.idleTurnMs,
 }: {
   /** Абсолютный дедлайн (мс эпохи, серверные часы); null — таймера нет. */
   deadlineAt: number | null;
@@ -3916,6 +3986,10 @@ const TurnTimer = memo(function TurnTimer({
   /** Имя игрока — для подписи на чужом табло. */
   who: string;
   isHuman: boolean;
+  /** Метка — следующий шаг бота, а не дедлайн хода человека. */
+  isBotStep?: boolean;
+  /** Полная длительность отсчёта для дуги (мс): настройка стола или темп бота. */
+  totalMs?: number;
 }) {
   const t = useT();
   const leftOf = (deadline: number) => Math.max(0, deadline - (Date.now() + offsetMs));
@@ -3930,7 +4004,7 @@ const TurnTimer = memo(function TurnTimer({
     let lastAt = 0;
     const tick = (t: number) => {
       // ~4 обновления в секунду: дуга убывает плавно, React не частит.
-      if (t - lastAt >= 200) {
+      if (t - lastAt >= 250) {
         lastAt = t;
         setLeft(leftOf(deadlineAt));
       }
@@ -3944,21 +4018,30 @@ const TurnTimer = memo(function TurnTimer({
 
   if (deadlineAt === null) return <span aria-hidden className="inline-block size-6 shrink-0" />;
   const secs = Math.max(0, Math.ceil(left / 1000));
-  const frac = Math.max(0, Math.min(1, left / PACE.idleTurnMs));
+  const frac = Math.max(0, Math.min(1, left / Math.max(1, totalMs)));
+  // Аварийные пять секунд — только у дедлайна хода человека: шаг бота не
+  // таймаут, краснеть ему нечего.
+  const urgent = !isBotStep && secs <= 5;
   const R = 8.5;
   const C = 2 * Math.PI * R;
-  const hint = isHuman
-    ? t("game.timerHuman", { n: secs })
-    : t("game.timerOther", { name: who, n: secs });
+  const hint = isBotStep
+    ? t("game.timerBot", { name: who, n: secs })
+    : isHuman
+      ? t("game.timerHuman", { n: secs })
+      : t("game.timerOther", { name: who, n: secs });
   return (
     <span
       role="timer"
       aria-label={hint}
       title={hint}
       data-turn-timer
+      data-turn-timer-urgent={urgent || undefined}
       // Тёмная «монета» под кольцом: на цветной подложке места дуга акцента
       // иначе сливалась бы с фоном, а число теряло контраст.
-      className="relative inline-grid size-6 shrink-0 place-items-center rounded-full bg-bg/70"
+      className={cn(
+        "relative inline-grid size-6 shrink-0 place-items-center rounded-full bg-bg/70",
+        urgent && "ring-1 ring-[color:var(--color-danger)]",
+      )}
     >
       {/* Медленное вращение (18 с) оживляет дугу: при reduced-motion оно снято. */}
       <svg
@@ -3974,7 +4057,8 @@ const TurnTimer = memo(function TurnTimer({
           strokeWidth="2"
           style={{ stroke: "var(--color-border-strong)" }}
         />
-        {/* Движущаяся дуга: при reduced-motion остаётся только число. */}
+        {/* Движущаяся дуга: при reduced-motion остаётся только число.
+            На последних пяти секундах дуга краснеет и мягко пульсирует. */}
         <circle
           cx="10"
           cy="10"
@@ -3984,14 +4068,21 @@ const TurnTimer = memo(function TurnTimer({
           strokeLinecap="round"
           strokeDasharray={C}
           strokeDashoffset={C * (1 - frac)}
-          className="motion-reduce:hidden"
+          className={cn("motion-reduce:hidden", urgent && "animate-pulse motion-reduce:animate-none")}
           style={{
-            stroke: "var(--color-accent)",
+            stroke: urgent ? "var(--color-danger)" : "var(--color-accent)",
             transition: "stroke-dashoffset 200ms linear",
           }}
         />
       </svg>
-      <span className="text-[10px] font-semibold tabular-nums text-fg">{secs}</span>
+      <span
+        className={cn(
+          "text-[10px] font-semibold tabular-nums",
+          urgent ? "text-[color:var(--color-danger)]" : "text-fg",
+        )}
+      >
+        {secs}
+      </span>
     </span>
   );
 });
@@ -4062,10 +4153,20 @@ const PlayerSection = memo(function PlayerSection({
   const score = gameState && gameState.phase !== "gameOver" ? liveScore(gameState, p.id) : null;
   const active = actorId === p.id;
   const currentTurn = gameState?.phase !== "gameOver" && gameState?.currentPlayerId === p.id;
-  // M10: отсчёт авто-конца хода — только у того, чей сейчас ход (сервер
-  // ставит метку лишь человеку, у которого не осталось действий).
+  // M10: отсчёт авто-конца хода — у того, чей сейчас ход; у бота своей метки
+  // «конца хода» нет (сервер ведёт его шагами), поэтому T1 тикает по метке
+  // следующего шага (botStepAt) — тоже только у активного табло.
   const turnDeadlineAt = useGameStore((s) => s.net?.turnDeadlineAt ?? null);
+  const botStepAt = useGameStore((s) => s.net?.botStepAt ?? null);
   const serverOffsetMs = useGameStore((s) => s.net?.serverOffsetMs ?? 0);
+  // Полная длина отсчёта для дуги: настройка стола «Таймер хода» (если хост
+  // её выбрал), иначе прежние 30 с idle-дедлайна; у бота — темп его шагов.
+  const turnTimerMs = useGameStore((s) => s.net?.settings.turnTimerMs ?? null);
+  const timerTotalMs = p.isAI
+    ? PACE.botMs + PACE.jitterMs
+    : turnTimerMs && turnTimerMs > 0
+      ? turnTimerMs
+      : PACE.idleTurnMs;
   /** Карта, ожидающая выбора континента (интент «выставить животное»). */
   const placingAnimal =
     isHuman && active && intent.kind === "placeAnimal" ? (intent.cardId as string) : undefined;
@@ -4226,10 +4327,12 @@ const PlayerSection = memo(function PlayerSection({
           {isHuman ? t("game.yourPopulation") : scientistName(p.name, lang)}
           {currentTurn ? <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-accent" /> : null}
           <TurnTimer
-            deadlineAt={active ? turnDeadlineAt : null}
+            deadlineAt={active ? (p.isAI ? botStepAt : turnDeadlineAt) : null}
             offsetMs={serverOffsetMs}
             who={scientistName(p.name, lang)}
             isHuman={Boolean(isHuman)}
+            isBotStep={Boolean(p.isAI)}
+            totalMs={timerTotalMs}
           />
           {seatInfo && !p.isAI && !seatInfo.online ? (
             <span

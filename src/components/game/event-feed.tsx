@@ -1,4 +1,4 @@
-import { ArrowDown, ChevronLeft, ChevronRight, Dices, Send, SmilePlus } from "lucide-react";
+import { ArrowDown, ChevronLeft, ChevronRight, Dices, Send, SmilePlus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { REACTION_EMOJI, type ReactionEmoji, type ReactionMessage } from "@/lib/net/shared";
@@ -576,9 +576,11 @@ function FeedRow({
  * (плавная анимация ширины). Свёрнутое состояние — узкий рельс справа сверху
  * с кнопкой раскрытия и красной точкой непрочитанного чата.
  *
- * Телефон и планшет (<xl): шторка в потоке после игрового стола (на планшете
- * центрированная, ограниченной ширины) — ни табло, ни шапку она не накрывает,
- * раскрытие прокручивает страницу к ней.
+ * Телефон (<640px): полноэкранный лист поверх стола — фон-затемнение под ним,
+ * прокрутка страницы заблокирована, шапка с крестиком с учётом safe-area.
+ * Планшет (sm…xl): шторка в потоке после игрового стола (центрированная,
+ * ограниченной ширины) — ни табло, ни шапку она не накрывает, раскрытие
+ * прокручивает страницу к ней.
  *
  * Внутри: фильтры «Всё/События/Чат» (кнопки, не списки; «Зрители» — только
  * когда зрительские реплики есть в ленте), быстрые фразы, кнопка броска
@@ -626,9 +628,11 @@ export function EventFeed({
   // Панель на sm…xl не должна накрывать нижний док (карта руки в развитии).
   const dockInset = useDockInset(open && variant === "dock");
 
-  // Мобильный журнал живёт в потоке после стола, поэтому открытие прокручивает
-  // к нему вместо наложения на секции игроков. Esc закрывает шторку, а фокус
-  // возвращается на кнопку в шапке, открывшую журнал.
+  // Мобильный журнал: на телефоне (<640px) это полноэкранный лист поверх стола,
+  // на планшете (sm…xl) — шторка в потоке после стола. Планшет прокручивает
+  // страницу к шторке при открытии; телефону прокрутка не нужна — лист сам
+  // накрывает экран. Esc закрывает лист, а фокус возвращается на кнопку в
+  // шапке, открывшую журнал.
   useEffect(() => {
     if (variant !== "dock") return;
     const wasOpen = wasOpenRef.current;
@@ -644,14 +648,39 @@ export function EventFeed({
     wasOpenRef.current = open;
     if (!open) return;
     requestAnimationFrame(() => {
-      // Шторка живёт в потоке после стола на всех ширинах до xl: раскрывшись,
-      // прокручиваем страницу к ней (иначе пользователь видит только стол и
-      // решает, что чат не открылся).
-      if (window.matchMedia("(max-width: 79.999rem)").matches) {
+      // Только планшет (sm…xl): шторка в потоке, надо доскроллить до неё.
+      if (window.matchMedia("(min-width: 40rem) and (max-width: 79.999rem)").matches) {
         mobileSheetRef.current?.scrollIntoView({ block: "end" });
       }
     });
   }, [open, onToggle, variant]);
+
+  // Полноэкранный лист на телефоне блокирует прокрутку страницы под собой:
+  // стол не должен ёрзать под оверлеем и «дышать» при тапах по сообщениям.
+  // На планшете шторка живёт в потоке — там блокировать нечего; поворот
+  // экрана или смена ширины посреди открытия снимает блокировку сама.
+  useEffect(() => {
+    if (!open || variant !== "dock" || typeof window === "undefined") return;
+    const mq = window.matchMedia("(max-width: 39.999rem)");
+    const body = document.body;
+    const restore = body.style.overflow;
+    let locked = false;
+    const sync = () => {
+      if (mq.matches && !locked) {
+        locked = true;
+        body.style.overflow = "hidden";
+      } else if (!mq.matches && locked) {
+        locked = false;
+        body.style.overflow = restore;
+      }
+    };
+    sync();
+    mq.addEventListener("change", sync);
+    return () => {
+      mq.removeEventListener("change", sync);
+      if (locked) body.style.overflow = restore;
+    };
+  }, [open, variant]);
 
   useEffect(() => {
     if (!open || variant !== "dock") return;
@@ -1048,44 +1077,63 @@ export function EventFeed({
         )}
       </aside>
 
-      {/* ── Телефон и планшет (до xl): шторка занимает отдельное место в потоке
-          после игрового стола — не накрывает табло и не сдвигает его; открывается
-          кнопкой в шапке (там же счётчик непрочитанного). Раньше на sm…xl шторка
-          становилась fixed-панелью справа: на планшете она съедала пол-экрана,
-          накрывала шапку и табло, а замер дока завышался прокруткой и сжимал
-          панель до трети высоты. ── */}
+      {/* ── Телефон (<640px): полноэкранный лист ПОВЕРХ стола — fixed inset-0.
+          Под ним фон-затемнение: тап мимо листа закрывает его. Прокрутка страницы
+          под листом блокируется (см. эффект ниже), шапка отступает от «чёлки»
+          (safe-area-top), композер уже учтёт safe-area-bottom. Открывается той
+          же кнопкой журнала в шапке; закрывается крестиком, тапом по фону и Esc.
+          Финальный экран (z-40) и карточка «Ваш ход» остаются над листом.
+
+          Планшет (sm…xl): прежняя шторка В ПОТОКЕ после игрового стола — не
+          накрывает табло и не сдвигает его. Раньше на sm…xl шторка становилась
+          fixed-панелью справа: на планшете она съедала пол-экрана, накрывала
+          шапку и табло, а замер дока завышался прокруткой и сжимал панель до
+          трети высоты. ── */}
       <div className="relative z-30 xl:hidden">
         {open ? (
-          <section
-            ref={mobileSheetRef}
-            aria-label={titleText}
-            data-feed-mobile
-            style={{ "--feed-gap": `${Math.max(16, dockInset)}px` } as CSSProperties}
-            className={cn(
-              // Шторка после стола: финальный экран (z-40) остаётся над ней,
-              // sticky-док (z-20) — под ней. Планшет: та же шторка, но ширина
-              // ограничена и центрирована — строка чата не растягивается на
-              // весь экран, а боковые поля остаются как у телефона.
-              "relative z-30 mx-2 mt-2 mb-[var(--feed-gap)] flex h-[min(58dvh,32rem)] max-h-[calc(100dvh-6rem)] min-h-[22rem] flex-col overflow-hidden rounded-[var(--radius-lg)] border border-border bg-surface shadow-[var(--shadow-card)]",
-              "sm:mx-auto sm:w-[min(40rem,calc(100%-1rem))]",
-              "animate-[fade-in_.2s_var(--ease-out)]",
-            )}
-          >
-            <header className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border px-2.5 py-2">
-              <button
-                type="button"
-                onClick={() => onToggle(false)}
-                aria-label={t("feed.collapse", { title: titleText })}
-                className="grid size-8 max-xl:size-11 shrink-0 place-items-center rounded-[var(--radius-sm)] text-muted transition-colors duration-[var(--motion-fast)] hover:bg-surface-2 hover:text-fg"
-              >
-                <ChevronRight className="size-4" />
-              </button>
-              <span className="min-w-0 flex-1 truncate text-sm font-medium text-muted">{titleText}</span>
-              {filters}
-            </header>
-            {list("text-sm", listSheetRef)}
-            {composer}
-          </section>
+          <>
+            {/* Фон-затемнение только на телефоне: под полноэкранным листом его
+                не видно, но тап в момент анимации открытия/краевые случаи
+                всё равно закрывают лист, как требует жест «тап мимо». */}
+            <div
+              aria-hidden
+              data-feed-backdrop
+              onClick={() => onToggle(false)}
+              className="fixed inset-0 z-30 bg-ink/60 sm:hidden"
+            />
+            <section
+              ref={mobileSheetRef}
+              aria-label={titleText}
+              data-feed-mobile
+              style={{ "--feed-gap": `${Math.max(16, dockInset)}px` } as CSSProperties}
+              className={cn(
+                // Телефон: лист на весь экран поверх стола. Планшет: та же
+                // шторка в потоке после стола — ширина ограничена и
+                // центрирована, боковые поля остаются как у телефона.
+                "fixed inset-0 z-40 flex flex-col overflow-hidden bg-surface",
+                "sm:relative sm:inset-auto sm:z-30 sm:mx-auto sm:mt-2 sm:mb-[var(--feed-gap)] sm:h-[min(58dvh,32rem)] sm:max-h-[calc(100dvh-6rem)] sm:min-h-[22rem] sm:w-[min(40rem,calc(100%-1rem))] sm:rounded-[var(--radius-lg)] sm:border sm:border-border sm:shadow-[var(--shadow-card)]",
+                "animate-[fade-in_.2s_var(--ease-out)]",
+              )}
+            >
+              <header className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border px-2.5 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+                <button
+                  type="button"
+                  onClick={() => onToggle(false)}
+                  aria-label={t("feed.collapse", { title: titleText })}
+                  className="grid size-8 max-xl:size-11 shrink-0 place-items-center rounded-[var(--radius-sm)] text-muted transition-colors duration-[var(--motion-fast)] hover:bg-surface-2 hover:text-fg"
+                >
+                  {/* Палец — крестик поверх экрана, мышь планшета — стрелка
+                      к столу: одна кнопка, иконка по ширине. */}
+                  <X className="size-4 sm:hidden" />
+                  <ChevronRight className="hidden size-4 sm:block" />
+                </button>
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-muted">{titleText}</span>
+                {filters}
+              </header>
+              {list("text-sm", listSheetRef)}
+              {composer}
+            </section>
+          </>
         ) : null}
       </div>
     </>

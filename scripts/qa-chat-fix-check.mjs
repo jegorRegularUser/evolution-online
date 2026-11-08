@@ -133,9 +133,30 @@ for (const width of WIDTHS) {
   const m = await metrics(page);
   const problems = [];
   if (m.hScroll) problems.push("горизонтальный скролл страницы");
-  if (m.feed?.fixed === "fixed") problems.push("лента fixed вне потока");
-  if (m.overlap && m.overlap.xOverlap > 0 && m.overlap.yOverlap > 40)
-    problems.push(`лента перекрывает стол на ${m.overlap.xOverlap}x${m.overlap.yOverlap}px`);
+  // Контракт зависит от ширины: на телефоне (<640) журнал — полноэкранный
+  // fixed-лист ПОВЕРХ стола (это оверлей, перекрытие стола — его суть);
+  // на планшете (sm…xl) — шторка в потоке после стола, fixed запрещён;
+  // на xl шторка скрыта (живет колонка), проверяем только отсутствие скролла.
+  const sheetVisible = Boolean(m.feed && m.feed.w > 0);
+  if (sheetVisible && width < 640) {
+    if (m.feed.fixed !== "fixed") problems.push("на телефоне лента не полноэкранный fixed-лист");
+    if (Math.abs(m.feed.w - m.innerW) > 2) problems.push(`лист не на всю ширину (${m.feed.w} из ${m.innerW})`);
+    if (m.feed.h < m.main.h - 40) problems.push(`лист не на всю высоту (${m.feed.h})`);
+    const locked = await page.evaluate(() => getComputedStyle(document.body).overflow === "hidden");
+    if (!locked) problems.push("прокрутка страницы не заблокирована под листом");
+    const hasClose = await page
+      .locator('[aria-label^="Свернуть «"]:visible')
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (!hasClose) problems.push("крестик закрытия не найден");
+    const hasBackdrop = await page.evaluate(() => Boolean(document.querySelector("[data-feed-backdrop]")));
+    if (!hasBackdrop) problems.push("фон-затемнение листа не найдено");
+  } else if (sheetVisible) {
+    if (m.feed.fixed === "fixed") problems.push("лента fixed вне потока");
+    if (m.overlap && m.overlap.xOverlap > 0 && m.overlap.yOverlap > 40)
+      problems.push(`лента перекрывает стол на ${m.overlap.xOverlap}x${m.overlap.yOverlap}px`);
+  }
 
   await shot(page, `chatfix-${width}-dock`);
   // Крупный план ленты: контраст времени и кнопки реакции на подложках.
