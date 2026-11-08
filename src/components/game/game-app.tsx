@@ -17,7 +17,7 @@ import {
   type Over,
 } from "@dnd-kit/core";
 import { BookOpen, Eye, LayoutGrid, List, Minimize2, Trash2 } from "lucide-react";
-import { lazy, memo, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Toaster, toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DialogShell } from "@/components/ui/dialog-shell";
@@ -63,7 +63,6 @@ import { GameOverScreen, MenuScreen, RulesPanel, scoreRowName } from "./screens"
 import { EventSpotlight } from "./spotlight";
 import { SoundToggle } from "./sound-toggle";
 import { TopBar } from "./top-bar";
-import { TutorialScreen } from "./tutorial";
 import { TutorialHud } from "./tutorial-missions";
 import { CHALLENGES } from "@/game/challenges";
 import { challengesReport, profileGet } from "@/lib/profile/api";
@@ -170,7 +169,7 @@ interface Interaction {
 
 const NO_INTERACTION: Interaction = { highlight: false, dimmed: false, selected: false, danger: false, dropTarget: false };
 
-type RejectReason = "opponent" | "trait" | "target" | "drop" | "phase" | "hand";
+type RejectReason = "opponent" | "trait" | "target" | "drop" | "phase" | "hand" | "face";
 
 interface RejectHintState {
   text: string;
@@ -186,6 +185,7 @@ const REJECT_COPY: Record<Lang, Record<RejectReason, string>> = {
     drop: "Бросок сюда не подходит",
     phase: "Сейчас это действие недоступно",
     hand: "В руке нет свободного слота",
+    face: "Тяните карту за нужную половину",
   },
   en: {
     opponent: "This animal belongs to an opponent",
@@ -194,6 +194,7 @@ const REJECT_COPY: Record<Lang, Record<RejectReason, string>> = {
     drop: "This card cannot be dropped here",
     phase: "This action is not available now",
     hand: "There is no free slot in your hand",
+    face: "Drag the card by the face you want",
   },
 };
 
@@ -237,6 +238,11 @@ interface DndData {
   ownerId?: number;
   animalId?: string;
   cardId?: string;
+  /**
+   * Грань multi-карты, за которую её тянут (колонка арта под pointerdown).
+   * Нет — драг начат не с грани: грань подскажет выбор кликом или движок.
+   */
+  face?: number;
   playerId?: number;
   zoneId?: TerritoryId;
 }
@@ -1427,7 +1433,9 @@ function OfflineStartNotice({
 
 /** Тихая плашка ожидания ходящего игрока без намёка на его вину.
  *  Живёт в одной строке с панелью реакций (см. ReactionsLayer), чтобы две
- *  тонкие строки не съедали высоту стола. */
+ *  тонкие строки не съедали высоту стола. На телефоне — короткий текст
+ *  («Ждём: имя · N с») с обрезкой: строка не переносится и не наращивает
+ *  вторую линию, обратный отсчёт тикает как и раньше. */
 function WaitingPlayerNotice({ actor, net }: { actor: Player | null; net: NetUiState | null }) {
   const t = useT();
   const lang = useLang();
@@ -1444,15 +1452,21 @@ function WaitingPlayerNotice({ actor, net }: { actor: Player | null; net: NetUiS
     ? Math.max(0, Math.ceil((net.turnDeadlineAt - (Date.now() + net.serverOffsetMs)) / 1000))
     : null;
   const name = scientistName(actor.name, lang);
+  const short = remaining !== null ? t("netBot.waitingShort", { name, n: remaining }) : t("netBot.waitingShortIdle", { name });
   return (
     <div
       role="status"
       aria-live="polite"
       data-waiting-player={actor.id}
-      className="pointer-events-none mr-auto flex w-fit max-w-[calc(100%_-_1.5rem)] min-w-0 items-center gap-2 rounded-full border border-border bg-surface/90 px-3 py-1.5 text-xs text-muted shadow-[var(--shadow-card)]"
+      className="pointer-events-none mr-auto flex min-w-0 flex-1 items-center gap-2 rounded-full border border-border bg-surface/90 px-3 py-1.5 text-xs text-muted shadow-[var(--shadow-card)] sm:flex-none sm:w-fit"
     >
       <span className="size-1.5 shrink-0 rounded-full bg-muted/70" aria-hidden />
-      <span>
+      {/* Полный текст — с sm; на телефоне короткий, чтобы строка реакций
+          оставалась одной компактной полосой. aria/live читают полный. */}
+      <span className="min-w-0 truncate sm:hidden" aria-hidden>
+        {short}
+      </span>
+      <span className="hidden min-w-0 sm:inline">
         {t("netBot.waitingPlayer", { name })}
         {remaining !== null
           ? t("netBot.waitingTurnEnds", { n: remaining })
@@ -1474,7 +1488,6 @@ export function GameApp() {
   const equippedCosmetics = useGameStore((s) => s.equippedCosmetics);
   const t = useT();
   const [confirmAgain, setConfirmAgain] = useState(false);
-  const [tutorialOpen, setTutorialOpen] = useState(false);
   const [lobbyReplaceTarget, setLobbyReplaceTarget] = useState<SeatInfo | null>(null);
   const { replace: replaceLobbyBot, busySeat: lobbyBusySeat } = useOfflineBotReplacement(net);
   const spectator = Boolean(net && (net.spectating || net.seat === -2));
@@ -1550,14 +1563,13 @@ export function GameApp() {
   }, [state?.phase, state?.stats, t]);
   useEffect(() => {
     // Модалки не должны переезжать вместе с новым столом после ухода/возврата.
-    setTutorialOpen(false);
     setLobbyReplaceTarget(null);
   }, [net?.code]);
   const againBody = t("final.againBody");
   const againConfirm = t("final.againConfirm");
   const waitingForHost = t("final.waitingHost");
 
-  // Модалки (правила, статистика, обучение) звучат тихим свушем на вход и выход.
+  // Модалки (правила, статистика) звучат тихим свушем на вход и выход.
   const openRules = useCallback(() => {
     sfx.play("modal");
     setRulesOpen(true);
@@ -1566,14 +1578,6 @@ export function GameApp() {
     sfx.play("modal");
     setRulesOpen(false);
   }, [setRulesOpen]);
-  const openTutorial = useCallback(() => {
-    sfx.play("modal");
-    setTutorialOpen(true);
-  }, []);
-  const closeTutorial = useCallback(() => {
-    sfx.play("modal");
-    setTutorialOpen(false);
-  }, []);
 
   // AudioContext живёт только после пользовательского жеста — будим по первому
   // клику/тапу/клавише. Слушатели висят на уровне всего приложения (а не стола),
@@ -1661,7 +1665,7 @@ export function GameApp() {
           {t("game.reconnecting")}
         </div>
       ) : null}
-      <Table onTutorial={openTutorial} />
+      <Table />
       {state.phase === "gameOver" && state.scores ? (
         spectator ? (
           <SpectatorGameOver state={state} onMenu={leaveNet} />
@@ -1698,7 +1702,6 @@ export function GameApp() {
         />
       ) : null}
       {rulesOpen ? <RulesPanel onClose={closeRules} /> : null}
-      {tutorialOpen ? <TutorialScreen onClose={closeTutorial} phase={state.phase} /> : null}
       <Toaster {...TOASTER_OPTS} />
     </div>
   );
@@ -1962,14 +1965,7 @@ function PendingActionHint({ pending }: { pending: PendingNetItem | null }) {
   );
 }
 
-function Table({
-  onTutorial,
-  tutorialLabel,
-}: {
-  onTutorial: () => void;
-  /** Явная подпись кнопки обучения; без пропа TopBar берёт словарную. */
-  tutorialLabel?: string;
-}) {
+function Table() {
   const state = useGameStore((s) => s.state)!;
   const equippedCosmetics = useGameStore((s) => s.equippedCosmetics);
   const intent = useGameStore((s) => s.intent);
@@ -2290,7 +2286,9 @@ function Table({
    */
   const cardDragTargets = useMemo(() => {
     if (dndActive?.kind !== "card" || !dndActive.cardId) return null;
-    const face = selectedFaceOf(dndActive.cardId);
+    // Грань, за которую тянут (колонка арта), важнее выбора кликом: цели
+    // подсвечиваются и гаснут под конкретную половину карты.
+    const face = dndActive.face ?? selectedFaceOf(dndActive.cardId);
     if (intent.kind === "playPair" && intent.cardId === dndActive.cardId) {
       return legalPairTargets(devActs, intent);
     }
@@ -2311,7 +2309,7 @@ function Table({
    */
   const cardDragPlants = useMemo(() => {
     if (dndActive?.kind !== "card" || !dndActive.cardId) return null;
-    const set = legalPlantTargets(devActs, dndActive.cardId, selectedFaceOf(dndActive.cardId));
+    const set = legalPlantTargets(devActs, dndActive.cardId, dndActive.face ?? selectedFaceOf(dndActive.cardId));
     return set.size ? set : new Set([NO_PLANT_TARGET]);
   }, [dndActive, devActs, selectedFaceOf]);
 
@@ -2608,7 +2606,9 @@ function Table({
     if (active.kind !== "card" || !active.cardId) return rejectDrop("drop", point);
     const cardId = active.cardId;
     if (!human.hand.some((c) => c.id === cardId)) return rejectDrop("hand", point);
-    const face = selectedFaceOf(cardId);
+    // Грань броска: колонка арта, за которую карту тянули, приоритетнее выбора
+    // кликом (жест свежее намерения) — а без неё остаётся прежняя логика.
+    const face = active.face ?? selectedFaceOf(cardId);
     const acts = devActs.filter((a): a is DevCardAction => {
       if (a.type !== "devPlayTrait" && a.type !== "devPlayPair" && a.type !== "devPlayPlantTrait" && a.type !== "devPlayPlantPair") {
         return false;
@@ -2630,12 +2630,20 @@ function Table({
       }
       const simple = acts.find((a) => a.type === "devPlayTrait" && a.animalId === animalId);
       if (simple) {
+        // Драг не с грани, а зверь принимает несколько свойств карты: грань
+        // неопределима — отказ вместо молчаливой первой попавшейся.
+        if (face == null && acts.some((a) => a.type === "devPlayTrait" && a.animalId === animalId && a.face !== simple.face)) {
+          return rejectDrop("face", point);
+        }
         captureCardFlight(cardId);
         return dispatch(simple);
       }
       // Парная грань без первого зверя: бросок выбирает первого, второй — дальше.
       const pair = acts.find((a) => a.type === "devPlayPair" && a.a === animalId);
       if (pair) {
+        if (face == null && acts.some((a) => a.type === "devPlayPair" && a.a === animalId && a.face !== pair.face)) {
+          return rejectDrop("face", point);
+        }
         setIntent({ kind: "playPair", cardId, face: pair.face, first: animalId });
         sfx.play("click");
         return;
@@ -2669,9 +2677,17 @@ function Table({
         return rejectDrop("target", point);
       }
       const simple = acts.find((a) => a.type === "devPlayPlantTrait" && a.plantId === plantId);
-      if (simple) return dispatch(simple);
+      if (simple) {
+        if (face == null && acts.some((a) => a.type === "devPlayPlantTrait" && a.plantId === plantId && a.face !== simple.face)) {
+          return rejectDrop("face", point);
+        }
+        return dispatch(simple);
+      }
       const pair = acts.find((a) => a.type === "devPlayPlantPair" && (a.a === plantId || a.b === plantId));
       if (pair) {
+        if (face == null && acts.some((a) => a.type === "devPlayPlantPair" && (a.a === plantId || a.b === plantId) && a.face !== pair.face)) {
+          return rejectDrop("face", point);
+        }
         setIntent({ kind: "playPlantPair", cardId, face: pair.face, first: plantId });
         sfx.play("click");
         return;
@@ -2826,10 +2842,14 @@ function Table({
     }
     if (dndActive.kind === "card" && dndActive.cardId) {
       const card = human.hand.find((c) => c.id === dndActive.cardId);
-      return card ? <CardPreview card={card} /> : null;
+      if (!card) return null;
+      // В призраке подсвечена та половина, за которую карту тянут; без грани —
+      // выбранная кликом, чтобы и при драге от выбора кольцо не исчезало.
+      const activeFace = dndActive.face ?? selectedFaceOf(dndActive.cardId);
+      return <CardPreview card={card} activeFace={activeFace} />;
     }
     return null;
-  }, [dndActive, state, human.hand]);
+  }, [dndActive, state, human.hand, selectedFaceOf]);
   useSfx(state);
   const fly = useFoodFly(state);
   // Сеть: пропущенные шаги (спотлайт + звук), вход/выход игроков и новые реплики.
@@ -2988,13 +3008,9 @@ function Table({
         className="pointer-events-none fixed inset-0 -z-10 bg-cover bg-center opacity-[0.07]"
         style={{ backgroundImage: `url(${BG.valley})` }}
       />
-      {/* Обучение (волна 1.5): живой список целей поверх учебной партии. */}
-      <TutorialHud />
       <TopBar
         subtitle={`${t("game.yearN", { year: state.year })}${state.lastYear ? ` · ${t("game.yearLast")}` : ""} · ${t(PHASE_LABEL[state.phase] ?? ("phase.development" as const))}${actor ? ` · ${scientistName(actor.name, lang)}` : ""}`}
         subtitleShort={`${t("game.yearN", { year: state.year })} · ${t(PHASE_LABEL[state.phase] ?? ("phase.development" as const))}`}
-        onTutorial={onTutorial}
-        tutorialLabel={tutorialLabel}
       >
         <div className="flex items-center gap-2">
           <FoodBankChip count={state.foodBank} visible={state.phase === "feeding" || state.phase === "foodBank"} />
@@ -3005,7 +3021,7 @@ function Table({
             <Button
               variant="ghost"
               size="icon"
-              className="hidden lg:inline-flex"
+              className="hidden size-9 lg:inline-flex sm:size-11"
               aria-label={tableLayout === "cozy" ? t("game.layoutWide") : t("game.layoutCozy")}
               aria-pressed={tableLayout === "wide"}
               title={tableLayout === "cozy" ? t("game.layoutWide") : t("game.layoutCozy")}
@@ -3094,11 +3110,14 @@ function Table({
 
       <TableBanners state={state} />
 
-      {/* Режим зрителя: read-only бейдж и панель реакций (доступна и игрокам). */}
+      {/* Режим зрителя: на sm+ бейдж висит по центру под шапкой; на телефоне
+          он переехал в строку реакций (см. ReactionsLayer) — раньше на узком
+          экране он был отдельной строкой поверх строки реакций и ожидания,
+          и это нагромождение съедало высоту стола. */}
       {net?.spectating ? (
         <div
           role="status"
-          className="z-30 ml-3 mr-auto mt-2 flex w-fit max-w-[calc(100vw-24px)] items-center gap-1.5 rounded-full border border-border bg-surface/95 px-3 py-1 text-xs text-muted shadow-[var(--shadow-card)] backdrop-blur-sm sm:fixed sm:left-1/2 sm:top-14 sm:ml-0 sm:mt-0 sm:-translate-x-1/2"
+          className="z-30 hidden w-fit max-w-[calc(100vw-24px)] items-center gap-1.5 rounded-full border border-border bg-surface/95 px-3 py-1 text-xs text-muted shadow-[var(--shadow-card)] backdrop-blur-sm sm:fixed sm:left-1/2 sm:top-14 sm:flex sm:-translate-x-1/2"
         >
           <Eye className="size-3.5 shrink-0" />
           {t("game.spectBadge")}
@@ -3149,6 +3168,14 @@ function Table({
           state.phase === "extinction" ? "extinction-glow" : "",
         )}
       >
+        {/* Обучение (волна 1.5): цели миссии первым блоком в потоке стола.
+            Раньше HUD висел fixed в левом верхнем углу и накрывал плашку
+            соперника с медальонами животных; в потоке ничто никого не
+            перекрывает ни на десктопе, ни на телефоне, а свернутый вид —
+            компактная пилюля в том же слоте. Порядок (order-first на самом
+            блоке, как у сукна) выводит цели на телефоне сразу под строкой
+            реакций. */}
+        <TutorialHud />
         {/* «Растения»/«Трава и грибы»: общий стол растений и флоры; с «Континентами» — по континентам. */}
         {plantsOn || fungiOn ? (
           // Полоса растений — цель броска для свойств растений (найти само
@@ -3495,7 +3522,10 @@ function Table({
                 : t("leave.confirmPlayer")
           }
           cancelLabel={t("leave.stay")}
-          tone={net?.spectating ? "default" : "danger"}
+          // Выход (для зрителя — просто уход, для игрока — сдача) всегда
+          // красный: это главный разрушительный выбор диалога, а «Остаться»
+          // остаётся спокойной вторичной кнопкой.
+          tone="danger"
           extraLabel={net?.spectating || !canResumeSoftExit ? undefined : t("leave.justLeave")}
           onExtra={net?.spectating || !canResumeSoftExit ? undefined : leaveForResume}
           onConfirm={() => {
@@ -4946,18 +4976,28 @@ function ReactionsLayer({
         ))}
       </div>
 
-      {/* Панель реакций — обычная строка дока. Так она доступна на телефоне,
-          но не перекрывает ни табло игроков, ни центральное поле. Плашку
-          «Ждём игрока…» держим в этой же строке (mr-auto уводит её влево):
-          две отдельные строки съедали высоту стола. На узких экранах строка
-          переносится (flex-wrap) — плашка остаётся сверху, панель уходит вниз. */}
-      <div className="flex flex-wrap items-center justify-end gap-2 px-3 py-1 sm:px-5">
+      {/* Панель реакций — одна компактная полоса на любой ширине. Плашка
+          «Ждём игрока…» и бейдж зрителя (только телефон) стоят в этой же
+          строке слева, панель — справа; строка не переносится, тесный текст
+          обрезается. Так на телефоне это одна полоска вместо нагромождения
+          из двух-трёх строк, а на десктопе прежняя однострочная схема. */}
+      <div className="flex flex-nowrap items-center justify-end gap-1.5 px-2 py-1 sm:gap-2 sm:px-5">
+        {net.spectating ? (
+          <div
+            role="status"
+            aria-label={t("game.spectBadge")}
+            className="mr-auto flex min-w-0 shrink items-center gap-1 rounded-full border border-border bg-surface/95 px-2.5 py-1 text-xs text-muted shadow-[var(--shadow-card)] sm:hidden"
+          >
+            <Eye className="size-3.5 shrink-0" aria-hidden />
+            <span className="truncate">{t("game.spectBadgeShort")}</span>
+          </div>
+        ) : null}
         <WaitingPlayerNotice actor={actor} net={net} />
         <div
           data-reactions
           role="group"
           aria-label={t("game.reactions")}
-          className="flex w-fit flex-row gap-0.5 rounded-full border border-border bg-surface p-1 shadow-[var(--shadow-card)] sm:gap-1"
+          className="flex w-fit shrink-0 flex-row gap-0.5 rounded-full border border-border bg-surface p-1 shadow-[var(--shadow-card)] sm:gap-1"
         >
           {REACTION_EMOJI.map((emoji) => (
             <button
@@ -4965,8 +5005,9 @@ function ReactionsLayer({
               type="button"
               aria-label={t("game.reactionOf", { emoji })}
               title={emoji === "👏" ? t("game.cheerTitle") : t("game.reactionOf", { emoji })}
-              // Палец (до xl): 44px; на широком экране с мышью — компактные 32px.
-              className="grid size-11 place-items-center rounded-full text-lg leading-none transition-transform duration-[var(--motion-fast)] hover:scale-110 hover:bg-surface-2 xl:size-8"
+              // Палец (до sm): 36px как у иконок шапки; с sm до xl — 44px,
+              // на широком экране с мышью — компактные 32px.
+              className="grid size-9 place-items-center rounded-full text-lg leading-none transition-transform duration-[var(--motion-fast)] hover:scale-110 hover:bg-surface-2 sm:size-11 xl:size-8"
               onClick={(e) => {
                 e.currentTarget.blur();
                 void sendReaction(emoji, emoji === "👏" ? "cheer" : "reaction");
@@ -5154,6 +5195,12 @@ function MutateDock({
  * Карта руки с драгом: тянется целиком и мышью, и пальцем. Кнопки и клики
  * остаются как были — в HandCard уезжают только ref и слушатели датчиков,
  * а те включаются лишь после порога движения/удержания.
+ *
+ * Грань броска выбирается ЗАНЯТИЕМ: pointerdown на колонке арта (до порога
+ * активации датчика) читает data-face-drag и пишет грань в payload драга —
+ * движок кладёт именно её. Обёртка onPointerDown вызывает слушатель датчика
+ * после записи грани; pointerup/cancel сбрасывают лишь подсветку нажатия
+ * (грань, выбранную кликом, помечает сам выбор — intent).
  */
 const DndHandCard = memo(function DndHandCard({
   card,
@@ -5177,11 +5224,38 @@ const DndHandCard = memo(function DndHandCard({
   selectedFace?: number | null;
   onSelect: (face: number | "animal") => void;
 }) {
+  // Payload драга — стабильный объект: dnd-kit держит его в ref и читает
+  // .face в момент броска, поэтому грань мутируем при зажатии, а не через
+  // состояние (состояние сбрасывается на pointerup раньше, чем датчик
+  // обработает бросок — React успевает закоммитить сброс внутри pointerup).
+  const dragDataRef = useRef<DndData>({ kind: "card", cardId: card.id, ownerId });
+  const [pressedFace, setPressedFace] = useState<number | null>(null);
   const { setNodeRef, listeners, isDragging } = useDraggable({
     id: `card:${card.id}`,
-    data: { kind: "card", cardId: card.id, ownerId },
+    data: dragDataRef.current,
     disabled: Boolean(disabled),
   });
+  const handlePress = (event: ReactPointerEvent) => {
+    const el = (event.target as Element | null)?.closest?.("[data-face-drag]");
+    const face = el ? Number(el.getAttribute("data-face-drag")) : null;
+    dragDataRef.current.face = face ?? undefined;
+    setPressedFace(face);
+    listeners?.onPointerDown?.(event);
+  };
+  // Отпускание ловим на окне: в конце драга указатель уже над целью броска,
+  // а не над картой, поэтому pointerup на корне карты не сработает. Сбрасываем
+  // только подсветку — грань в payload переживёт обработку броска, а её
+  // перезапишет следующий pointerdown (любой драг начинается с зажатия).
+  useEffect(() => {
+    if (pressedFace == null) return;
+    const release = () => setPressedFace(null);
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    return () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+    };
+  }, [pressedFace]);
   return (
     <HandCard
       card={card}
@@ -5191,9 +5265,10 @@ const DndHandCard = memo(function DndHandCard({
       onBlockedFace={onBlockedFace}
       selected={selected}
       selectedFace={selectedFace}
+      pressedFace={pressedFace}
       onSelect={onSelect}
       dragRef={setNodeRef}
-      dragListeners={listeners}
+      dragListeners={listeners ? { ...listeners, onPointerDown: handlePress } : listeners}
       dragging={isDragging}
     />
   );

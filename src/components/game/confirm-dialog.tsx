@@ -110,13 +110,16 @@ export function ConfirmDialog({
         {title}
       </h2>
       {body ? <div className="mt-2 text-sm leading-snug text-muted">{body}</div> : null}
-      {/* Кнопки решений: на телефоне выше (h-14), чтобы попадать пальцем. */}
+      {/* Кнопки решений: на телефоне выше (h-14) и во всю ширину; flex-1
+          только с sm — в колонке basis:0% у flex-1 сжимал бы высоту кнопки
+          до строки текста (h-14 не спасает: basis бьёт height в главной
+          оси), а так высота честная, а ширина — от контейнера. */}
       <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:gap-3">
         <Button
           ref={cancelRef}
           variant="secondary"
           size="md"
-          className="h-14 flex-1 sm:h-12"
+          className="h-14 w-full sm:h-12 sm:w-auto sm:flex-1"
           onClick={() => requestClose(onClose)}
         >
           {cancelLabel}
@@ -124,7 +127,7 @@ export function ConfirmDialog({
         <Button
           variant={tone === "danger" ? "danger" : "default"}
           size="md"
-          className="h-14 flex-1 sm:h-12"
+          className="h-14 w-full sm:h-12 sm:w-auto sm:flex-1"
           onClick={() => requestClose(onConfirm)}
         >
           {confirmLabel}

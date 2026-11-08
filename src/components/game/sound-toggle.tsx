@@ -100,6 +100,7 @@ export function SoundToggle() {
       <Button
         variant="ghost"
         size="icon"
+        className="size-9 sm:size-11"
         aria-label={tt("sound.settings")}
         aria-haspopup="dialog"
         aria-expanded={open}

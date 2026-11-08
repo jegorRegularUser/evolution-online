@@ -117,7 +117,24 @@ export function TutorialMissionBlock({ name, busy }: { name: string; busy: boole
 }
 
 /**
- * Живой список целей поверх миссии (учебной или кампании); «Прервать» — в меню.
+ * Свернутый HUD не должен всплывать снова после F5 в той же партии, но и
+ * не имеет права пережить её: запись в sessionStorage хранит код стола.
+ * Новая партия (другой код) начинает с развернутым HUD.
+ */
+const HUD_HIDDEN_KEY = "evo-tutorial-hud-hidden";
+
+/**
+ * Живой список целей поверх миссии (учебной или кампании).
+ *
+ * Блок живёт В ПОТОКЕ стола (первым ребёнком <main>): раньше он висел
+ * fixed в левом верхнем углу и накрывал плашку соперника с медальонами
+ * его животных. В потоке ничего не перекрывается ни на десктопе, ни на
+ * телефоне.
+ *
+ * Крестик — только свернуть блок (пилюля «Обучение» разворачивает обратно;
+ * сверток помнится до конца партии, не дольше). Выход из миссии — отдельная
+ * явная кнопка «Прервать обучение» внутри развернутого блока, и она НЕ
+ * выводит со стола: партия продолжается обычной.
  *
  * Учебная миссия переживает F5: флаг tutorialMission в сторе после перезагрузки
  * теряется (стор инициализируется заново), а стол по ?room возобновляется. HUD
@@ -137,12 +154,14 @@ export function TutorialHud() {
   const completeTutorial = useGameStore((s) => s.completeTutorial);
   const clearCampaign = useGameStore((s) => s.clearCampaign);
   const completeCampaignMission = useGameStore((s) => s.completeCampaignMission);
-  const leaveNet = useGameStore((s) => s.leaveNet);
   const progressRef = useRef<MissionProgress>(makeMissionProgress());
   const [, forceTick] = useState(0);
   const [completed, setCompleted] = useState(false);
   const completedRef = useRef(false);
   const wasInTableRef = useRef(false);
+  // Крестик сворачивает блок, а не бросает миссию: свернутость помнится
+  // только до конца этой партии (код стола в sessionStorage).
+  const [hudHidden, setHudHidden] = useState(false);
   /**
    * activeId — флаг из стора, прошедший проверку записи evo-tutorial-active:
    * легитимный запуск всегда оставляет запись (клик по миссии в меню), поэтому
@@ -233,10 +252,20 @@ export function TutorialHud() {
     } else if (effectiveId) {
       completeTutorial(effectiveId);
     }
+    // Финал разворачивает блок, даже если игрок свернул его крестиком:
+    // баннер «Миссия выполнена» обязан быть виден. Запись свертка чистим —
+    // она не должна всплыть в следующей партии.
     setCompleted(true);
+    setHudHidden(false);
+    try {
+      window.sessionStorage.removeItem(HUD_HIDDEN_KEY);
+    } catch {
+      // приватный режим — чистить нечего
+    }
   }, [mission, completeTutorial, completeCampaignMission, isCampaign, campaignMissionId, campaignHard, effectiveId, state]);
 
-  // Ушли со стола (сдача, кик, «Прервать») — миссия больше не активна.
+  // Ушли со стола (сдача, кик) — миссия больше не активна. «Прервать» из
+  // HUD стол не покидает и чистит миссию своим обработчиком (abortMission).
   // Сигнал — ПЕРЕХОД «были за столом → вышли»: в окне создания (миссия уже
   // установлена, состояние ещё не доехало) clearing был бы ложным.
   useEffect(() => {
@@ -256,13 +285,82 @@ export function TutorialHud() {
     wasInTableRef.current = false;
   }, [net, state, effectiveId, campaignMissionId, isCampaign, clearTutorial, clearCampaign]);
 
+  // Свернутость привязана к коду стола: F5 в той же партии восстанавливает
+  // её, новая партия (другой код) начинает с развернутым блоком.
+  const roomCode = net?.code ?? null;
+  useEffect(() => {
+    if (!roomCode) {
+      setHudHidden(false);
+      return;
+    }
+    let stored: string | null = null;
+    try {
+      stored = window.sessionStorage.getItem(HUD_HIDDEN_KEY);
+    } catch {
+      // приватный режим — свернутость просто не переживёт F5
+    }
+    setHudHidden(stored === roomCode);
+  }, [roomCode]);
+
+  const hideHud = () => {
+    setHudHidden(true);
+    try {
+      if (roomCode) window.sessionStorage.setItem(HUD_HIDDEN_KEY, roomCode);
+    } catch {
+      // приватный режим — просто не сохранится
+    }
+  };
+
+  const showHud = () => {
+    setHudHidden(false);
+    try {
+      window.sessionStorage.removeItem(HUD_HIDDEN_KEY);
+    } catch {
+      // приватный режим — чистить нечего
+    }
+  };
+
+  // Явный выход из миссии. НЕ выводит со стола: партия продолжается обычной,
+  // уходит только миссия (флаг + запись возобновления). Кампании отдельный
+  // флаг: leaveNet его раньше гасил, теперь «Прервать» делает это сам.
+  const abortMission = () => {
+    sfx.play("click");
+    if (isCampaign) {
+      clearCampaign();
+      return;
+    }
+    clearTutorial();
+    saveActiveMission(null);
+    setAdoptedId(null);
+  };
+
   if (!mission || !state) return null;
   const done = completed || mission.objectives.every((o) => o.done(progressRef.current));
+
+  // Свернутый вид: компактная пилюля на месте блока — тот же слот в потоке
+  // стола, разворачивается кликом.
+  if (hudHidden) {
+    return (
+      <button
+        type="button"
+        aria-label={tt("tutorial.hud.show")}
+        title={tt("tutorial.hud.show")}
+        className="order-first flex w-fit items-center gap-2 rounded-full border border-accent/40 bg-surface/95 px-3 py-2 text-xs font-medium text-fg shadow-[var(--shadow-card)] backdrop-blur-sm transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:order-none"
+        onClick={() => {
+          sfx.play("click");
+          showHud();
+        }}
+      >
+        <GraduationCap className="size-4 shrink-0 text-accent" aria-hidden />
+        {tt("tutorial.block")}
+      </button>
+    );
+  }
 
   return (
     <aside
       aria-label={tt("tutorial.block")}
-      className="pointer-events-auto fixed left-3 top-16 z-40 w-64 rounded-[var(--radius-lg)] border border-accent/40 bg-surface/95 p-3 text-sm shadow-[var(--shadow-card)] backdrop-blur-sm"
+      className="relative order-first z-30 w-full rounded-[var(--radius-lg)] border border-accent/40 bg-surface/95 p-3 text-sm shadow-[var(--shadow-card)] backdrop-blur-sm sm:w-64 lg:order-none"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 font-medium text-fg">
@@ -271,18 +369,12 @@ export function TutorialHud() {
         </div>
         <button
           type="button"
-          aria-label={tt("tutorial.abort")}
-          className="rounded-[var(--radius-sm)] p-1 text-muted hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={tt("tutorial.hud.hide")}
+          title={tt("tutorial.hud.hide")}
+          className="-m-1 rounded-[var(--radius-sm)] p-1 text-muted hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={() => {
-            clearTutorial();
-            // У кампании нет записи evo-tutorial-active: не затираем чужую
-            // запись обучения (миссия может жить в другой вкладке). Флаг
-            // кампании гасит leaveNet — каноническое место очистки миссий.
-            if (!isCampaign) {
-              saveActiveMission(null);
-              setAdoptedId(null);
-            }
-            leaveNet();
+            sfx.play("click");
+            hideHud();
           }}
         >
           <X className="size-4" aria-hidden />
@@ -310,6 +402,18 @@ export function TutorialHud() {
         <p role="status" className="mt-2 rounded-[var(--radius-sm)] bg-good/15 px-2 py-1.5 text-xs text-good">
           {tt("tutorial.missionDone")}
         </p>
+      ) : null}
+      {!done ? (
+        // Явное «Прервать» вместо бывшего крестика-ловушки: крестик теперь
+        // только сворачивает блок, со стола эта кнопка не выводит.
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mt-2 min-h-9 w-full justify-start px-2 text-left text-xs text-danger hover:bg-danger/10 hover:text-danger"
+          onClick={abortMission}
+        >
+          {tt("tutorial.abort")}
+        </Button>
       ) : null}
     </aside>
   );
