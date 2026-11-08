@@ -30,6 +30,10 @@ export const en: Record<keyof RuDict, string> = {
   "topbar.rules": "Rules",
   "topbar.stats": "Statistics",
 
+  // ── section pages (/shop, /bestiary, /campaign, /challenges) ─────────────
+  "nav.back": "Back",
+  "nav.backToMenu": "Back to the menu",
+
   // ── language toggle (top bar button) ─────────────────────────────────────
   "lang.switch": "Switch language to Russian",
 
@@ -222,11 +226,18 @@ export const en: Record<keyof RuDict, string> = {
   // ── rules ────────────────────────────────────────────────────────────────
   "rules.title": "Rules",
   "rules.tabs": "Rules section",
-  "rules.tab.base": "Base game",
+  // Group captions ("sub-captions" above the buttons) and the tabs themselves.
+  "rules.group.base": "Base game",
+  "rules.group.expansions": "Expansions",
+  "rules.group.modes": "Modes and mechanics",
+  "rules.tab.base": "Base",
   "rules.tab.continents": "Continents",
   "rules.tab.plants": "Plants",
   "rules.tab.fungi": "Grass and Mushrooms",
   "rules.tab.mutations": "Random Mutations",
+  "rules.tab.mods": "Modifiers",
+  "rules.tab.fossils": "Fossils",
+  "rules.tab.campaign": "Campaign",
 
   "rules.base.intro":
     "The base Russian \"Evolution\" (Pravilnye Igry, 2010): an 84-card deck for 2–4 players. A year consists of four phases; a turn is one player's turn within a phase. The winner is the player whose animals score the most points after the final year.",
@@ -304,7 +315,7 @@ export const en: Record<keyof RuDict, string> = {
   "rules.plants.species": "Plant species",
   "rules.plants.traits": "Plant traits",
   "rules.plants.footnote":
-    "Animal traits on the second sides of \"Plants\" cards come from the base game — see them in the \"Base game\" tab.",
+    "Animal traits on the second sides of \"Plants\" cards come from the base game — see them in the \"Base\" tab.",
 
   "rules.fungi.intro":
     "The \"Grass and Mushrooms\" expansion (Pravilnye Igry, 2019): 24 long flora cards (6 fungi and 6 grasses, 2 copies each), 8 consequence marks and 2 new animal traits. The year's food supply is all the red tokens on flora cards; flora is a full participant of the game and can win. The online version can combine it only with \"Continents\": it cannot be enabled together with either \"Plants\" or \"Random Mutations\".",
@@ -347,6 +358,90 @@ export const en: Record<keyof RuDict, string> = {
   "rules.mut.traits": "Expansion traits",
   "rules.mut.footnote":
     "The other traits in the blind deck come from the base game and the enabled expansions; see their rules in the respective tabs.",
+
+  // ── rules: "Modifiers" tab (registry — src/game/modifiers.ts, limit and
+  //    forbidden pairs — src/game/modifier-compatibility.ts) ──────────────────
+  "rules.mods.intro":
+    "Modifiers are optional twists the host enables when creating a table, in the lobby's \"Modifiers\" block: four table rules, two mutators and the \"Wild World\" pack. Whatever is enabled applies to everyone and leaves a trace in the game log.",
+  "rules.mods.slots": "Slot limit.",
+  "rules.mods.slots.text":
+    "Each rule, each mutator and \"Wild World\" as a whole takes one slot; a table allows at most three. The slot counter sits next to the block in the lobby, and the server rejects any over-limit combination.",
+  "rules.mods.rules.title": "Table rules",
+  "rules.mods.rule.pack.text":
+    "Everyone starts with two animals. Incompatible with \"Random Mutations\": that module already deals three starting species.",
+  "rules.mods.rule.hungrySeason.text":
+    "The food base is rolled twice — the lesser roll counts. Incompatible with \"Abundance\": the two rules pull the base in opposite directions.",
+  "rules.mods.rule.abundance.text":
+    "+1 to the food base; with \"Continents\" — to every rolled territory.",
+  "rules.mods.rule.startHand.text":
+    "A starting hand of 7, 8 or 9 cards instead of the classic deal (6 in the base game, 8 with \"Plants\").",
+  "rules.mods.mutators.title": "Mutators",
+  "rules.mods.mutator.scavengers.text":
+    "An extinct animal returns one card from the discard to its owner: dying is no longer a pure loss.",
+  "rules.mods.mutator.rapidEvolution.text":
+    "Two development actions per turn instead of one: species come together noticeably faster.",
+  "rules.mods.wild.title": "Wild World",
+  "rules.mods.wild.text":
+    "A table-wide pack of events: each year's event is announced before the development phase — a one-year forecast. Events are random, and there are six:",
+  "rules.mods.wild.iceAge": "Ice Age — each food supply die counts as 1 less.",
+  "rules.mods.wild.goldenAge": "Golden Age — +2 food to the base.",
+  "rules.mods.wild.resettlement": "Resettlement — each player passes one card to the clockwise neighbor.",
+  "rules.mods.wild.cropFailure": "Crop Failure — the food base is 2 less.",
+  "rules.mods.wild.meteorite": "Meteorite — animals lose a fat token each; rare, but never later than the eighth event in a row.",
+  "rules.mods.wild.wildfire": "Wildfire — flora loses 2 tokens each; only comes up with \"Grass and Mushrooms\".",
+  "rules.mods.compat.title": "Compatibility",
+  "rules.mods.compat":
+    "Modifiers combine freely except for two pairs: \"Pack\" + \"Random Mutations\" and \"Hungry Season\" + \"Abundance\". Incompatible toggles are blocked in the lobby, and the server rejects both the start and later settings changes to an existing table.",
+
+  // ── rules: "Fossils" tab (catalog — src/game/challenges.ts, shop —
+  //    src/lib/cosmetics.ts, payouts — src/lib/profile/service.server.ts) ─────
+  "rules.fossils.intro":
+    "Fossils are the game's only currency, and there is exactly one way to earn them: play. They cannot be bought; the server grants them after games.",
+  "rules.fossils.earn.title": "How to earn",
+  "rules.fossils.earn.challenges": "Challenges.",
+  "rules.fossils.earn.challenges.text":
+    "A network of goals layered over any games — with people or bots. Each goal has tiers: the first is cheap, the last pays up to 800 fossils. For example, \"Hunter: eat prey\" — 1/10/50 times for 50/150/500.",
+  "rules.fossils.earn.feats": "Feats.",
+  "rules.fossils.earn.feats.text":
+    "One-off trophies for a single game: a win with a carnivore of three or more traits (300), a win without losing a single animal (300), a win with an animal of four traits (250).",
+  "rules.fossils.earn.daily": "First win of the day.",
+  "rules.fossils.earn.daily.text": "50 fossils for the day's first win — in any game.",
+  "rules.fossils.earn.cap": "Daily cap.",
+  "rules.fossils.earn.cap.text":
+    "Challenges pay out at most 300 fossils per day; tiers that didn't fit stay claimable on later days.",
+  "rules.fossils.spend.title": "What to spend on",
+  "rules.fossils.spend.text":
+    "The shop sells only what's visible at the table: the felt and the die. Common skins cost 150, rare ones 400; the base \"classic\" of each slot is free and equipped by default. Buy it, equip it — everyone at the table sees it.",
+  "rules.fossils.where":
+    "Goal progress and your balance live on the \"Challenges\" (/challenges) and \"Shop\" (/shop) pages.",
+
+  // ── rules: "Campaign" tab (registry — src/game/campaign.ts, boss
+  //    scenarios — src/game/types.ts GameScenario) ───────────────────────────
+  "rules.campaign.intro":
+    "The \"Eras\" campaign is a single-player ladder against bots: three eras, and at the end of each a boss with a rule-breaking twist that isn't in the box. A mission is a regular game with AI: the table is created for you, and objectives show up in the HUD.",
+  "rules.campaign.eras": "Eras.",
+  "rules.campaign.eras.text":
+    "Cambrian — first herds and the first carnivore; Devonian — meeting \"Plants\"; Ice Age — the finale with \"Wild World\". Within an era, missions unlock in order: the next one after the previous, the first is open right away.",
+  "rules.campaign.goals": "Objectives.",
+  "rules.campaign.goals.text":
+    "A mission counts as done when all of its objectives are met: for example, \"Feed three of your animals at once\" or \"Lose no more than two animals\". Progress survives a page reload.",
+  "rules.campaign.diary": "The naturalist's diary.",
+  "rules.campaign.diary.text":
+    "A paragraph before each mission — it doubles as the mission's HUD description: a short hint on how to survive the era.",
+  "rules.campaign.hard": "Hard.",
+  "rules.campaign.hard.text":
+    "A win unlocks a replay of the same mission at higher difficulty; the normal completion and the hard one are tracked separately.",
+  "rules.campaign.bosses.title": "Bosses",
+  "rules.campaign.boss.trilobite":
+    "hunts twice: after a successful hunt, its carnivore attacks a second time in the same turn.",
+  "rules.campaign.boss.bonecrusher":
+    "its pack eats first: at the start of each feeding phase the boss's animals gain +1 food.",
+  "rules.campaign.boss.atroxabilis":
+    "the campaign finale: double hunting, \"Wild World\" and \"Hard\" difficulty.",
+  "rules.campaign.bosses.note":
+    "The rule-breaking twist applies only to the boss's seat; scoring is untouched.",
+  "rules.campaign.where":
+    "The campaign lives on the \"Campaign\" (/campaign) page.",
 
   // ── rules: territories & lists ───────────────────────────────────────────
   "rules.terr.laurasia":
@@ -805,8 +900,18 @@ export const en: Record<keyof RuDict, string> = {
   "leave.confirmPlayer": "Resign and leave",
   "leave.stay": "Stay",
   "leave.justLeave": "Just leave (without resigning)",
+  "leave.bodySolo":
+    "It is just you and bots at this table. Leaving will close the whole table: the game ends and cannot be resumed.",
+  "leave.confirmSolo": "Leave and close the table",
   "leave.bodyNoResume":
     "This browser cannot preserve a return link. If you leave now, you won't be able to return to this seat.",
+
+  // ── closing the whole table (#4): bot-only tables ─────────────────────────
+  "table.closeButton": "Close table",
+  "table.closeTitle": "Close the table?",
+  "table.closeBody":
+    "The table will be removed entirely: the game ends and cannot be resumed. Only tables where you play with bots alone can be closed.",
+  "table.closeConfirm": "Close table",
 
   // ── journal & chat feed in the game ──────────────────────────────────────
   "feed.title.default": "Journal",
@@ -904,6 +1009,7 @@ export const en: Record<keyof RuDict, string> = {
   "netErr.queueFull": "The queue for this table is full — try later",
   "netErr.hostOnly": "Only the host can do this",
   "netErr.lobbyOnly": "This can be done before the game starts",
+  "netErr.closePeople": "Other players are seated — the table cannot be closed",
   "netErr.gameStarted": "The game has already started",
   "netErr.gameFinished": "The game is already over",
   "netErr.gameRunning": "The game is still in progress — wait for the final results",
@@ -1299,12 +1405,29 @@ export const en: Record<keyof RuDict, string> = {
   "shop.dice.bone": "Bone (classic)",
   "shop.dice.amber": "Amber",
   "shop.dice.obsidian": "Volcanic Glass",
+  "shop.preview": "Preview",
+  "shop.preview.aria": "Show preview of “{name}”",
+  "shop.preview.title": "Preview: {name}",
+  "shop.preview.hint": "This is how the table will look with this item",
+  "shop.preview.close": "Close preview",
+  "shop.preview.note.felt": "The dice is not affected — it stays classic here",
+  "shop.preview.note.dice": "The felt is not affected — it stays classic here",
+  "shop.rarity.common": "Common",
+  "shop.rarity.rare": "Rare",
+  "shop.desc.felt.classic": "The familiar dark-green felt of the food base.",
+  "shop.desc.felt.tundra": "Cold blue-grey felt of the northern plains.",
+  "shop.desc.felt.savanna": "Warm ochre felt of the dry grasslands.",
+  "shop.desc.felt.glacial": "Light felt of the glacial lake.",
+  "shop.desc.dice.bone": "Classic red food-base dice.",
+  "shop.desc.dice.amber": "Amber-coloured dice — warm and easy to spot.",
+  "shop.desc.dice.obsidian": "Dark volcanic-glass dice.",
   // ── wave 4a: Eras campaign ───────────────────────────────────────────────
   "campaign.era.cambrian": "Cambrian",
   "campaign.era.devon": "Devonian",
   "campaign.era.glacier": "Ice Age",
-  "campaign.m.cambrianGrowth.title": "Growth",
-  "campaign.m.cambrianGrowth.diary": "First notes. Animals come from cards and stand on traits: two bodies, three traits — you have an ecosystem.",
+  "campaign.m.cambrianGrowth.title": "Cambrian Growth",
+  "campaign.m.cambrianGrowth.diary":
+    "A naturalist's first notes. A herd lives while it is fed: feed three of your animals within one feeding season, and breed two species with different trait sets. In the Cambrian, diversity survives.",
   "campaign.m.cambrianHunt.title": "First Hunter",
   "campaign.m.cambrianHunt.diary": "The food base is not forever. Some eat grass, some eat neighbours. Fend off a hunt — or become one.",
   "campaign.m.cambrianBoss.title": "Boss: the Trilobite Sovereign",
@@ -1333,6 +1456,8 @@ export const en: Record<keyof RuDict, string> = {
   "campaign.obj.win": "Win the game",
   "campaign.obj.plantFood": "Eat plant food 3 times",
   "campaign.obj.fewLosses": "Lose no more than two animals",
+  "campaign.obj.fedHerd": "Have three of your animals fed at the same time",
+  "campaign.obj.distinctHerd": "Have two animals with different trait sets",
 
   "log.bossFeedsExtra": "Bonecrusher: the boss's animals get +1 food at the start of feeding.",
 
