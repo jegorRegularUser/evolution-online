@@ -147,6 +147,17 @@ describe("косметика: владение и экипировка", () => {
     await rejectsCode(() => s.equipItem(USER, "dice", "dice.amber"), "not-owned");
   });
 
+  it("бесплатная классика экипируется без владения (она у каждого по умолчанию)", async () => {
+    const s = svc();
+    await s.equipItem(USER, "felt", "felt.classic");
+    await s.equipItem(USER, "dice", "dice.bone");
+    const p = await s.getProfile(USER);
+    assert.ok(p.equipped.some((e) => e.slot === "felt" && e.itemId === "felt.classic"));
+    assert.ok(p.equipped.some((e) => e.slot === "dice" && e.itemId === "dice.bone"));
+    // Платный скин без покупки по-прежнему нельзя.
+    await rejectsCode(() => s.equipItem(USER, "felt", "felt.tundra"), "not-owned");
+  });
+
   it("экипировка владеемого видна в снапшоте", async () => {
     const s = svc();
     await s.equipItem(USER, "cardback", "cardback.fossils");

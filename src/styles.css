@@ -280,7 +280,20 @@
 
 /* ── Волна 3б: скины сукна (магазин, каталог cosmetics.ts) ──────────────
    База .felt задаёт текстуру и blend; скины перекрашивают подложку
-   (5 скинов из 1 файла через переменные — §3.4). */
+   (5 скинов из 1 файла через переменные — §3.4).
+   Классика задана явным классом (копия фона .felt): свотчи и превью магазина
+   рендерятся одним классом из каталога (cosmetics.cssClass), а за столом
+   FELT_SKINS["felt.classic"] = undefined — там скины кладутся ПОВЕРХ базы
+   .felt, и классика выглядит ровно так же. */
+.felt-skin-classic {
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in oklab, var(--color-good) 22%, transparent), transparent 55%),
+    radial-gradient(140% 110% at 50% 115%, color-mix(in oklab, #000 45%, transparent), transparent 60%),
+    url("/img/bg/texture-felt.jpg"),
+    linear-gradient(160deg, #23301f, #1a2417 55%, #151d13);
+  background-size: auto, auto, 420px, auto;
+  background-blend-mode: normal, normal, soft-light, normal;
+}
 .felt-skin-tundra {
   background:
     radial-gradient(120% 90% at 50% 0%, color-mix(in oklab, #9fc4d8 30%, transparent), transparent 55%),

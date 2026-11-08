@@ -24,10 +24,16 @@ export interface CosmeticItem {
   /** Цена в «Ископаемых» (только earned-валюта, §3.2). */
   price: number;
   titleKey: TKey;
-  /** CSS-класс предмета (сукно: фон сукна; иначе — превью в магазине). */
+  /** CSS-класс предмета (сукно: фон сукна; кубик — индикатор скина). */
   cssClass: string;
   /** Материал кубика для dice-3d (только слот dice). */
   diceMaterial?: "bone" | "amber" | "obsidian";
+  /**
+   * Тон граней кубика для Dice3D (только слот dice); undefined — дефолтный
+   * красный кормовой базы. Значения копируют DICE_TINTS в game-app.tsx —
+   * тот там не экспортируется, менять надо синхронно в обоих местах.
+   */
+  diceTint?: string;
 }
 
 export const COSMETIC_ITEMS: CosmeticItem[] = [
@@ -73,6 +79,7 @@ export const COSMETIC_ITEMS: CosmeticItem[] = [
     titleKey: "shop.dice.bone",
     cssClass: "dice-skin-bone",
     diceMaterial: "bone",
+    diceTint: undefined, // классика — дефолтный красный кормовой базы
   },
   {
     id: "dice.amber",
@@ -82,6 +89,7 @@ export const COSMETIC_ITEMS: CosmeticItem[] = [
     titleKey: "shop.dice.amber",
     cssClass: "dice-skin-amber",
     diceMaterial: "amber",
+    diceTint: "#c9861f",
   },
   {
     id: "dice.obsidian",
@@ -91,6 +99,7 @@ export const COSMETIC_ITEMS: CosmeticItem[] = [
     titleKey: "shop.dice.obsidian",
     cssClass: "dice-skin-obsidian",
     diceMaterial: "obsidian",
+    diceTint: "#4a4452",
   },
 ];
 

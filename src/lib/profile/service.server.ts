@@ -222,7 +222,15 @@ export function createProfileService(sql: SqlLike, options: ProfileServiceOption
         [userId, item],
       );
       if (!owned.length) {
-        throw new ProfileError("not-owned", `Предмет не принадлежит игроку: ${item}`);
+        // Бесплатная «классика» слота принадлежит каждому по умолчанию (buyItem
+        // её не продаёт — «она и так у каждого»), поэтому при экипировке выдаём
+        // владение на лету: составной FK equipped→owned требует строку во
+        // владении, а без выдачи из магазина нельзя вернуться на классику
+        // после покупки платного скина.
+        if (cosmeticById(item)?.price !== 0) {
+          throw new ProfileError("not-owned", `Предмет не принадлежит игроку: ${item}`);
+        }
+        await this.grantItem(userId, item, "default");
       }
       await sql.query(
         "insert into evo_cosmetics_equipped (user_id, slot, item_id, updated_at) values ($1, $2, $3, $4) on conflict (user_id, slot) do update set item_id = excluded.item_id, updated_at = excluded.updated_at",
