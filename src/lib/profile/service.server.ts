@@ -52,6 +52,52 @@ const SOURCE_MAX = 32;
  */
 const CHALLENGE_DAILY_COINS = 300;
 
+/**
+ * Операторский кредит дев-базы «Ископаемых» (EVO_CREDIT_FOSSILS, сумма).
+ *
+ * Локальная разработка живёт на встраиваемом PGLite БЕЗ каталога данных
+ * (src/lib/db.ts): процесс сервера умер — база опустела, внешний скрипт не
+ * может «открыть ту же базу» с диска. Кредит делается изнутри процесса:
+ * сумма задаётся переменной окружения, и ПЕРВЫЙ профильный запрос после
+ * старта (ensurePlayer) добавляет её к кошельку — ровно один раз за жизнь
+ * процесса, с before/after в консоли сервера. По умолчанию выключено: без
+ * переменной поведение сервиса не меняется ни на бит. Границы GRANT_* —
+ * про игровые награды; это инструмент владельца дев-стенда, у него своя
+ * верхняя граница.
+ */
+const DEV_SEED_ENV = "EVO_CREDIT_FOSSILS";
+const DEV_SEED_MAX = 1_000_000_000;
+
+function parseDevSeed(raw: string | undefined): number {
+  const n = Number(raw?.trim());
+  if (!raw?.trim()) return 0;
+  if (!Number.isInteger(n) || n <= 0 || n > DEV_SEED_MAX) {
+    console.warn(`[profile] ${DEV_SEED_ENV}="${raw}" — не похоже на сумму, начисление пропущено`);
+    return 0;
+  }
+  return n;
+}
+
+/** Сумма читается при первом профильном запросе, не при загрузке модуля:
+ *  dev-раннеры (Vite SSR) могут пересобирать окружение после старта процесса.
+ *  Отметка «начислено» живёт на globalThis: HMR пересоздаёт модуль вместе с
+ *  его переменными, а начисление обязано случиться РОВНО раз за процесс. */
+type DevSeedGlobal = typeof globalThis & {
+  __evoDevSeedCoins__?: number | null;
+  __evoDevSeedDone__?: Set<string>;
+};
+const devSeedGlobal = globalThis as DevSeedGlobal;
+
+function devSeedOnce(): number {
+  if (devSeedGlobal.__evoDevSeedCoins__ === undefined) {
+    devSeedGlobal.__evoDevSeedCoins__ = parseDevSeed(process.env[DEV_SEED_ENV]);
+    if (devSeedGlobal.__evoDevSeedCoins__ > 0) {
+      console.log(`[profile] ${DEV_SEED_ENV}=${devSeedGlobal.__evoDevSeedCoins__} — операторский кредит активен`);
+    }
+  }
+  return devSeedGlobal.__evoDevSeedCoins__ ?? 0;
+}
+
 export type GrantSource = string;
 
 export interface ProfileServiceOptions {
@@ -112,6 +158,25 @@ export function createProfileService(sql: SqlLike, options: ProfileServiceOption
       "insert into evo_wallets (user_id, updated_at) values ($1, $2) on conflict (user_id) do nothing",
       [userId, stamp],
     );
+    // Операторский кредит дев-базы: раз за жизнь процесса (см. шапку DEV_SEED_ENV).
+    const devSeed = devSeedOnce();
+    if (devSeed > 0) {
+      devSeedGlobal.__evoDevSeedDone__ ??= new Set<string>();
+      if (devSeedGlobal.__evoDevSeedDone__!.has(userId)) return;
+      devSeedGlobal.__evoDevSeedDone__!.add(userId);
+      const before = await sql.query<WalletRow>(
+        "select balance from evo_wallets where user_id = $1",
+        [userId],
+      );
+      const after = await sql.query<WalletRow>(
+        "update evo_wallets set balance = balance + $2, updated_at = $3 where user_id = $1 returning balance",
+        [userId, devSeed, stamp],
+      );
+      console.log(
+        `[profile] ${DEV_SEED_ENV}: ${userId} ${Number(before[0]?.balance ?? 0)} -> ` +
+          `${Number(after[0]?.balance ?? 0)} (+${devSeed})`,
+      );
+    }
   }
 
   return {
