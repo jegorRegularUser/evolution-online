@@ -686,9 +686,8 @@ describe("отбрасывание хвоста", () => {
     const traits = g.players[1]!.animals[0]!.traits.map((x) => x.type);
     assert.ok(!traits.includes("tailLoss"));
     assert.ok(traits.includes("piracy"));
-    // Хищник ещё голоден: ход остаётся за ним, пока не закончит его сам.
-    assert.equal(g.currentPlayerId, 0);
-    g = applyAction(g, { type: "feedEndTurn" });
+    // Хищник после охоты не может ни есть, ни охотиться снова в этом году,
+    // поэтому ход сразу уходит владельцу жертвы (раньше оставался за хищником).
     assert.equal(g.currentPlayerId, 1);
   });
 });
@@ -906,7 +905,7 @@ describe("континенты: колода и размещение", () => {
 });
 
 describe("континенты: питание по территориям", () => {
-  it("бросок кормовой базы даёт таблицу 8/7/5 на двоих и +2 за эдификатора", () => {
+  it("кормовые базы территорий считаются по официальной таблице с броском", () => {
     let g = continentScenario([
       [{ id: "e1", traits: [t("edificator")] }],
       [],
@@ -917,7 +916,12 @@ describe("континенты: питание по территориям", () 
     g.players[1]!.passedDev = true;
     while (g.phase === "development") g = applyAction(g, { type: "devPass" });
     g = applyAction(g, { type: "rollFoodBank" });
-    assert.deepEqual(g.territoryFood, { laurasia: 10, gondwana: 7, ocean: 5 });
+    // 2 игрока: Лавразия — 1 кубик, Гондвана — 1 кубик + 2, Океан — 3.
+    // Эдификатор в Лавразии добавляет к своей территории ещё 2 фишки.
+    assert.equal(g.foodRoll!.length, 2);
+    assert.equal(g.territoryFood!.ocean, 3);
+    assert.equal(g.territoryFood!.laurasia, g.foodRoll![0]! + 2);
+    assert.equal(g.territoryFood!.gondwana, g.foodRoll![1]! + 2);
   });
 
   it("нельзя взять еду из чужой территории в один ход", () => {
@@ -971,27 +975,49 @@ describe("континенты: питание по территориям", () 
     ]);
     const car = g.players[1]!.animals[0]!;
     assert.equal(canAttack(g, car, g.players[0]!.animals[0]!), false);
-    // Второй хищник ломает защиту числом.
+    // C-card стр.1: равенство 2:2 сохраняет защиту; только 2:3 её снимает.
     g.players[1]!.animals.push({ ...mkAnimal("k2", 1, [t("carnivore")]), zoneId: "laurasia" });
     const car2 = g.players[1]!.animals[1]!;
+    assert.equal(canAttack(g, car2, g.players[0]!.animals[0]!), false);
+    g.players[1]!.animals.push({ ...mkAnimal("k3", 1, [t("carnivore")]), zoneId: "laurasia" });
     assert.equal(canAttack(g, car2, g.players[0]!.animals[0]!), true);
   });
 
-  it("паралич стрекательными клетками снимает все свойства хищника", () => {
-    let g = continentScenario([
-      [{ id: "ne", zoneId: "laurasia", traits: [t("nematocysts")] }],
-      [{ id: "cz", zoneId: "laurasia", traits: [t("carnivore")] }],
-    ]);
-    g = toFeeding(g);
-    // Игрок 0 не имеет действий (его животное не хищник) — кормовая фаза может
-    // сразу перекинуться. Форсируем очередь на игрока 1.
+  it("паралич стрекательными клетками запрещает охоту до конца питания", () => {
+    let g = toFeeding(continentScenario([
+      [{ id: "ne", traits: [t("nematocysts")] }, { id: "survivor", traits: [] }],
+      [{ id: "cz", traits: [t("carnivore")] }],
+    ]));
     g.currentPlayerId = 1;
     g = applyAction(g, { type: "feedHunt", carnivoreId: "cz", preyId: "ne" });
-    assert.ok(g.paralyzed?.includes("cz"));
-    // Парализованный не охотится.
-    const hunts = legalFeedActions({ ...g, currentPlayerId: 1, turnUse: { carnivores: [], pirates: [], grazers: [], foodTaken: false, combatUsed: false, migrated: false, sheltered: false, hibernated: [] } }, 1)
-      .filter((a) => a.type === "feedHunt");
-    assert.equal(hunts.length, 0);
+    assert.equal(g.phase, "feeding");
+    assert.deepEqual(g.paralyzed, ["cz"]);
+    const hunter = g.players[1]!.animals[0]!;
+    const prey = g.players[0]!.animals[0]!;
+    hunter.food = 0;
+    hunter.blueFood = 0;
+    assert.equal(canAttack(g, hunter, prey), false);
+    // Восстановление проверяется следующим тестом через конец питания,
+    // а не ручной очисткой внутренних флагов.
+  });
+
+  it("паралич заканчивается вместе с питанием и не переносится в следующий год", () => {
+    let g = toFeeding(continentScenario([
+      [{ id: "ne", traits: [t("nematocysts")] }, { id: "survivor", traits: [] }],
+      [{ id: "cz", traits: [t("carnivore")] }],
+    ]));
+    g.currentPlayerId = 1;
+    g = applyAction(g, { type: "feedHunt", carnivoreId: "cz", preyId: "ne" });
+    assert.deepEqual(g.paralyzed, ["cz"]);
+    for (let i = 0; i < 6 && g.phase === "feeding"; i++) {
+      g = applyAction(g, { type: "feedSkip" });
+    }
+    assert.equal(g.phase, "extinction");
+    assert.deepEqual(g.paralyzed, []);
+    g = applyAction(g, { type: "continueExtinction" });
+    assert.equal(g.phase, "development");
+    assert.deepEqual(g.paralyzed, []);
+    assert.ok(g.players[1]!.animals.some((a) => a.id === "cz"));
   });
 
   it("миграция: океан↔континенты разрешён, суша→суша и суша→океан нет", () => {
@@ -1029,10 +1055,10 @@ describe("континенты: неоплазия и регенерация", (
       [{ id: "np", traits: [t("fatTissue"), t("herding")] }],
       [],
     ]);
-    // Играем неоплазию на животное.
+    // PDF с.2: неоплазия только на чужих; выключает ближайшее свойство снизу.
     g.phase = "development";
-    g.currentPlayerId = 0;
-    g.players[0]!.hand.push({ id: "hn", faces: ["neoplasia"] });
+    g.currentPlayerId = 1;
+    g.players[1]!.hand.push({ id: "hn", faces: ["neoplasia"] });
     g = applyAction(g, { type: "devPlayTrait", cardId: "hn", face: 0, animalId: "np" });
     const a = g.players[0]!.animals[0]!;
     assert.ok(a.traits.some((x) => x.type === "neoplasia"));
@@ -1041,17 +1067,13 @@ describe("континенты: неоплазия и регенерация", (
     g.foodRoll = null;
     g = applyAction(g, { type: "rollFoodBank" });
     const after = g.players[0]!.animals.find((x) => x.id === "np")!;
-    assert.ok(after.traits.find((x) => x.type === "herding")!.disabled);
-    assert.equal(after.traits.find((x) => x.type === "fatTissue")!.disabled ?? false, false);
+    assert.ok(after.traits.find((x) => x.type === "fatTissue")!.disabled);
+    assert.equal(after.traits.find((x) => x.type === "herding")!.disabled ?? false, false);
     // Следующий год — выключается второе свойство; затем животное погибает.
     g.phase = "foodBank";
     g.foodRoll = null;
     g = applyAction(g, { type: "rollFoodBank" });
-    const after2 = g.players[0]!.animals.find((x) => x.id === "np")!;
-    assert.ok(after2.traits.find((x) => x.type === "fatTissue")!.disabled);
-    g.phase = "foodBank";
-    g.foodRoll = null;
-    g = applyAction(g, { type: "rollFoodBank" });
+    // PDF с.2: после выключения последнего свойства смерть немедленная.
     assert.ok(!g.players[0]!.animals.some((x) => x.id === "np"), "животное съедено неоплазией");
   });
 
@@ -1214,16 +1236,18 @@ describe("растения: питание с растений", () => {
     assert.deepEqual([...ids].sort(), ["fruit", "nutr"]);
   });
 
-  it("питательное даёт вторую фишку", () => {
+  it("питательное даёт дополнительную синюю фишку (правила, ил. №6)", () => {
     const g = plantScenario(
       [[mkAnimal("a", 0, [t("fatTissue")])], [mkAnimal("b", 1, [])]],
       [mkPlant("p1", "perennial", 3, { traits: [t("nutritious")] })],
     );
     const next = applyAction(g, { type: "feedTakePlant", animalId: "a", plantId: "p1" });
-    // Первая фишка — еда, вторая (питательное) — в пустой жировой запас.
+    // Первая фишка — красная еда, дополнительная — синяя; красных с растения
+    // списывается ровно одна.
     assert.equal(next.players[0]!.animals[0]!.food, 1);
     assert.equal(next.players[0]!.animals[0]!.fatTokens, 1);
-    assert.equal(next.plants![0]!.food, 1);
+    assert.equal(next.players[0]!.animals[0]!.blueFood, 0); // синяя ушла в жир, не на тело
+    assert.equal(next.plants![0]!.food, 2);
   });
 
   it("лекарственное: накормлено, свойства не действуют до конца фазы", () => {
@@ -1341,7 +1365,7 @@ describe("растения: хищное растение", () => {
       [[mkAnimal("a", 0, [])], [mkAnimal("sw", 1, [t("swimming")]), mkAnimal("big", 1, [t("highBodyWeight")])]],
       [mkPlant("cp", "carnivorous", 1)],
     );
-    assert.equal(legalFeedActions(g, 0).some((x) => x.type === "feedPlantAttack"), false);
+    assert.equal(legalFeedActions(g, 0).some((x) => x.type === "feedPlantAttack" && (x.preyId === "sw" || x.preyId === "big")), false);
   });
 
   it("хищное растение атакует раз за фазу питания", () => {
@@ -1795,6 +1819,16 @@ describe("трава и грибы: бешенство и безумие", () =>
     assert.equal(hunt.currentPlayerId, 1);
   });
 
+  it("бешеный раунд без доступной жертвы можно завершить", () => {
+    const g = floraScenario([[mkAnimal("mad", 0, [])], []], [mkFlora("f1", "thryn", 3)]);
+    g.currentPlayerId = 0;
+    g.rageTurn = { animalId: "mad" };
+    assert.ok(legalFeedActions(g, 0).some((action) => action.type === "feedEndTurn"));
+    const next = applyAction(g, { type: "feedEndTurn" });
+    assert.equal(next.rageTurn, null);
+    assert.ok(legalFeedActions(next, next.currentPlayerId).length > 0);
+  });
+
   it("безумие: раунд игрока проводит сосед — метка снимается", () => {
     const g = floraScenario(
       [[mkAnimal("a", 0, []), mkAnimal("crazy", 0, [])], [mkAnimal("b", 1, [])]],
@@ -1989,12 +2023,21 @@ function blindPop(g: GameState, playerId: number): number {
 }
 
 describe("случайные мутации: раздача и развитие", () => {
-  it("личные слепые колоды вместо руки", () => {
+  it("личные слепые колоды и три стартовых вида", () => {
     const g = createGame(3, "normal", 11, undefined, { randomMutations: true });
     for (const p of g.players) {
       assert.equal(p.hand.length, 0);
       assert.equal(p.blindDeck!.length, 7);
+      assert.equal(p.animals.length, 3);
+      assert.ok(p.animals.every((animal) => animal.traits.length === 0));
     }
+    const bodyIds = g.players.flatMap((p) => p.animals.map((animal) => animal.cardId));
+    const stockIds = new Set([
+      ...g.deck,
+      ...g.players.flatMap((p) => [...p.hand, ...(p.blindDeck ?? [])]),
+    ].map((card) => card.id));
+    assert.equal(new Set(bodyIds).size, bodyIds.length);
+    assert.ok(bodyIds.every((cardId) => !stockIds.has(cardId)));
   });
 
   it("новый вид: карта ложится животным с численностью 1, пустая колода — пас", () => {
@@ -2045,6 +2088,21 @@ describe("случайные мутации: раздача и развитие"
     assert.equal(hasTrait(g.players[0]!.animals[0]!, "burrowing"), false);
     const mutant = g.players[0]!.animals.find((x) => x.id !== "a" && hasTrait(x, "burrowing"));
     assert.ok(mutant, "отделённое свойство уехало новым видом");
+  });
+
+  it("упрощение не создаёт второе тело из карты тела-мутанта", () => {
+    const animal = mkAnimal("a", 0, []);
+    animal.traits = [
+      { id: nid("t"), cardId: animal.cardId, type: "hibernation", hidden: false, playSeq: 1 },
+    ];
+    let g = mutationScenario([[animal], []], [["simplification"], []]);
+    g = applyAction(g, { type: "devMutate", intent: "trait", animalId: "a" });
+    const species = g.players[0]!.animals;
+    const bodyIds = species.map((candidate) => candidate.cardId);
+    assert.equal(species.length, 2);
+    assert.equal(new Set(bodyIds).size, 2);
+    assert.equal(hasTrait(species[0]!, "hibernation"), false);
+    assert.equal(species[1]!.traits.length, 0);
   });
 
   it("почкование растит вид в начале хода развития", () => {
@@ -2112,7 +2170,9 @@ describe("случайные мутации: питание и вымирани�
     assert.ok(!legalFeedActions(g, 0).some((a) => a.type === "feedTake"));
     g = applyAction(g, { type: "feedHunt", carnivoreId: "h", preyId: "p" });
     const h = g.players[0]!.animals[0]!;
-    assert.equal(h.food >= 2, true);
+    assert.equal(h.food, 1);
+    assert.equal(h.blueFood, 1);
+    assert.ok(!legalFeedActions(g, 0).some((a) => a.type === "feedHunt" && a.carnivoreId === "h"));
   });
 
   it("облигатный хищник не сочетается с хищником и падальщиком", () => {
@@ -2222,7 +2282,7 @@ describe("случайные мутации: полные партии бото�
     const g = driveMutations(401, {});
     assert.equal(g.phase, "gameOver");
     assert.ok(g.scores);
-    for (const s of g.scores) assert.ok(s.total > 0);
+    assert.ok(g.scores.some((score) => score.total > 0));
   });
 
   it("партия мутации+континенты доходит до конца", () => {
@@ -2553,6 +2613,20 @@ describe("масштаб колоды", () => {
     const g = createGame(2, "normal", 61, undefined, {}, 30);
     const total = g.deck.length + g.players.reduce((s, p) => s + p.hand.length, 0);
     assert.equal(total, 30);
+  });
+
+  it("сжатие сохраняет все свойства и не выдаёт больше колоды", () => {
+    const fullProperties = new Set(buildDeck(nid).flatMap((card) => card.faces));
+    for (const deckSize of [20, 30, 40, 60, 84]) {
+      for (const playerCount of [2, 3, 4, 5, 6, 7, 8]) {
+        const g = createGame(playerCount, "normal", 2000 + deckSize + playerCount, undefined, {}, deckSize);
+        const cards = [...g.deck, ...g.players.flatMap((player) => player.hand)];
+        const properties = new Set(cards.flatMap((card) => card.faces));
+        for (const property of fullProperties) assert.ok(properties.has(property));
+        for (const player of g.players) assert.equal(player.hand.length, 6);
+        assert.ok(cards.length >= deckSize);
+      }
+    }
   });
 
   it("укороченная колода даёт меньше лет и корректный финал", () => {

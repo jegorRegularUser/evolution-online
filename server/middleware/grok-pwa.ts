@@ -3,11 +3,11 @@
  * global h3 middleware because vite.config.ts sets `serverDir: "./server"` —
  * without that option Nitro v3 never scans this directory.
  *
- * - `?install=1&platform=ios` on a document path → the Home Screen tutorial,
- *   bundled into the server build via `?raw` (the public/ directory is CDN
- *   static output on Vercel and not readable from the function).
- * - `/__grok/manifest.webmanifest` → per-app-named manifest (kept out of
- *   public/ so this dynamic response is the only one).
+ * - `?install=1` (with or without `platform`) on a document path → the Home
+ *   Screen tutorial, bundled into the server build via `?raw` (the public/
+ *   directory is CDN static output on Vercel and not readable from the function).
+ * - `/__grok/manifest.webmanifest` → branded manifest (kept out of public/
+ *   so this dynamic response is the only one).
  * - Other HTML documents → stream-inject PWA + OG head tags at `</head>`.
  *   OG identity is baked via `virtual:grok-og-identity` at `vite build`
  *   (this function cannot read `src/lib/og/site.json` or `public/og.jpg`).
@@ -15,12 +15,14 @@
  *   runtime hook's return value, and `render:html` does not exist in Nitro v3.
  */
 import installPageTemplate from "../../scripts/install-page.html?raw";
+import faviconSvg from "../../public/__grok/favicon.svg?raw";
 import { grokOgIdentity } from "virtual:grok-og-identity";
 import {
   acceptsHtml,
   createHeadInjector,
   isDocumentPath,
   isInstallQuery,
+  langFromAcceptLanguage,
   renderInstallPageHtml,
   renderWebManifest,
 } from "../../scripts/grok-pwa-shared.mjs";
@@ -70,8 +72,21 @@ export default async function grokPwaMiddleware(
   const path = event.url.pathname;
   const urlWithQuery = path + event.url.search;
 
+  // Совместимость со старыми запросами браузеров: тот же брендированный SVG,
+  // но без 404 на историческом `/favicon.ico`.
+  if (path === "/favicon.ico") {
+    return new Response(faviconSvg, {
+      headers: {
+        "content-type": "image/svg+xml; charset=utf-8",
+        "cache-control": "public, max-age=86400",
+      },
+    });
+  }
+
   if (path === "/__grok/manifest.webmanifest" || path === "/__grok/manifest.json") {
-    return new Response(renderWebManifest(requestHost(event)), {
+    // Язык манифеста — по Accept-Language браузера (ru по умолчанию); ответ
+    // без кэша, как и раньше: заголовок запроса не участвует в ключе CDN.
+    return new Response(renderWebManifest(requestHost(event), langFromAcceptLanguage(event.req.headers.get("accept-language"))), {
       headers: {
         "content-type": "application/manifest+json; charset=utf-8",
         "cache-control": "no-cache",
@@ -87,6 +102,7 @@ export default async function grokPwaMiddleware(
     const html = renderInstallPageHtml(installPageTemplate, {
       host: requestHost(event),
       url: urlWithQuery,
+      lang: langFromAcceptLanguage(event.req.headers.get("accept-language")),
     });
     return new Response(html, {
       headers: {

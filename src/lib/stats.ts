@@ -127,7 +127,7 @@ export const ACHIEVEMENTS: Achievement[] = [
   },
   {
     id: "clean-pop",
-    name: "Чистая популяция",
+    name: "Без потерь",
     desc: "Победа без единой потери животного",
     icon: Shield,
     check: (c) => c.game.won && c.session.deaths === 0,
@@ -177,9 +177,13 @@ export const ACHIEVEMENTS: Achievement[] = [
   {
     id: "all-modules",
     name: "Полная экосистема",
-    desc: "Партия со всеми четырьмя дополнениями",
+    desc: "Партия с «Континентами», «Растениями» и «Случайными мутациями»",
     icon: Layers,
-    check: (c) => c.game.modules.length >= 4,
+    check: (c) =>
+      c.game.modules.length === 3 &&
+      c.game.modules.includes("continents") &&
+      c.game.modules.includes("plants") &&
+      c.game.modules.includes("randomMutations"),
   },
   {
     id: "darwin",

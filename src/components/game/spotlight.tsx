@@ -75,6 +75,39 @@ const TONE_BORDER: Record<SpotlightItem["tone"], string> = {
  */
 const QUEUE_CAP = 12;
 
+/** Имена событий «Дикого мира» — общий словарь бейджей и спотлайта. */
+const WILD_NAME_KEYS = {
+  iceAge: "wild.name.iceAge",
+  goldenAge: "wild.name.goldenAge",
+  resettlement: "wild.name.resettlement",
+  cropFailure: "wild.name.cropFailure",
+  meteorite: "wild.name.meteorite",
+  wildfire: "wild.name.wildfire",
+} as const;
+
+/** Тексты эффектов события — готовые ключи волны 2 (log.wild.*). */
+const WILD_LOG_KEYS = {
+  planned: {
+    iceAge: "log.wild.planned.iceAge",
+    goldenAge: "log.wild.planned.goldenAge",
+    resettlement: "log.wild.planned.resettlement",
+    cropFailure: "log.wild.planned.cropFailure",
+    meteorite: "log.wild.planned.meteorite",
+    wildfire: "log.wild.planned.wildfire",
+  },
+  started: {
+    iceAge: "log.wild.started.iceAge",
+    goldenAge: "log.wild.started.goldenAge",
+    resettlement: "log.wild.started.resettlement",
+    cropFailure: "log.wild.started.cropFailure",
+    meteorite: "log.wild.started.meteorite",
+    wildfire: "log.wild.started.wildfire",
+  },
+} as const;
+
+/** Больше истории животных, чем нужно для отложенного показа, не держим. */
+const ANIMAL_REGISTRY_CAP = 256;
+
 function animalInfo(state: GameState, id: string): AnimalInfo | null {
   const a = findAnimal(state, id);
   if (!a) return null;
@@ -89,6 +122,34 @@ function animalInfo(state: GameState, id: string): AnimalInfo | null {
       bulky: hasTrait(a, "highBodyWeight"),
     }),
   };
+}
+
+/**
+ * Запомнить животных, ограничив историю по размеру. Сначала вытесняем старые
+ * записи, которых уже нет в живом состоянии; только если живых животных самих
+ * больше лимита, удаляем самые старые из них.
+ */
+export function rememberAnimals(registry: Map<string, AnimalInfo>, state: GameState): void {
+  const liveIds = new Set<string>();
+  for (const p of state.players) {
+    p.animals.forEach((a) => {
+      liveIds.add(a.id);
+      const info = animalInfo(state, a.id);
+      if (!info) return;
+      // Обновляем позицию записи в порядке Map: это и есть её возраст.
+      registry.delete(a.id);
+      registry.set(a.id, info);
+    });
+  }
+  for (const id of registry.keys()) {
+    if (registry.size <= ANIMAL_REGISTRY_CAP) break;
+    if (!liveIds.has(id)) registry.delete(id);
+  }
+  while (registry.size > ANIMAL_REGISTRY_CAP) {
+    const oldest = registry.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    registry.delete(oldest);
+  }
 }
 
 function labelOf(info: AnimalInfo | null): string {
@@ -198,6 +259,39 @@ function buildItems(
         });
         break;
       }
+      // ── Волна 2/1: «Дикий мир» (дизайн-пакет §1.3, §2.2) ──
+      case "wildEventPlanned": {
+        // Прогноз — общий вход события: карточка говорит «готовься».
+        items.push({
+          id: nextId(),
+          tone: "info",
+          title: t("spot.wild.planned"),
+          note: t(WILD_LOG_KEYS.planned[e.event], { year: e.year }),
+          ms: 2400,
+        });
+        break;
+      }
+      case "wildEventStarted": {
+        if (e.event === "meteorite") break; // у метеорита своя эпик-карточка ниже
+        items.push({
+          id: nextId(),
+          tone: "info",
+          title: t(WILD_NAME_KEYS[e.event]),
+          note: t(WILD_LOG_KEYS.started[e.event], { year: e.year }),
+          ms: 2400,
+        });
+        break;
+      }
+      case "wildMeteorite": {
+        items.push({
+          id: nextId(),
+          tone: "death",
+          title: t(WILD_NAME_KEYS.meteorite),
+          note: t("spot.wild.meteorite", { n: e.affected }),
+          ms: 2800,
+        });
+        break;
+      }
       default:
         break;
     }
@@ -247,20 +341,11 @@ export function EventSpotlight({ replayEvents, onActiveChange }: EventSpotlightP
 
   // Пополняем память о животных на каждом состоянии (до разбора событий).
   useEffect(() => {
-    if (!state) return;
-    for (const p of state.players) {
-      p.animals.forEach((a, i) => {
-        registryRef.current.set(a.id, {
-          owner: p.name,
-          no: i + 1,
-          art: speciesArt({
-            swimming: hasTrait(a, "swimming"),
-            carnivore: hasTrait(a, "carnivore"),
-            bulky: hasTrait(a, "highBodyWeight"),
-          }),
-        });
-      });
+    if (!state) {
+      registryRef.current.clear();
+      return;
     }
+    rememberAnimals(registryRef.current, state);
   }, [state]);
 
   // Пропущенные сетевые батчи: тот же показ, тем же темпом, по порядку.

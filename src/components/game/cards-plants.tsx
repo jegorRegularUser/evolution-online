@@ -26,9 +26,10 @@ export const PlantTraitChip = memo(function PlantTraitChip({
         tip.anchorRef.current = el;
       }}
       {...tip.triggerProps}
+      tabIndex={-1}
       data-trait-chip
       className={cn(
-        "anim-chip-in relative inline-flex h-6 items-center gap-1 rounded-[var(--radius-xs)] bg-leaf/20 px-1.5 text-[11px] font-medium text-leaf ring-1 ring-inset ring-leaf/40 outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+        "anim-chip-in relative inline-flex h-6 items-center gap-1 rounded-[var(--radius-xs)] bg-leaf/20 px-1.5 text-[11px] font-medium text-leaf-ink ring-1 ring-inset ring-leaf-ink/40 outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
         fresh && "chip-fresh",
       )}
     >
@@ -82,6 +83,16 @@ export const PlantCard = memo(function PlantCard({
     image: art,
   };
   const interactive = Boolean(onClick);
+  const activatable = interactive && (highlight || Boolean(selected));
+  const accessibleName = [
+    plantName(plant.kind, lang),
+    t("card.plant"),
+    t("card.foodTokens", { n: plant.food, m: def.maxFood }),
+    plant.shelters > 0 ? t("card.sheltersFree", { n: plant.shelters }) : null,
+    plant.traits.length ? plant.traits.map((trait) => traitName(trait.type, lang)).join(", ") : t("card.noTraits"),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <div
       data-plant-id={plant.id}
@@ -89,12 +100,18 @@ export const PlantCard = memo(function PlantCard({
         tip.anchorRef.current = el;
       }}
       {...tip.triggerProps}
-      aria-label={`${plantName(plant.kind, lang)} — ${t("card.plant")}`}
-      role={interactive ? "button" : undefined}
+      aria-label={accessibleName}
+      role={activatable ? "button" : "group"}
+      tabIndex={activatable ? 0 : -1}
+      aria-pressed={activatable ? Boolean(selected) : undefined}
+      aria-disabled={interactive && !activatable ? true : undefined}
+      aria-keyshortcuts={activatable ? "Enter Space" : undefined}
+      data-plant-target={activatable || undefined}
       onClick={interactive ? onClick : undefined}
       onKeyDown={
-        interactive
+        activatable
           ? (e) => {
+              if (e.target !== e.currentTarget) return;
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 onClick?.();
@@ -103,12 +120,12 @@ export const PlantCard = memo(function PlantCard({
           : undefined
       }
       className={cn(
-        "plant-card anim-card-in relative flex w-[132px] shrink-0 cursor-pointer flex-col overflow-hidden rounded-[var(--radius-md)] border border-ink/12 bg-parchment text-ink shadow-[var(--shadow-card)] transition-[transform,border-color,opacity] duration-[var(--motion-fast)] ease-[var(--ease-out)]",
+        "plant-card anim-card-in relative flex w-[132px] shrink-0 flex-col overflow-hidden rounded-[var(--radius-md)] border border-ink/12 bg-parchment text-ink shadow-[var(--shadow-card)] outline-none transition-[transform,border-color,opacity] duration-[var(--motion-fast)] ease-[var(--ease-out)] focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-2",
         selected ? "border-clay ring-2 ring-clay/40" : "",
         highlight ? "border-accent ring-2 ring-accent" : "",
         dimmed ? "opacity-45" : "",
         dying ? "dying-pulse border-danger/60" : "",
-        interactive && "hover:-translate-y-0.5",
+        activatable && "cursor-pointer hover:-translate-y-0.5",
       )}
     >
       <div className="relative aspect-[4/3] w-full overflow-hidden bg-parchment-2">
@@ -148,7 +165,7 @@ export const PlantCard = memo(function PlantCard({
           {plant.food === 0 ? <span className="text-[10px] text-ink-soft">{t("card.noFood")}</span> : null}
         </span>
         {plant.shelters > 0 ? (
-          <span className="ml-auto flex items-center gap-0.5 rounded-full bg-leaf/25 px-1.5 text-[10px] font-semibold text-leaf" title={t("card.sheltersFree", { n: plant.shelters })}>
+          <span className="ml-auto flex items-center gap-0.5 rounded-full bg-leaf/25 px-1.5 text-[11px] font-semibold text-leaf-ink" title={t("card.sheltersFree", { n: plant.shelters })}>
             <span className="size-2.5 rounded-full border border-leaf/60 bg-leaf/40" />
             {plant.shelters}
           </span>

@@ -10,13 +10,13 @@
  * действие») и сворачивания партии — соло-механики, они из прогона убраны.
  */
 import { chromium } from "playwright";
-import { menuReady, phaseOf, safeClick, startNetGame } from "./qa-lib.mjs";
+import { menuReady, newRuPage, phaseOf, safeClick, startNetGame } from "./qa-lib.mjs";
 
 const base = process.env.EVO_URL ?? "http://127.0.0.1:8099";
 
 const browser = await chromium.launch();
 try {
-  const page = await browser.newPage();
+  const { page } = await newRuPage(browser);
   page.on("pageerror", (e) => {
     console.error("PAGEERROR:", e.message);
     process.exitCode = 1;
@@ -35,7 +35,7 @@ try {
 
   // Правила из полосы навигации закрываются Esc.
   await page.getByRole("button", { name: /Правила/ }).click();
-  await page.getByText("Ход года").first().waitFor({ timeout: 15000 });
+  await page.getByText("Год и фазы").first().waitFor({ timeout: 15000 });
   console.log("OK: правила открываются из полосы");
   await page.keyboard.press("Escape");
   await inMenu(5000);
@@ -43,7 +43,7 @@ try {
 
   // …и кликом по затемнению вокруг карточки.
   await page.getByRole("button", { name: /Правила/ }).click();
-  await page.getByText("Ход года").first().waitFor({ timeout: 15000 });
+  await page.getByText("Год и фазы").first().waitFor({ timeout: 15000 });
   await page.mouse.click(24, 200);
   await inMenu(5000);
   console.log("OK: клик вне закрывает правила");

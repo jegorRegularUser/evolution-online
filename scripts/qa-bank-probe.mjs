@@ -11,7 +11,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { endPhaseStep, phaseOf, shotsDir, startNetGame } from "./qa-lib.mjs";
+import { endPhaseStep, newRuContext, phaseOf, shotsDir, startNetGame } from "./qa-lib.mjs";
 
 const BASE = process.env.EVO_URL ?? "http://127.0.0.1:8099/";
 const SHOTS = shotsDir();
@@ -69,7 +69,7 @@ async function dismiss(page) {
 }
 
 async function run(cfg) {
-  const ctx = await browser.newContext({ viewport: { width: cfg.w, height: cfg.h } });
+  const ctx = await newRuContext(browser, { viewport: { width: cfg.w, height: cfg.h } });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => console.log("  PAGEERROR:", e.message));
   await page.goto(BASE, { waitUntil: "networkidle" });

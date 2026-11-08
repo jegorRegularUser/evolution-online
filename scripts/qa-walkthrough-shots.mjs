@@ -18,7 +18,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { menuReady, phaseOf, shotsDir, startNetGame } from "./qa-lib.mjs";
+import { menuReady, newRuContext, phaseOf, shotsDir, startNetGame } from "./qa-lib.mjs";
 
 const BASE = process.env.EVO_URL ?? "http://127.0.0.1:8099/";
 // Куда копировать снимки в конце. По умолчанию — временная папка вне
@@ -605,7 +605,7 @@ const WARM_MODULES = [
  * сценарий не рвался на середине.
  */
 async function warmup() {
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1280, height: 800 } });
   const page = await ctx.newPage();
   track(page, "warmup");
   try {
@@ -832,7 +832,7 @@ async function phasePass(page, vp, mobile, budgetMs = 120_000) {
 async function spectatorPass(code) {
   // Десктопный зритель.
   try {
-    const specCtx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const specCtx = await newRuContext(browser, { viewport: { width: 1280, height: 800 } });
     const spec = await specCtx.newPage();
     track(spec, "spectator-desktop");
     await gotoMenu(spec);
@@ -853,7 +853,7 @@ async function spectatorPass(code) {
   }
   // Мобильный зритель.
   try {
-    const mSpecCtx = await browser.newContext(mobileOpts());
+    const mSpecCtx = await newRuContext(browser, mobileOpts());
     const mSpec = await mSpecCtx.newPage();
     track(mSpec, "spectator-mobile");
     await gotoMenu(mSpec);
@@ -964,7 +964,7 @@ try {
 
   // ══ ДЕСКТОПНЫЙ ПРОХОД ═══════════════════════════════════════════════════
   if (MODE !== "mobile") {
-  const dCtx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const dCtx = await newRuContext(browser, { viewport: { width: 1280, height: 800 } });
   const desktop = await dCtx.newPage();
   if (MODE === "net") {
     track(desktop, "net-host");
@@ -982,10 +982,10 @@ try {
   if (MODE === "full") {
   let netRoomCode = "";
   const hostCtx = dCtx; // хост — та же вкладка, что прошла соло
-  const guestCtx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const guestCtx = await newRuContext(browser, { viewport: { width: 1280, height: 800 } });
   const guest = await guestCtx.newPage();
   track(guest, "net-guest");
-  const waiterCtx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const waiterCtx = await newRuContext(browser, { viewport: { width: 1280, height: 800 } });
   const waiter = await waiterCtx.newPage();
   track(waiter, "net-waiter");
 
@@ -1076,7 +1076,7 @@ try {
   if (/^[A-Z]{4}$/.test(netRoomCode)) {
     // Десктопный зритель.
     try {
-      const specCtx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      const specCtx = await newRuContext(browser, { viewport: { width: 1280, height: 800 } });
       const spec = await specCtx.newPage();
       track(spec, "spectator-desktop");
       await gotoMenu(spec);
@@ -1099,7 +1099,7 @@ try {
 
     // Мобильный зритель — им же закрываем требование «Смотреть» на мобилке.
     try {
-      const mSpecCtx = await browser.newContext(mobileOpts());
+      const mSpecCtx = await newRuContext(browser, mobileOpts());
       const mSpec = await mSpecCtx.newPage();
       track(mSpec, "spectator-mobile");
       await gotoMenu(mSpec);
@@ -1130,7 +1130,7 @@ try {
 
   // ══ МОБИЛЬНЫЙ ПРОХОД ════════════════════════════════════════════════════
   if (MODE === "full" || MODE === "mobile" || MODE === "table-phases") {
-  const mCtx = await browser.newContext(mobileOpts());
+  const mCtx = await newRuContext(browser, mobileOpts());
   const mobile = await mCtx.newPage();
   if (MODE === "table-phases") {
     track(mobile, "mobile-phases");

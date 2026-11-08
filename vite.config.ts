@@ -176,14 +176,29 @@ function authPopupPlugin(): Plugin {
 // `0.0.0.0:8080` is the live-preview contract — don't change host/port.
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
+// Внешние имена, по которым серверу разрешено отвечать.
+//
+// Vite блокирует незнакомый Host (защита от DNS-rebinding) и отдаёт 403
+// «Blocked request». Ведущая точка = совпадение по суффиксу: у quick-туннелей
+// cloudflared хост случайный. Локальная игра по IP не требует ничего.
+//
+// `EVO_ALLOWED_HOSTS` — имена деплоя (например, домашнее evo.home.arpa или
+// адрес туннеля). Читается на старте сервера, поэтому добавление нового имени
+// не требует пересборки — достаточно перезапустить контейнер с новой переменной.
+const allowedHosts = [
+  ".trycloudflare.com",
+  ...(process.env.EVO_ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map((host) => host.trim())
+    .filter(Boolean),
+];
+
 export default defineConfig(({ command, isPreview }) => ({
   server: {
     host: "0.0.0.0",
     port: 8080,
     strictPort: true,
-    // Quick tunnels (cloudflared) come with a random *.trycloudflare.com host;
-    // a leading dot = suffix match. Direct IP access (LAN play) needs nothing.
-    allowedHosts: [".trycloudflare.com"],
+    allowedHosts,
     // Служебные файлы не должны дёргать вотчер: запись `qa-*.mjs` в корне или
     // `scripts/*.txt` QA-скриптами вызывала `[vite] page reload` всех открытых
     // вкладок, а появление новых файлов в `artifacts/` расширяло скан кандидатов
@@ -215,9 +230,32 @@ export default defineConfig(({ command, isPreview }) => ({
     host: "127.0.0.1",
     port: 8081,
     strictPort: true,
-    allowedHosts: [".trycloudflare.com"],
+    allowedHosts,
   },
   resolve: { tsconfigPaths: true },
+  // Vite 8 использует Rolldown; manualChunks оставляет входной маршрут
+  // компактным и не даёт Three/cannon/Recharts слипться с общим route-кодом.
+  // Импорты остаются статическими (Dice3D/StatsScreen — чужие файлы), поэтому
+  // это разделение само по себе не превращает тяжёлые чанки в lazy: браузер
+  // всё равно загрузит их вместе с зависимыми модулями маршрута.
+  build: {
+    rolldownOptions: {
+      output: {
+        manualChunks(id) {
+          const normalized = id.replaceAll("\\", "/");
+          if (normalized.includes("/node_modules/three/")) return "vendor-three";
+          if (normalized.includes("/node_modules/cannon-es/")) return "vendor-cannon";
+          if (
+            normalized.includes("/node_modules/recharts/") ||
+            normalized.includes("/node_modules/victory-vendor/") ||
+            normalized.includes("/node_modules/d3-")
+          ) {
+            return "vendor-charts";
+          }
+        },
+      },
+    },
+  },
   // Прогреваем тяжёлые зависимости на старте дев-сервера: без этого Vite
   // обнаруживает их лениво уже во время партии и делает full-reload страницы
   // (соло-партия на секунду «выбрасывается» в меню и восстанавливается из сейва).

@@ -3,6 +3,7 @@
 // Использование: node qa-plants.mjs [baseUrl]
 import { mkdirSync } from "node:fs";
 import { chromium } from "playwright";
+import { newRuContext } from "./scripts/qa-lib.mjs";
 
 const BASE = process.argv[2] ?? "http://localhost:8099/";
 const OUT = new URL("./screenshots/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
@@ -171,7 +172,7 @@ const browser = await chromium.launch();
 (async () => {
   // ---------- «Растения» отдельно (desktop) ----------
   {
-    const ctx = await browser.newContext({ viewport: { width: 1366, height: 850 } });
+    const ctx = await newRuContext(browser, { viewport: { width: 1366, height: 850 } });
     const page = await ctx.newPage();
     await track(page, "plants");
     try {
@@ -185,7 +186,7 @@ const browser = await chromium.launch();
 
   // ---------- «Растения» + «Континенты» (desktop) ----------
   {
-    const ctx = await browser.newContext({ viewport: { width: 1366, height: 850 } });
+    const ctx = await newRuContext(browser, { viewport: { width: 1366, height: 850 } });
     const page = await ctx.newPage();
     await track(page, "plants-continents");
     try {
@@ -211,7 +212,7 @@ const browser = await chromium.launch();
 
   // ---------- «Растения» на мобиле ----------
   {
-    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const ctx = await newRuContext(browser, { viewport: { width: 390, height: 844 } });
     const page = await ctx.newPage();
     await track(page, "plants-mobile");
     try {

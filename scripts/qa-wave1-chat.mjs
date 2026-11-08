@@ -19,7 +19,7 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { warmupServer } from "./qa-lib.mjs";
+import { newRuContext, warmupServer } from "./qa-lib.mjs";
 
 const BASE = process.env.EVO_URL ?? "http://127.0.0.1:8099/";
 const SHOTS = process.env.EVO_SHOTS ?? join(tmpdir(), "evo-wave1-shots");
@@ -49,7 +49,7 @@ function track(page, label) {
 }
 
 async function newPage(label, viewport) {
-  const context = await browser.newContext({ viewport });
+  const context = await newRuContext(browser, { viewport });
   const page = await context.newPage();
   track(page, label);
   return page;

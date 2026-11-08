@@ -3,6 +3,7 @@
 // Использование: node qa-fungi.mjs [baseUrl]
 import { mkdirSync } from "node:fs";
 import { chromium } from "playwright";
+import { newRuContext } from "./scripts/qa-lib.mjs";
 
 const BASE = process.argv[2] ?? "http://localhost:8099/";
 const OUT = new URL("./screenshots/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
@@ -168,7 +169,7 @@ const browser = await chromium.launch();
 (async () => {
   // ---------- «Трава и грибы» отдельно (desktop) ----------
   {
-    const ctx = await browser.newContext({ viewport: { width: 1366, height: 850 } });
+    const ctx = await newRuContext(browser, { viewport: { width: 1366, height: 850 } });
     const page = await ctx.newPage();
     await track(page, "fungi");
     try {
@@ -182,7 +183,7 @@ const browser = await chromium.launch();
 
   // ---------- «Трава и грибы» + «Континенты» ----------
   {
-    const ctx = await browser.newContext({ viewport: { width: 1366, height: 850 } });
+    const ctx = await newRuContext(browser, { viewport: { width: 1366, height: 850 } });
     const page = await ctx.newPage();
     await track(page, "fungi-continents");
     try {
@@ -206,7 +207,7 @@ const browser = await chromium.launch();
 
   // ---------- «Трава и грибы» + «Растения» + «Континенты» ----------
   {
-    const ctx = await browser.newContext({ viewport: { width: 1366, height: 850 } });
+    const ctx = await newRuContext(browser, { viewport: { width: 1366, height: 850 } });
     const page = await ctx.newPage();
     await track(page, "fungi-plants");
     try {
@@ -225,7 +226,7 @@ const browser = await chromium.launch();
 
   // ---------- Мобильная раскладка 390×844 ----------
   {
-    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const ctx = await newRuContext(browser, { viewport: { width: 390, height: 844 } });
     const page = await ctx.newPage();
     await track(page, "fungi-mobile");
     try {

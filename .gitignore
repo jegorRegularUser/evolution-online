@@ -41,6 +41,11 @@ testem.log
 .DS_Store
 Thumbs.db
 *.md
+# README остаётся в репозитории (остальные .md — локальные отчёты)
+!/README.md
+!/README.ru.md
+# IP-план волны 0 — постоянный документ рядом с plans/*.md (уже tracked)
+!plans/ip-plan.md
 /mcps
 agent-tools/
 terminals/
@@ -61,3 +66,11 @@ artifacts/
 
 # Auto-generated context docs
 .repo-context/
+.repo-context.json
+
+# Generated deployment output (kept on disk for local previews, never committed)
+.vercel/
+.grok/preview.pid
+
+# кэш TanStack Router/RSC-плагина (генерируется dev-сервером)
+.tanstack/

@@ -42,6 +42,7 @@ import { chromium } from "playwright";
 import {
   SHOTS,
   bodyOf,
+  newRuContext,
   openMenu,
   sleep,
   startNetGame,
@@ -266,7 +267,7 @@ async function observeUntouched(page) {
 // ── сценарий одного варианта ─────────────────────────────────────────────────
 
 async function runVariant(browser, label, modules) {
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
   const pageProblems = trackPage(page, label);
   let step = "старт";

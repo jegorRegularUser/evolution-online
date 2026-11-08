@@ -1,8 +1,8 @@
-import { ArrowDown, ChevronLeft, ChevronRight, Dices, Send, SmilePlus } from "lucide-react";
+import { ArrowDown, ChevronLeft, ChevronRight, Dices, Send, SmilePlus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { REACTION_EMOJI, type ReactionEmoji, type ReactionMessage } from "@/lib/net/shared";
-import { useGameStore } from "@/store/game-store";
+import { useGameStore, type ReactionFailure } from "@/store/game-store";
 import { translate, useLang, useT, type Lang } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -61,6 +61,7 @@ export interface EventFeedProps {
   /** Быстрые фразы кнопками-чипами над полем ввода. */
   quickPhrases?: string[];
   title?: string;
+  titleId?: string;
   /** dock — док с рельсом и мобильной шторкой (игра); panel — встроенная
    *  панель на всю высоту родителя (колонка чата в лобби и ожидающем столе). */
   variant?: "dock" | "panel";
@@ -74,6 +75,8 @@ const SPECTATOR_SEAT = -2;
 
 /** Окно, в котором подряд идущие реплики одного автора считаются одним блоком. */
 const GROUP_WINDOW_MS = 3 * 60 * 1000;
+/** Сервер режет чат до 400 символов; поле показывает тот же лимит до отправки. */
+const CHAT_MAX_LENGTH = 400;
 
 /**
  * Мягкая подложка реплики: цвет автора, подмешанный к фону поверхностей, —
@@ -82,6 +85,47 @@ const GROUP_WINDOW_MS = 3 * 60 * 1000;
  */
 export function feedTint(color: string): string {
   return `color-mix(in oklab, ${color} 12%, var(--color-surface))`;
+}
+
+/**
+ * Приближение feedTint в sRGB: 12% цвета автора к поверхности (--color-surface,
+ * #1c2119). Нужно не для рисования (подложку красит CSS), а чтобы заранее
+ * знать светлоту подложки и выбрать контрастный тон надписей. Если цвет не
+ * разбирается как hex (#rgb/#rrggbb) — подложка считается нейтрально тёмной.
+ */
+function mixedTintoSurface(color: string): [number, number, number] | null {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
+  if (!m) return null;
+  const digits = m[1]!;
+  const full =
+    digits.length === 3
+      ? [...digits].map((c) => c + c).join("")
+      : digits;
+  const parts = [0, 2, 4].map((i) => Number.parseInt(full.slice(i, i + 2), 16) / 255);
+  if (parts.some((p) => Number.isNaN(p))) return null;
+  const surface = [0x1c, 0x21, 0x19].map((v) => v / 255);
+  return [0, 1, 2].map((i) => 0.12 * parts[i]! + 0.88 * surface[i]!) as [number, number, number];
+}
+
+/** Относительная яркость WCAG — по ней выбираем тон надписей. */
+function relativeLuminance([r, g, b]: [number, number, number]): number {
+  const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+/**
+ * Тон служебных надписей реплики (время, кнопка реакции) — контрастный её
+ * подложке. Тёмная подложка (все 12%-ные тонирования, включая самые светлые
+ * цвета палитры) — светлые чернила «subtle»; светлая подложка (запас на будущую
+ * смену формулы тонирования) — тёмные чернила, как у светлых карточек.
+ * Едет в строку CSS-переменной --feed-meta-ink: глобальное правило
+ * `.paper-sheet .text-subtle` красит надписи под светлый носитель и на
+ * тонированной реплике без переопределения уводит время в темноту.
+ */
+export function feedMetaInk(color: string | undefined): string {
+  const mixed = color ? mixedTintoSurface(color) : null;
+  if (!mixed || relativeLuminance(mixed) <= 0.3) return "var(--color-subtle)";
+  return "var(--color-ink-soft)";
 }
 
 /**
@@ -135,9 +179,13 @@ function timeLabel(at: number, lang: Lang): string {
 }
 
 /**
- * Высота нижнего дока (footer игры) — оверлей журнала не должен его накрывать:
- * в фазе развития док высокий из-за карты руки. Меряем при раскрытии, при
- * ресайзе окна и при изменении самого футера (смена фазы, модулей, вёрстки).
+ * Высота нижнего дока (footer игры) — отступ шторки журнала над ним: в фазе
+ * развития док высокий из-за карты руки. Меряем высоту самого футера, а не
+ * расстояние от низа вьюпорта: sticky-футер при прокрутке «висит» на разных
+ * top, и старый замер (innerHeight - top) ловил момент прокрутки и завышал
+ * отступ — на планшете панель от этого сжималась до трети экрана. Меряем при
+ * раскрытии, при ресайзе окна и при изменении самого футера (смена фазы,
+ * модулей, вёрстки).
  */
 function useDockInset(active: boolean): number {
   const [inset, setInset] = useState(0);
@@ -145,7 +193,7 @@ function useDockInset(active: boolean): number {
     if (!active || typeof window === "undefined") return;
     const measure = () => {
       const footer = document.querySelector("footer");
-      const h = footer ? window.innerHeight - footer.getBoundingClientRect().top : 0;
+      const h = footer ? footer.getBoundingClientRect().height : 0;
       setInset(h > 0 ? Math.round(h) : 0);
     };
     measure();
@@ -202,18 +250,34 @@ function groupItems(items: FeedItem[]): FeedRowView[] {
   return rows;
 }
 
-/** Слить агрегаты реакций из пропсов и локальные (оптимистичные). */
-function mergeReactions(have: FeedReaction[] | undefined, local: FeedReaction[]): FeedReaction[] {
-  if (!local.length) return have ?? [];
-  const out = [...(have ?? [])];
-  for (const r of local) {
-    const i = out.findIndex((x) => x.emoji === r.emoji);
-    if (i < 0) out.push(r);
-    // count берём по максимуму: серверный агрегат уже мог учесть мою реакцию,
-    // и сумма удвоила бы счётчик под сообщением.
-    else out[i] = { emoji: r.emoji, count: Math.max(out[i]!.count, r.count), mine: Boolean(out[i]!.mine || r.mine) };
+/** Локально выбранное состояние своей реакции, независимое от серверного агрегата. */
+type LocalReactionState = Partial<Record<ReactionEmoji, boolean>>;
+
+/**
+ * Свести серверный агрегат с локальным toggle. Пока сервер не умеет удалять
+ * реакцию, ложное «mine» маскируется только у одного автора: из чужого
+ * счётчика вычитается ровно одна строка, а остальные сохраняются.
+ */
+function mergeReactions(
+  have: FeedReaction[] | undefined,
+  desired: LocalReactionState,
+): FeedReaction[] {
+  const merged = new Map<ReactionEmoji, FeedReaction>();
+  for (const reaction of have ?? []) {
+    const wanted = desired[reaction.emoji];
+    const mine = wanted ?? Boolean(reaction.mine);
+    const count = Math.max(
+      0,
+      reaction.count +
+        (wanted === undefined ? 0 : Number(wanted) - Number(Boolean(reaction.mine))),
+    );
+    if (count > 0) merged.set(reaction.emoji, { emoji: reaction.emoji, count, mine });
   }
-  return out;
+  for (const [emoji, wanted] of Object.entries(desired) as [ReactionEmoji, boolean][]) {
+    if (!wanted || merged.has(emoji)) continue;
+    merged.set(emoji, { emoji, count: 1, mine: true });
+  }
+  return [...merged.values()];
 }
 
 /**
@@ -267,18 +331,6 @@ export function typingLabel(names: string[] | undefined, lang: Lang): string {
   return translate(lang, "feed.typingMany");
 }
 
-/** Поставить/снять свою реакцию в локальном слое (до серверного учёта). */
-function toggleMine(prev: FeedReaction[], emoji: ReactionEmoji): FeedReaction[] {
-  // Сервер реакции только добавляет (удаления в контракте нет): локальный слой
-  // нужен, чтобы своя реакция была видна сразу, а после прихода серверного
-  // агрегата он лишь дополняет его (см. mergeReactions — там max, не сумма).
-  const found = prev.find((r) => r.emoji === emoji);
-  if (!found) return [...prev, { emoji, count: 1, mine: true }];
-  if (!found.mine) return prev.map((r) => (r.emoji === emoji ? { ...r, count: r.count + 1, mine: true } : r));
-  if (found.count > 1) return prev.map((r) => (r.emoji === emoji ? { ...r, count: r.count - 1, mine: false } : r));
-  return prev.filter((r) => r.emoji !== emoji);
-}
-
 /**
  * Одна запись ленты: время, автор и текст в оформлении по типу.
  *
@@ -295,23 +347,40 @@ function FeedRow({
   grouped,
   tail,
   onReact,
+  reactionFailure,
 }: {
   item: FeedItem;
   grouped: boolean;
   tail: boolean;
   onReact?: ((emoji: ReactionEmoji) => void) | undefined;
+  reactionFailure: ReactionFailure | null;
 }) {
   const rowRef = useRef<HTMLLIElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Панель реакций раскрывается НАД кнопкой; у строк у верхнего края списка
+  // места над ними нет (панель обрезалась бы краем списка) — там она вниз.
+  const [pickerPlacement, setPickerPlacement] = useState<"above" | "below">("above");
   const t = useT();
   const lang = useLang();
   // Локальный (оптимистичный) слой реакций: своя реакция видна сразу, ещё до
   // появления серверной привязки реакции к сообщению (контракт — в отчёте).
-  const [localReactions, setLocalReactions] = useState<FeedReaction[]>([]);
+  const [localReactions, setLocalReactions] = useState<LocalReactionState>({});
   const isChat = item.kind === "chat";
   const canReact = Boolean(onReact) && isChat;
   const tint = isChat && item.color ? feedTint(item.color) : undefined;
   const chips = mergeReactions(item.reactions, localReactions);
+
+  // Сервер отклонил оптимистичную реакцию: возвращаем строку к серверному
+  // агрегату. Чужие реакции и счётчик под ними при этом не меняются.
+  useEffect(() => {
+    if (!reactionFailure || reactionFailure.chatId !== item.chatId) return;
+    setLocalReactions((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, reactionFailure.emoji)) return prev;
+      const next = { ...prev };
+      delete next[reactionFailure.emoji];
+      return next;
+    });
+  }, [item.chatId, reactionFailure]);
 
   // Палитра реакций закрывается кликом вне строки и по Esc.
   useEffect(() => {
@@ -332,8 +401,35 @@ function FeedRow({
 
   const react = (emoji: ReactionEmoji) => {
     setPickerOpen(false);
-    setLocalReactions((prev) => toggleMine(prev, emoji));
+    if (useGameStore.getState().net?.sending) return;
+    const visible = chips.find((reaction) => reaction.emoji === emoji);
+    if (visible?.mine) {
+      setLocalReactions((prev) => ({ ...prev, [emoji]: false }));
+      return;
+    }
+    // Серверный контракт умеет только INSERT. Если строка уже есть, повторный
+    // клик возвращает локальную видимость без нового POST — иначе появился бы дубль.
+    if (item.reactions?.some((reaction) => reaction.emoji === emoji && reaction.mine)) {
+      setLocalReactions((prev) => ({ ...prev, [emoji]: true }));
+      return;
+    }
+    setLocalReactions((prev) => ({ ...prev, [emoji]: true }));
     onReact?.(emoji);
+  };
+
+  const togglePicker = () => {
+    if (pickerOpen) {
+      setPickerOpen(false);
+      return;
+    }
+    // Хватает ли места НАД строкой (до верха прокручиваемого списка)? Панель
+    // на пальце ~52px высотой; если меньше — раскрываемся вниз, иначе край
+    // списка обрезал бы панель у самых верхних записей.
+    const row = rowRef.current;
+    const scroller = row?.closest('[role="log"]') as HTMLElement | null;
+    const roomAbove = row && scroller ? row.getBoundingClientRect().top - scroller.getBoundingClientRect().top : Infinity;
+    setPickerPlacement(roomAbove > 60 ? "above" : "below");
+    setPickerOpen(true);
   };
 
   return (
@@ -347,7 +443,7 @@ function FeedRow({
         "feed-item-in group relative grid grid-cols-[2.6rem_minmax(0,1fr)] items-start gap-x-1.5 px-2 text-xs",
         item.kind === "system" ? "py-0.5 text-[10px] leading-4" : grouped ? "py-0.5" : "py-1",
         KIND_CLASS[item.kind],
-        canReact && "pr-7",
+        canReact && "pr-12 xl:pr-7",
         // Подложка «как в игре»: у реплики с цветом автора — бумажная текстура
         // paper-sheet поверх подложки цветом (inline backgroundColor ниже,
         // blend-mode overlay смешивает лист с цветом — та же пара, что у табло
@@ -361,15 +457,20 @@ function FeedRow({
         !(grouped && tint) && "mt-1",
       )}
       style={
-        tint
-          ? { backgroundColor: tint, backgroundPosition: textureShift(item.id) }
-          : undefined
+        {
+          // Контрастный тон времени и кнопки реакции под подложку строки —
+          // одно значение на оба элемента (см. feedMetaInk).
+          "--feed-meta-ink": feedMetaInk(item.color),
+          ...(tint
+            ? { backgroundColor: tint, backgroundPosition: textureShift(item.id) }
+            : {}),
+        } as CSSProperties
       }
     >
       {!grouped && item.at ? (
         <time
           dateTime={new Date(item.at).toISOString()}
-          className="mt-px font-mono text-[10px] leading-4 text-subtle tabular-nums"
+          className="mt-px font-mono text-[10px] leading-4 text-[color:var(--feed-meta-ink)] tabular-nums"
         >
           {timeLabel(item.at, lang)}
         </time>
@@ -401,7 +502,7 @@ function FeedRow({
                 disabled={!canReact}
                 onClick={() => react(r.emoji)}
                 className={cn(
-                  "inline-flex h-5 min-w-5 items-center justify-center gap-0.5 rounded-full border px-1.5 text-[10px] leading-none transition-colors duration-[var(--motion-fast)]",
+                  "inline-flex h-11 min-w-11 items-center justify-center gap-1 rounded-full border px-2 text-xs leading-none transition-colors duration-[var(--motion-fast)] xl:h-5 xl:min-w-5 xl:gap-0.5 xl:px-1.5 xl:text-[10px]",
                   r.mine
                     ? "border-accent bg-accent/15 text-fg"
                     : "border-border bg-surface/80 text-muted hover:bg-surface-2",
@@ -421,11 +522,16 @@ function FeedRow({
             aria-label={t("game.addReaction")}
             title={t("game.reactionTitle")}
             aria-expanded={pickerOpen}
-            onClick={() => setPickerOpen((v) => !v)}
+            onClick={togglePicker}
             className={cn(
               // Мышь: кнопка проявляется по наведению. Палец: остаётся видимой.
               // Кнопка реакции на сообщение: палцу — 44px, мыши (xl+) — 24px.
-              "absolute right-1 top-1 grid size-11 place-items-center rounded-full text-subtle transition-opacity duration-[var(--motion-fast)] hover:bg-surface-2 hover:text-fg focus-visible:opacity-100 xl:size-6",
+              // Цвет — тот же контрастный тон, что у времени (--feed-meta-ink):
+              // под тонированной репликой «subtle» без адаптива темнёт.
+              // Палец: иконка прижата к верхней строке реплики (на уровне
+              // времени), круг-хитзона остаётся 44px; на xl круг 24px и иконка
+              // по центру — там он и так на строке времени.
+              "absolute right-1 top-1 grid size-11 place-items-start rounded-full pt-2 text-[color:var(--feed-meta-ink)] transition-opacity duration-[var(--motion-fast)] hover:bg-surface-2 hover:text-fg focus-visible:opacity-100 xl:size-6 xl:place-items-center xl:pt-0",
               pickerOpen ? "opacity-100" : "opacity-60 sm:opacity-0 sm:group-hover:opacity-100",
             )}
           >
@@ -435,7 +541,14 @@ function FeedRow({
             <div
               role="group"
               aria-label={t("game.reactions")}
-              className="absolute right-1 top-7 z-10 flex gap-0.5 rounded-full border border-border bg-surface p-0.5 shadow-[var(--shadow-card)]"
+              className={cn(
+                // Панель раскрывается НАД кнопкой (absolute к строке реплики):
+                // под сообщением она упиралась в нижний край дока и обрезалась.
+                // У верхних записей списка места над строкой нет — там панель
+                // раскрывается вниз (флип считается при открытии).
+                "absolute right-1 z-10 flex gap-1 rounded-full border border-border bg-surface p-1 shadow-[var(--shadow-card)] xl:gap-0.5 xl:p-0.5",
+                pickerPlacement === "above" ? "bottom-full" : "top-full mt-1",
+              )}
             >
               {REACTION_EMOJI.map((emoji) => (
                 <button
@@ -463,8 +576,11 @@ function FeedRow({
  * (плавная анимация ширины). Свёрнутое состояние — узкий рельс справа сверху
  * с кнопкой раскрытия и красной точкой непрочитанного чата.
  *
- * Уже (sm…xl): панель поверх стола справа. Телефон (<sm): полноэкранный
- * «мессенджер» с шапкой и вводом внизу.
+ * Телефон (<640px): полноэкранный лист поверх стола — фон-затемнение под ним,
+ * прокрутка страницы заблокирована, шапка с крестиком с учётом safe-area.
+ * Планшет (sm…xl): шторка в потоке после игрового стола (центрированная,
+ * ограниченной ширины) — ни табло, ни шапку она не накрывает, раскрытие
+ * прокручивает страницу к ней.
  *
  * Внутри: фильтры «Всё/События/Чат» (кнопки, не списки; «Зрители» — только
  * когда зрительские реплики есть в ленте), быстрые фразы, кнопка броска
@@ -480,6 +596,7 @@ export function EventFeed({
   typingNames,
   quickPhrases,
   title,
+  titleId,
   className,
   variant = "dock",
 }: EventFeedProps) {
@@ -491,6 +608,8 @@ export function EventFeed({
   // Непрочитанные — в сторе: бейдж показывается на кнопке журнала в шапке.
   const unread = useGameStore((s) => s.logUnread);
   const setUnread = useGameStore((s) => s.setLogUnread);
+  const chatSending = useGameStore((s) => s.net?.sending === "chat");
+  const reactionFailure = useGameStore((s) => s.net?.reactionFailure ?? null);
   const [chatUnread, setChatUnread] = useState(false);
   // В доке на широком экране в DOM одновременно живут два списка: колонка xl и
   // (скрытая) мобильная шторка. Один ref указывал бы на последний отрисованный
@@ -498,13 +617,84 @@ export function EventFeed({
   // список выбираем по фактической высоте: скрытый имеет clientHeight = 0.
   const listRef = useRef<HTMLDivElement>(null);
   const listSheetRef = useRef<HTMLDivElement>(null);
+  const mobileSheetRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
   const pinnedRef = useRef(true);
   const prevCountRef = useRef(items.length);
   // Тексты своих сообщений с временем отправки: по ним лента узнаёт своё
   // сообщение в потоке и прокручивает список вниз в любом случае.
-  const ownQueueRef = useRef<Array<{ text: string; at: number }>>([]);
-  // Оверлей на sm…xl не должен накрывать нижний док (карта руки в развитии).
+  const ownQueueRef = useRef<Array<{ text: string; at: number; clearDraft: boolean }>>([]);
+  // Панель на sm…xl не должна накрывать нижний док (карта руки в развитии).
   const dockInset = useDockInset(open && variant === "dock");
+
+  // Мобильный журнал: на телефоне (<640px) это полноэкранный лист поверх стола,
+  // на планшете (sm…xl) — шторка в потоке после стола. Планшет прокручивает
+  // страницу к шторке при открытии; телефону прокрутка не нужна — лист сам
+  // накрывает экран. Esc закрывает лист, а фокус возвращается на кнопку в
+  // шапке, открывшую журнал.
+  useEffect(() => {
+    if (variant !== "dock") return;
+    const wasOpen = wasOpenRef.current;
+    if (open && !wasOpen) {
+      returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+    if (!open && wasOpen) {
+      requestAnimationFrame(() => {
+        const target = returnFocusRef.current;
+        if (target?.isConnected) target.focus({ preventScroll: true });
+      });
+    }
+    wasOpenRef.current = open;
+    if (!open) return;
+    requestAnimationFrame(() => {
+      // Только планшет (sm…xl): шторка в потоке, надо доскроллить до неё.
+      if (window.matchMedia("(min-width: 40rem) and (max-width: 79.999rem)").matches) {
+        mobileSheetRef.current?.scrollIntoView({ block: "end" });
+      }
+    });
+  }, [open, onToggle, variant]);
+
+  // Полноэкранный лист на телефоне блокирует прокрутку страницы под собой:
+  // стол не должен ёрзать под оверлеем и «дышать» при тапах по сообщениям.
+  // На планшете шторка живёт в потоке — там блокировать нечего; поворот
+  // экрана или смена ширины посреди открытия снимает блокировку сама.
+  useEffect(() => {
+    if (!open || variant !== "dock" || typeof window === "undefined") return;
+    const mq = window.matchMedia("(max-width: 39.999rem)");
+    const body = document.body;
+    const restore = body.style.overflow;
+    let locked = false;
+    const sync = () => {
+      if (mq.matches && !locked) {
+        locked = true;
+        body.style.overflow = "hidden";
+      } else if (!mq.matches && locked) {
+        locked = false;
+        body.style.overflow = restore;
+      }
+    };
+    sync();
+    mq.addEventListener("change", sync);
+    return () => {
+      mq.removeEventListener("change", sync);
+      if (locked) body.style.overflow = restore;
+    };
+  }, [open, variant]);
+
+  useEffect(() => {
+    if (!open || variant !== "dock") return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // Открытый ConfirmDialog владеет Escape: журнал под ним не должен
+      // закрываться одновременно и перехватывать возврат фокуса.
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      event.preventDefault();
+      onToggle(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onToggle, open, variant]);
 
   /** Живой список ленты: первый из отрисованных, у которого есть высота. */
   const activeList = useCallback((): HTMLDivElement | null => {
@@ -560,11 +750,21 @@ export function EventFeed({
     if (queue.length) {
       const now = Date.now();
       const fresh = queue.filter((q) => now - q.at < 60_000);
-      ownQueueRef.current = fresh;
-      own = fresh.some((q) =>
-        items.some((i) => i.kind === "chat" && i.text === q.text && (i.at ?? 0) >= q.at - 2000),
-      );
-      if (own) ownQueueRef.current = [];
+      const waiting: typeof fresh = [];
+      for (const q of fresh) {
+        const delivered = items.some(
+          (i) => i.kind === "chat" && i.text === q.text && (i.at ?? 0) >= q.at - 2000,
+        );
+        if (!delivered) {
+          waiting.push(q);
+          continue;
+        }
+        own = true;
+        if (q.clearDraft) {
+          setDraft((current) => (current.trim() === q.text.trim() ? "" : current));
+        }
+      }
+      ownQueueRef.current = waiting;
     }
     if (!own && added <= 0) return;
     if (open && (pinnedRef.current || own)) {
@@ -603,14 +803,16 @@ export function EventFeed({
     [setUnread],
   );
 
-  const send = (raw: string) => {
+  const send = (raw: string, clearDraft = true) => {
     const text = raw.trim();
-    if (!text || !onSend) return;
+    if (!text || !onSend || useGameStore.getState().net?.sending) return;
     onSend(text);
-    setDraft("");
-    // Держим текст в очереди, пока сервер не вернёт его в ленте: по нему
-    // лента узнает своё сообщение и прокрутит список вниз в любом случае.
-    ownQueueRef.current = [...ownQueueRef.current.slice(-4), { text, at: Date.now() }];
+    // До ACK поле не очищаем: обрыв или серверный отказ не должны уничтожить
+    // текст. После появления реплики эффект выше снимет только тот же draft.
+    ownQueueRef.current = [
+      ...ownQueueRef.current.slice(-4),
+      { text, at: Date.now(), clearDraft },
+    ];
   };
 
   const last = items.length ? items[items.length - 1] : undefined;
@@ -668,7 +870,8 @@ export function EventFeed({
             <button
               key={phrase}
               type="button"
-              onClick={() => send(phrase)}
+              onClick={() => send(phrase, false)}
+              disabled={chatSending}
               className="min-h-11 min-w-11 rounded-full border border-border bg-surface px-3 py-1 text-[10px] text-muted transition-colors duration-[var(--motion-fast)] hover:bg-surface-2 hover:text-fg xl:min-h-7 xl:min-w-0 xl:px-2 xl:py-0.5"
             >
               {phrase}
@@ -676,6 +879,12 @@ export function EventFeed({
           ))}
         </div>
       ) : null}
+      <div
+        data-chat-counter
+        className="mb-1 px-1 text-right text-[10px] leading-3 tabular-nums text-subtle"
+      >
+        {draft.length}/{CHAT_MAX_LENGTH}
+      </div>
       <form
         className="flex items-end gap-1.5"
         onSubmit={(event) => {
@@ -691,7 +900,8 @@ export function EventFeed({
           className="max-xl:size-11"
           aria-label={t("feed.diceButton")}
           title={t("feed.diceButton")}
-          onClick={() => send(`🎲 ${1 + Math.floor(Math.random() * 6)}`)}
+          onClick={() => send(`🎲 ${1 + Math.floor(Math.random() * 6)}`, false)}
+          disabled={chatSending}
         >
           <Dices className="size-4" />
         </Button>
@@ -718,11 +928,12 @@ export function EventFeed({
             }
           }}
           rows={1}
+          maxLength={CHAT_MAX_LENGTH}
           placeholder={t("feed.placeholder")}
           aria-label={t("feed.messageAria")}
-          className="max-h-20 min-h-11 flex-1 resize-none rounded-[var(--radius-sm)] border border-border bg-bg/60 px-2.5 py-1.5 text-xs leading-5 text-fg placeholder:text-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring xl:min-h-9"
+          className="max-h-20 min-h-11 flex-1 resize-none rounded-[var(--radius-sm)] border border-border bg-bg/60 px-2.5 py-1.5 text-xs leading-5 text-fg placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring xl:min-h-9"
         />
-        <Button type="submit" variant="secondary" size="iconSm" className="max-xl:size-11" aria-label={t("feed.send")} disabled={!draft.trim()}>
+        <Button type="submit" variant="secondary" size="iconSm" className="max-xl:size-11" aria-label={t("feed.send")} disabled={!draft.trim() || chatSending}>
           <Send className="size-4" />
         </Button>
       </form>
@@ -747,6 +958,7 @@ export function EventFeed({
               item={item}
               grouped={grouped}
               tail={tail}
+              reactionFailure={reactionFailure}
               onReact={onReact ? (emoji) => onReact(item, emoji) : undefined}
             />
           ))
@@ -792,7 +1004,7 @@ export function EventFeed({
         )}
       >
         <header className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border px-2.5 py-2">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-muted">{titleText}</span>
+          <span id={titleId} tabIndex={titleId ? -1 : undefined} className="min-w-0 flex-1 truncate text-sm font-medium text-muted">{titleText}</span>
           {filters}
         </header>
         {list("text-sm")}
@@ -865,40 +1077,63 @@ export function EventFeed({
         )}
       </aside>
 
-      {/* ── Планшет и телефон: раскрыто — на <sm весь экран («мессенджер»),
-          на sm…xl — панель справа. Свёрнутой плашки нет: журнал открывается
-          кнопкой в шапке (там же счётчик непрочитанного), а лишняя пилюля
-          поверх стола только мешала. ── */}
-      <div className="xl:hidden">
+      {/* ── Телефон (<640px): полноэкранный лист ПОВЕРХ стола — fixed inset-0.
+          Под ним фон-затемнение: тап мимо листа закрывает его. Прокрутка страницы
+          под листом блокируется (см. эффект ниже), шапка отступает от «чёлки»
+          (safe-area-top), композер уже учтёт safe-area-bottom. Открывается той
+          же кнопкой журнала в шапке; закрывается крестиком, тапом по фону и Esc.
+          Финальный экран (z-40) и карточка «Ваш ход» остаются над листом.
+
+          Планшет (sm…xl): прежняя шторка В ПОТОКЕ после игрового стола — не
+          накрывает табло и не сдвигает его. Раньше на sm…xl шторка становилась
+          fixed-панелью справа: на планшете она съедала пол-экрана, накрывала
+          шапку и табло, а замер дока завышался прокруткой и сжимал панель до
+          трети высоты. ── */}
+      <div className="relative z-30 xl:hidden">
         {open ? (
-          <div
-            role="dialog"
-            aria-label={titleText}
-            style={{ "--feed-dock": `${dockInset}px` } as CSSProperties}
-            className={cn(
-              // Телефон (<sm): полноэкранный «мессенджер» во весь вьюпорт.
-              // Планшет (sm…xl): панель справа, снизу упирается в док игры —
-              // карта руки в развитии остаётся доступной, а чат не растёт
-              // за пределы экрана (max-h-dvh + список со своим скроллом).
-              "fixed inset-x-0 bottom-0 top-0 z-50 flex max-h-dvh flex-col bg-surface sm:left-auto sm:right-0 sm:w-[380px] sm:bottom-[var(--feed-dock,0px)] sm:border-l sm:border-border sm:shadow-[var(--shadow-card)]",
-              "animate-[fade-in_.2s_var(--ease-out)]",
-            )}
-          >
-            <header className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border px-2.5 py-2">
-              <button
-                type="button"
-                onClick={() => onToggle(false)}
-                aria-label={t("feed.collapse", { title: titleText })}
-                className="grid size-8 max-xl:size-11 shrink-0 place-items-center rounded-[var(--radius-sm)] text-muted transition-colors duration-[var(--motion-fast)] hover:bg-surface-2 hover:text-fg"
-              >
-                <ChevronRight className="size-4" />
-              </button>
-              <span className="min-w-0 flex-1 truncate text-sm font-medium text-muted">{titleText}</span>
-              {filters}
-            </header>
-            {list("text-sm", listSheetRef)}
-            {composer}
-          </div>
+          <>
+            {/* Фон-затемнение только на телефоне: под полноэкранным листом его
+                не видно, но тап в момент анимации открытия/краевые случаи
+                всё равно закрывают лист, как требует жест «тап мимо». */}
+            <div
+              aria-hidden
+              data-feed-backdrop
+              onClick={() => onToggle(false)}
+              className="fixed inset-0 z-30 bg-ink/60 sm:hidden"
+            />
+            <section
+              ref={mobileSheetRef}
+              aria-label={titleText}
+              data-feed-mobile
+              style={{ "--feed-gap": `${Math.max(16, dockInset)}px` } as CSSProperties}
+              className={cn(
+                // Телефон: лист на весь экран поверх стола. Планшет: та же
+                // шторка в потоке после стола — ширина ограничена и
+                // центрирована, боковые поля остаются как у телефона.
+                "fixed inset-0 z-40 flex flex-col overflow-hidden bg-surface",
+                "sm:relative sm:inset-auto sm:z-30 sm:mx-auto sm:mt-2 sm:mb-[var(--feed-gap)] sm:h-[min(58dvh,32rem)] sm:max-h-[calc(100dvh-6rem)] sm:min-h-[22rem] sm:w-[min(40rem,calc(100%-1rem))] sm:rounded-[var(--radius-lg)] sm:border sm:border-border sm:shadow-[var(--shadow-card)]",
+                "animate-[fade-in_.2s_var(--ease-out)]",
+              )}
+            >
+              <header className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border px-2.5 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+                <button
+                  type="button"
+                  onClick={() => onToggle(false)}
+                  aria-label={t("feed.collapse", { title: titleText })}
+                  className="grid size-8 max-xl:size-11 shrink-0 place-items-center rounded-[var(--radius-sm)] text-muted transition-colors duration-[var(--motion-fast)] hover:bg-surface-2 hover:text-fg"
+                >
+                  {/* Палец — крестик поверх экрана, мышь планшета — стрелка
+                      к столу: одна кнопка, иконка по ширине. */}
+                  <X className="size-4 sm:hidden" />
+                  <ChevronRight className="hidden size-4 sm:block" />
+                </button>
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-muted">{titleText}</span>
+                {filters}
+              </header>
+              {list("text-sm", listSheetRef)}
+              {composer}
+            </section>
+          </>
         ) : null}
       </div>
     </>

@@ -26,7 +26,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { startNetGame } from "./qa-lib.mjs";
+import { newRuContext, startNetGame } from "./qa-lib.mjs";
 
 const SHOTS = process.env.EVO_SHOTS ?? join(tmpdir(), "evo-wave1-docks");
 mkdirSync(SHOTS, { recursive: true });
@@ -159,7 +159,7 @@ async function advanceUntil(page, needle, ms, clickNames = ["Закончить 
 // Сценарий 1 (сеть): «Случайные мутации» + M8 + M9 (голодные)
 // ────────────────────────────────────────────────────────────────────────────
 async function mutationsScenario() {
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => fail("PAGEERROR (мутации): " + e.message));
   // Сетевой стол с ботом и «Случайными мутациями» — соло-режим удалён (M1).
@@ -300,7 +300,7 @@ async function mutationsScenario() {
 // реальный пас проверяет сценарий «мутации» выше и сетевые сценарии волны.
 // ────────────────────────────────────────────────────────────────────────────
 async function fedScenario() {
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
   // Поллинг замораживается обрывом POST'ов, и вызванный кнопкой запрос паса
   // отклоняется — «Failed to fetch» здесь ожидаемый артефакт заморозки.
@@ -463,7 +463,7 @@ async function fedScenario() {
 // Сценарий 2 (сеть): M15 на сетевом снимке — там баг и жил
 // ────────────────────────────────────────────────────────────────────────────
 async function netScenario() {
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => fail("PAGEERROR (сеть): " + e.message));
   const code = await startNetGame(page, {

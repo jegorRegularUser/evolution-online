@@ -16,6 +16,7 @@ import {
   advancePhase,
   dismissSpotlight as libDismissSpotlight,
   menuReady,
+  newRuContext,
   phaseOf,
   shotsDir,
   startNetGame,
@@ -148,7 +149,7 @@ async function advanceUntil(page, needle, ms) {
 
 try {
   // ── 1. Меню ──
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => fail("PAGEERROR: " + e.message));
   await page.goto(BASE, { waitUntil: "networkidle" });
@@ -170,7 +171,7 @@ try {
   info("меню: " + JSON.stringify(menu));
   report.menu = menu;
 
-  const mctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const mctx = await newRuContext(browser, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const mpage = await mctx.newPage();
   await mpage.goto(BASE, { waitUntil: "networkidle" });
   if (!(await menuReady(mpage, 25_000))) fail("мобильное меню не дождалось гидратации");
@@ -231,7 +232,7 @@ try {
 
   // ── 6. Мобильная партия ──
   {
-    const c = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    const c = await newRuContext(browser, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
     const p = await c.newPage();
     await p.goto(BASE, { waitUntil: "networkidle" });
     try {

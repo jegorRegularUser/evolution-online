@@ -82,12 +82,12 @@ export const FoodDots = memo(function FoodDots({ animal }: { animal: Animal }) {
  * помечаются одинаково, и видно, какое свойство к какой паре относится.
  */
 export const PAIR_COLORS = [
-  "#1d6f8b",
-  "#8a4b1f",
-  "#4b7a2a",
-  "#7a3b86",
-  "#a33a3a",
-  "#2f6f57",
+  "#15536a",
+  "#743d19",
+  "#365f1c",
+  "#6b2f75",
+  "#84302f",
+  "#245744",
 ] as const;
 
 /** Метка пары для одного экземпляра свойства: цвет и «кто напарник». */
@@ -113,12 +113,14 @@ export const TraitChip = memo(function TraitChip({
   pair,
   mark,
   disabled,
+  paralyzed,
   fresh,
 }: {
   type: TraitId;
   pair?: boolean;
   mark?: PairMark;
   disabled?: boolean;
+  paralyzed?: boolean;
   fresh?: boolean;
 }) {
   const lang = useLang();
@@ -141,6 +143,7 @@ export const TraitChip = memo(function TraitChip({
     <span
       ref={anchorRef}
       {...tip.triggerProps}
+      tabIndex={-1}
       data-trait-chip
       style={
         mark && !disabled
@@ -150,17 +153,18 @@ export const TraitChip = memo(function TraitChip({
       className={cn(
         "anim-chip-in relative inline-flex h-6 items-center gap-1 rounded-[var(--radius-xs)] px-1.5 text-[11px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
         disabled
-          ? "bg-virus/15 text-virus line-through decoration-virus/60"
+          ? "bg-virus/15 text-virus-ink line-through decoration-virus-ink/60"
           : def.virusLike
-            ? "bg-virus/20 text-virus ring-1 ring-inset ring-virus/50"
+            ? "bg-virus/20 text-virus-ink ring-1 ring-inset ring-virus-ink/50"
             : def.harmful
               ? "bg-ink/85 text-parchment ring-1 ring-inset ring-clay/60"
               : type === "carnivore"
-                ? "bg-clay/15 text-clay"
+                ? "bg-clay/15 text-clay-ink"
                 : type === "fatTissue"
                   ? "bg-food-yellow/20 text-ink"
                   : "bg-ink/8 text-ink",
         fresh && !disabled && "chip-fresh",
+        paralyzed && "opacity-50 grayscale",
       )}
     >
       {mark && !disabled ? (
@@ -170,16 +174,16 @@ export const TraitChip = memo(function TraitChip({
       )}
       {traitShort(type, lang)}
       {def.extraFood > 0 ? (
-        <span className="text-[9px] font-semibold text-clay" title={t("card.extraFoodNeed", { n: def.extraFood })}>
+        <span className="text-[10px] font-semibold text-clay-ink" title={t("card.extraFoodNeed", { n: def.extraFood })}>
           +{def.extraFood}
         </span>
       ) : null}
       {mark ? (
-        <span className="text-[9px] font-semibold" style={{ color: mark.color }}>
+        <span className="text-[10px] font-semibold" style={{ color: mark.color }}>
           {mark.note}
         </span>
       ) : pair ? (
-        <span className="text-[9px] opacity-70">{t("card.pair")}</span>
+        <span className="text-[10px] text-ink-soft">{t("card.pair")}</span>
       ) : null}
       {fresh ? <span className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-clay" /> : null}
       {bubble}
@@ -246,7 +250,27 @@ export const AnimalCard = memo(function AnimalCard({
   onRename?: (animalId: string, name: string) => void;
 }) {
   const t = useT();
+  const lang = useLang();
   const fed = isFed(animal);
+  const need = speciesNeed(animal);
+  const fallbackName = hasTrait(animal, "obligateCarnivore")
+    ? t("card.obligateCarnivore")
+    : hasTrait(animal, "carnivore")
+      ? t("card.carnivore")
+      : hasTrait(animal, "swimming")
+        ? t("card.water")
+        : t("card.animal");
+  const animalName = animal.name ?? fallbackName;
+  const accessibleName = [
+    name,
+    no ? t("game.pairNo", { n: no }) : null,
+    animalName,
+    animal.traits.length ? animal.traits.map((trait) => traitName(trait.type, lang)).join(", ") : t("card.noTraits"),
+    t("card.foodTitle", { food: animal.food, need }),
+    animal.fatTokens > 0 ? t("card.foodFat", { n: animal.fatTokens }) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   // Inline-правка клички: карандаш у имени раскрывает поле, галочка —
   // сохранить, крестик/Esc — отменить. Номер «№N» не редактируется.
   const [renaming, setRenaming] = useState(false);
@@ -268,9 +292,25 @@ export const AnimalCard = memo(function AnimalCard({
       // Нативный HTML5-драг картинок/текста внутри карточки мешал бы датчикам.
       onDragStartCapture={(e) => e.preventDefault()}
       data-animal-id={animal.id}
+      data-board-target={highlight || undefined}
+      role={highlight ? "button" : "group"}
+      tabIndex={highlight ? 0 : -1}
+      aria-label={accessibleName}
+      aria-pressed={highlight ? Boolean(selected) : undefined}
+      aria-disabled={dimmed ? true : undefined}
+      aria-keyshortcuts={highlight ? "Enter Space" : undefined}
+      onKeyDown={(event) => {
+        // Вложенная кнопка переименования обрабатывается отдельно; выбор цели
+        // не должен срабатывать на её Enter/Space.
+        if (event.target !== event.currentTarget || !highlight || dimmed) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          event.currentTarget.click();
+        }
+      }}
       style={{ width }}
       className={cn(
-        "animal-card anim-card-in relative shrink-0 rounded-[var(--radius-lg)] border border-ink/10 bg-parchment p-3 text-left text-ink shadow-[var(--shadow-card)] transition-[transform,opacity] duration-[var(--motion-fast)] ease-[var(--ease-out)]",
+        "animal-card anim-card-in relative shrink-0 rounded-[var(--radius-lg)] border border-ink/10 bg-parchment p-3 text-left text-ink shadow-[var(--shadow-card)] outline-none transition-[transform,opacity] duration-[var(--motion-fast)] ease-[var(--ease-out)] focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-2",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
         // Единый признак состояния — одно кольцо. Приоритет:
         // цель под прицелом > выбрано > обычное; цвет рамки не меняем.
@@ -308,10 +348,9 @@ export const AnimalCard = memo(function AnimalCard({
           <Crosshair className="size-3.5" />
         </span>
       ) : null}
-      {/* Шапка переносится при нехватке места: название усекается, бейджи
-          (численность, убежище, сон, метки) уходят на вторую строку, а не
-          выпадают за край карточки. */}
-      <div className="mb-1 flex flex-wrap items-start justify-between gap-x-2 gap-y-1">
+      {/* Имя и состояния занимают отдельные строки. Статусы переносятся внутри
+          карточки, поэтому длинный набор не выталкивает их под соседнюю. */}
+      <div className="mb-1 min-w-0">
         {renaming && onRename ? (
           /* Правка клички: поле вместо имени, галочка сохраняет, крестик/Esc
              отменяют. События не всплывают — клики не выбирают животное и не
@@ -358,16 +397,7 @@ export const AnimalCard = memo(function AnimalCard({
             {no ? <span className="shrink-0 text-[10px] tabular-nums text-ink-soft">№{no}</span> : null}
             {/* Кличка владельца заменяет подпись вида; без неё — как раньше:
                 облигатный хищник / хищник / водное / животное. */}
-            <span className="truncate">
-              {animal.name ??
-                (hasTrait(animal, "obligateCarnivore")
-                  ? t("card.obligateCarnivore")
-                  : hasTrait(animal, "carnivore")
-                    ? t("card.carnivore")
-                    : hasTrait(animal, "swimming")
-                      ? t("card.water")
-                      : t("card.animal"))}
-            </span>
+            <span className="truncate">{animalName}</span>
             {/* Карандаш клички — только на своих животных в свой ход; место
                 под него выделяется внутри flex-1 строки, карточка не прыгает
                 и на тач-ширинах виден без hover. */}
@@ -388,11 +418,11 @@ export const AnimalCard = memo(function AnimalCard({
             ) : null}
           </span>
         )}
-        <span className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+        <span className="mt-1 flex w-full min-w-0 max-w-full flex-wrap items-center justify-start gap-1">
           {(animal.population ?? 1) > 1 ? (
             <span
               title={t("card.popTitle", { n: animal.population ?? 1 })}
-              className="flex items-center gap-0.5 rounded-full bg-accent/20 px-1.5 text-[10px] font-semibold tabular-nums text-accent"
+              className="flex shrink-0 items-center gap-0.5 rounded-full bg-accent/20 px-1.5 text-[11px] font-semibold tabular-nums text-accent-ink"
             >
               <img src={TOKEN.population} alt="" loading="lazy" className="size-3 rounded-full object-cover" />
               ×{animal.population}
@@ -401,7 +431,7 @@ export const AnimalCard = memo(function AnimalCard({
           {animal.sheltered ? (
             <span
               title={t("card.shelterTitle")}
-              className="flex items-center gap-1 rounded-full bg-leaf/25 px-1.5 text-[10px] font-medium uppercase tracking-wide text-leaf"
+              className="flex shrink-0 items-center gap-1 rounded-full bg-leaf/25 px-1.5 text-[11px] font-medium uppercase tracking-wide text-leaf-ink"
             >
               <span className="size-2 rounded-full border border-leaf/60 bg-leaf/40" />
               {t("card.shelter")}
@@ -410,17 +440,22 @@ export const AnimalCard = memo(function AnimalCard({
           {animal.sedated ? (
             <span
               title={t("card.sedatedTitle")}
-              className="rounded-full bg-ink/10 px-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-soft"
+              className="inline-flex shrink-0 rounded-full bg-ink/10 px-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-soft"
             >
               {t("card.sedated")}
             </span>
           ) : null}
+          {animal.traits.some((tr) => tr.paralyzed) ? (
+            <span className="inline-flex shrink-0 rounded-full bg-ink/10 px-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-soft">
+              {t("card.paralyzed")}
+            </span>
+          ) : null}
           {animal.hibernating ? (
-            <span className="rounded-full bg-ink/10 px-1.5 text-[10px] font-medium uppercase tracking-wide">{t("card.hibernating")}</span>
+            <span className="inline-flex shrink-0 rounded-full bg-ink/10 px-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-soft">{t("card.hibernating")}</span>
           ) : fed ? (
-            <span className="rounded-full bg-good/20 px-1.5 text-[10px] font-medium uppercase tracking-wide text-good">{t("card.fed")}</span>
+            <span className="inline-flex shrink-0 rounded-full bg-good/20 px-1.5 text-[11px] font-medium uppercase tracking-wide text-good-ink">{t("card.fed")}</span>
           ) : (
-            <span className="rounded-full bg-clay/15 px-1.5 text-[10px] font-medium uppercase tracking-wide text-clay">{t("card.hungry")}</span>
+            <span className="inline-flex shrink-0 rounded-full bg-clay/15 px-1.5 text-[11px] font-medium uppercase tracking-wide text-clay-ink">{t("card.hungry")}</span>
           )}
         </span>
       </div>
@@ -448,6 +483,7 @@ export const AnimalCard = memo(function AnimalCard({
               pair={Boolean(tr.pairWith)}
               mark={pairMarks?.[tr.id]}
               disabled={tr.disabled}
+              paralyzed={tr.paralyzed}
               fresh={freshSince !== undefined && tr.playSeq > freshSince ? true : undefined}
             />
           ))
@@ -498,6 +534,7 @@ export function PairPlate({
         tip.anchorRef.current = el;
       }}
       {...tip.triggerProps}
+      tabIndex={-1}
       data-trait-chip
       title={`${traitShort(type, lang)}${note ? ` · ${note}` : ""} — ${traitDesc(type, lang)}`}
       style={color ? { borderColor: color, backgroundColor: `${color}14` } : undefined}
@@ -523,12 +560,12 @@ export function PairPlate({
         </span>
       )}
       <span className="flex min-w-0 flex-1 flex-col sm:w-full sm:flex-none sm:items-center">
-        <span className="flex items-center gap-1 truncate text-[10px] font-semibold leading-tight sm:text-[9px]">
+        <span className="flex items-center gap-1 truncate text-[11px] font-semibold leading-tight">
           {color ? <span className="size-2 shrink-0 rounded-full" style={{ background: color }} /> : null}
           {traitShort(type, lang)}
         </span>
         <span
-          className="truncate text-[9px] leading-tight text-ink-soft sm:max-w-full sm:text-center sm:text-[8px]"
+          className="truncate text-[10px] leading-tight text-ink-soft sm:max-w-full sm:text-center"
           style={color ? { color } : undefined}
         >
           {note ?? t("card.pair")}
@@ -548,10 +585,39 @@ export function PairPlate({
   );
 }
 
-/** Грань карты руки: выбор свойства кликом, пояснение — наведением или фокусом. */
+/**
+ * Арт грани: иллюстрация свойства либо векторный глиф, если арта нет.
+ * На single-карте — кроп по верху (как на печатной карте), в колонке
+ * multi-карты — центр-кроп: окно узкое и высокое, целиком видна высота
+ * иллюстрации, а узнаваемость даёт именно её середина.
+ */
+function FaceArt({ face, inColumn = false }: { face: TraitId; inColumn?: boolean }) {
+  const dark = DARK_ART.has(face);
+  return TRAIT_ART[face] ? (
+    <img
+      src={TRAIT_ART[face]}
+      alt=""
+      loading="lazy"
+      className={cn(
+        "absolute inset-0 h-full w-full",
+        dark
+          ? "scale-[0.86] object-contain"
+          : inColumn
+            ? "object-cover object-center transition-[filter] group-hover:brightness-105"
+            : "object-cover object-top",
+      )}
+    />
+  ) : (
+    <span className="absolute inset-0 flex items-center justify-center bg-parchment-2">
+      <TraitGlyph id={face} className="size-10 text-ink-soft" />
+    </span>
+  );
+}
+
+/** Грань одно-свойственной карты руки: выбор кликом, пояснение — наведением
+ *  или фокусом. Арт и подпись — во всю ширину карты, как на печатной. */
 const HandFace = memo(function HandFace({
   face,
-  divided,
   active,
   disabled,
   dimmed,
@@ -560,7 +626,6 @@ const HandFace = memo(function HandFace({
   onBlocked,
 }: {
   face: TraitId;
-  divided: boolean;
   active?: boolean;
   disabled?: boolean;
   /** У игрока нет животных: низ карты слегка сереет, пока не сыграна карта. */
@@ -595,10 +660,11 @@ const HandFace = memo(function HandFace({
           }
           onSelect();
         }}
+        aria-label={traitName(face, lang)}
+        aria-pressed={active}
         aria-disabled={blocked || undefined}
         className={cn(
           "flex min-h-0 flex-1 flex-col items-stretch text-left outline-none transition-colors duration-[var(--motion-fast)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
-          divided ? "border-b border-dashed border-ink/15" : "",
           // Одно кольцо на состояние: выбранная грань — акцент, приглушение —
           // прозрачностью (без второй заливки и рамки).
           active ? "evo-face-picked" : "hover:bg-ink/5",
@@ -606,28 +672,14 @@ const HandFace = memo(function HandFace({
         )}
       >
         <span className={cn("relative block min-h-0 w-full flex-1 overflow-hidden", dark && "bg-ink")}>
-          {TRAIT_ART[face] ? (
-            <img
-              src={TRAIT_ART[face]}
-              alt=""
-              loading="lazy"
-              className={cn(
-                "absolute inset-0 h-full w-full",
-                dark ? "scale-[0.86] object-contain" : "object-cover object-[50%_28%]",
-              )}
-            />
-          ) : (
-            <span className="absolute inset-0 flex items-center justify-center bg-parchment-2">
-              <TraitGlyph id={face} className="size-10 text-ink-soft" />
-            </span>
-          )}
+          <FaceArt face={face} />
         </span>
         <span className="flex items-center gap-1 px-2 pt-1.5 text-[11px] font-semibold leading-tight">
           <TraitGlyph id={face} className="size-3.5 shrink-0" />
           <span className="truncate">{traitName(face, lang)}</span>
         </span>
         {def.extraFood ? (
-          <span className="px-2 pb-1.5 text-[10px] leading-tight text-clay">
+          <span className="px-2 pb-1.5 text-[10px] leading-tight text-clay-ink">
             {t("traitTip.extraFood", { n: def.extraFood })}
           </span>
         ) : (
@@ -642,14 +694,169 @@ const HandFace = memo(function HandFace({
 });
 
 /**
+ * Арт грани multi-карты (2+ свойств): узкая колонка с иллюстрацией. Клик по
+ * арту выбирает грань, пояснение — наведением или фокусом. Арты ставятся
+ * рядом на всю высоту тела карты: в вертикальной стопке от портретной
+ * иллюстрации оставалась бы верхняя треть (небо над сюжетом). Подписи живут
+ * отдельной стопкой под артами (FaceLabelRow) — в узкой колонке название
+ * обрезалось бы до нечитаемого.
+ *
+ * Колонка — ещё и ручка драга своей грани: data-face-drag читает корень карты
+ * при pointerdown (до активации датчика), чтобы бросок нёс именно эту грань.
+ * Зажатая грань подсвечивается, остальные темнеют — видно, какую половину
+ * держишь; при клике та же логика работает через active/siblingDim.
+ */
+const HandFaceImage = memo(function HandFaceImage({
+  face,
+  index,
+  divided,
+  active,
+  pressed,
+  siblingDim,
+  disabled,
+  dimmed,
+  blocked,
+  onSelect,
+  onBlocked,
+}: {
+  face: TraitId;
+  /** Позиция грани: попадает в data-face-drag — ручку драга этой грани. */
+  index: number;
+  /** Разделитель между колонками арта: вертикальный пунктир. */
+  divided: boolean;
+  active?: boolean;
+  /** Грань зажата (pointerdown) и/или летит в драге — акцентное кольцо. */
+  pressed?: boolean;
+  /** Зажата/выбрана другая грань — эта темнеет. */
+  siblingDim?: boolean;
+  disabled?: boolean;
+  dimmed?: boolean;
+  /** Грань недоступна: легального действия для неё сейчас нет. */
+  blocked?: boolean;
+  onSelect: () => void;
+  onBlocked?: () => void;
+}) {
+  const lang = useLang();
+  const dark = DARK_ART.has(face);
+  // На тач-устройствах подсказка не переключается тапом: тап выбирает грань.
+  const tip = useTraitTip({ toggleOnTap: false });
+  return (
+    <>
+      <button
+        ref={(el) => {
+          tip.anchorRef.current = el;
+        }}
+        {...tip.triggerProps}
+        type="button"
+        disabled={disabled}
+        data-face-drag={index}
+        onClick={(e) => {
+          if (blocked) {
+            // Отказ звучит сам (треск): щелчок дока здесь не нужен.
+            e.stopPropagation();
+            onBlocked?.();
+            return;
+          }
+          onSelect();
+        }}
+        aria-label={traitName(face, lang)}
+        aria-pressed={active}
+        aria-disabled={blocked || undefined}
+        className={cn(
+          "group relative block min-h-0 min-w-0 flex-1 overflow-hidden text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
+          divided && "border-l border-dashed border-ink/15",
+          // Зажатая и выбранная грань выглядят одинаково: одно кольцо-акцент.
+          active || pressed ? "evo-face-picked" : "hover:bg-ink/5",
+          siblingDim && "opacity-45 saturate-50",
+          dimmed && "opacity-55",
+          dark && "bg-ink",
+        )}
+      >
+        <FaceArt face={face} inColumn />
+      </button>
+      {tip.anchorRect ? (
+        <TraitTooltip
+          def={{ ...TRAITS[face], name: traitName(face, lang), description: traitDesc(face, lang) }}
+          anchorRect={tip.anchorRect}
+          id={tip.tipId}
+        />
+      ) : null}
+    </>
+  );
+});
+
+/**
+ * Подпись грани multi-карты: строка под артами на всю ширину карты (в узкой
+ * колонке название обрезалось бы до нечитаемого). Клин-вырез указывает на
+ * колонку арта этой грани. Не кнопка: грань выбирается кликом по её арту.
+ * Ручкой драга не служит, но темнеет вместе со своей половиной, когда зажата
+ * другая грань — половину видно целиком.
+ */
+const FaceLabelRow = memo(function FaceLabelRow({
+  face,
+  divided,
+  index,
+  count,
+  dimmed,
+  siblingDim,
+}: {
+  face: TraitId;
+  /** У строк ниже первой — верхний пунктирный разделитель. */
+  divided: boolean;
+  /** Позиция грани (для клина) и их общее число. */
+  index: number;
+  count: number;
+  dimmed?: boolean;
+  /** Зажата/выбрана другая грань — строка этой грани темнеет. */
+  siblingDim?: boolean;
+}) {
+  const t = useT();
+  const lang = useLang();
+  const def = TRAITS[face];
+  return (
+    <span
+      className={cn(
+        "relative block shrink-0 px-1.5 py-[3px] text-[11px] font-semibold leading-tight",
+        divided && "border-t border-dashed border-ink/15",
+        siblingDim && "opacity-45 saturate-50",
+        dimmed && "opacity-55",
+      )}
+    >
+      <span
+        aria-hidden
+        className="absolute -top-[3.5px] size-[7px] rotate-45 border-l border-t border-ink/25 bg-parchment"
+        style={{ left: `${((index + 0.5) / count) * 100}%` }}
+      />
+      <span className="flex items-center gap-1">
+        <TraitGlyph id={face} className="size-3.5 shrink-0" />
+        <span className="truncate">{traitName(face, lang)}</span>
+      </span>
+      {def.extraFood ? (
+        // «+1 к еде» второй строкой: в строке с названием оно вытеснило бы
+        // длинные имена («Большой вес» → «Большой»).
+        <span className="block pl-[18px] text-[10px] font-medium leading-[1.25] text-clay-ink">
+          {t("traitTip.extraFood", { n: def.extraFood })}
+        </span>
+      ) : null}
+    </span>
+  );
+});
+
+/**
  * Карта руки: кнопка «Животное» плюс по кнопке на каждое свойство грани.
  * Перетаскивается целиком (карта в руке — один объект), но клики по кнопкам
  * остаются: датчики @dnd-kit включаются только после порога движения.
+ *
+ * У multi-карты каждая колонка арта — ручка драга СВОЕЙ грани
+ * (data-face-drag): зажатая грань подсвечивается, остальные темнеют, и бросок
+ * уносит выбранную грань. Строки подписей и «Животное» ручками не являются —
+ * драг оттуда не выбирает грань (её подскажет выбор кликом или движок).
  */
 export function HandCard({
   card,
   selected,
   selectedFace,
+  pressedFace,
   onSelect,
   onBlockedFace,
   blockedFace,
@@ -662,6 +869,8 @@ export function HandCard({
   card: Card;
   selected?: boolean;
   selectedFace?: number | null;
+  /** Грань, зажатая под курсором/пальцем или летящая в драге (multi-карты). */
+  pressedFace?: number | null;
   onSelect: (face: number | "animal") => void;
   /** Клик по недоступной грани (её нельзя разыграть прямо сейчас). */
   onBlockedFace?: (face: number) => void;
@@ -698,6 +907,7 @@ export function HandCard({
       <button
         type="button"
         disabled={disabled}
+        aria-pressed={cardPicked}
         onClick={() => onSelect("animal")}
         className={cn(
           // h-11: тап-таргет 44px — «Животное» первый ход партии, его жмут пальцем.
@@ -708,19 +918,62 @@ export function HandCard({
       >
         {t("card.animal")}
       </button>
-      {card.faces.map((face, i) => (
-        <HandFace
-          key={`${card.id}-${face}-${i}`}
-          face={face}
-          divided={i === 0 && card.faces.length > 1}
-          active={selected && selectedFace === i}
-          blocked={blockedFace?.(i)}
-          onBlocked={() => onBlockedFace?.(i)}
-          disabled={disabled}
-          dimmed={noAnimals && !selected}
-          onSelect={() => onSelect(i)}
-        />
-      ))}
+      {card.faces.length > 1 ? (
+        // Несколько свойств: арты — колонками рядом на всю высоту тела карты
+        // (стопка оставляла бы от портретной иллюстрации верхнюю треть),
+        // подписи — стопкой под ними на всю ширину карты.
+        <>
+          <div className="flex min-h-0 flex-1 items-stretch">
+            {card.faces.map((face, i) => (
+              <HandFaceImage
+                key={`${card.id}-${face}-${i}`}
+                face={face}
+                index={i}
+                divided={i > 0}
+                active={selected && selectedFace === i}
+                pressed={pressedFace === i}
+                // Зажата или кликом выбрана другая грань — эта темнеет.
+                siblingDim={Boolean(
+                  (pressedFace != null && pressedFace !== i) ||
+                    (selected && selectedFace != null && selectedFace !== i),
+                )}
+                blocked={blockedFace?.(i)}
+                onBlocked={() => onBlockedFace?.(i)}
+                disabled={disabled}
+                dimmed={noAnimals && !selected}
+                onSelect={() => onSelect(i)}
+              />
+            ))}
+          </div>
+          {card.faces.map((face, i) => (
+            <FaceLabelRow
+              key={`${card.id}-${face}-${i}`}
+              face={face}
+              divided={i > 0}
+              index={i}
+              count={card.faces.length}
+              siblingDim={Boolean(
+                (pressedFace != null && pressedFace !== i) ||
+                  (selected && selectedFace != null && selectedFace !== i),
+              )}
+              dimmed={noAnimals && !selected}
+            />
+          ))}
+        </>
+      ) : (
+        card.faces.map((face, i) => (
+          <HandFace
+            key={`${card.id}-${face}-${i}`}
+            face={face}
+            active={selected && selectedFace === i}
+            blocked={blockedFace?.(i)}
+            onBlocked={() => onBlockedFace?.(i)}
+            disabled={disabled}
+            dimmed={noAnimals && !selected}
+            onSelect={() => onSelect(i)}
+          />
+        ))
+      )}
     </div>
   );
 }
@@ -728,8 +981,10 @@ export function HandCard({
 /**
  * «Призрак» карты для DragOverlay: те же грани, но без кнопок и обработчиков —
  * в оверлее карта едет под курсором и не должна ловить клики и фокус.
+ * activeFace — грань, за которую карту тянут: её колонка подсвечена, остальные
+ * темнеют, чтобы под курсором было видно, какая половина летит.
  */
-export function CardPreview({ card }: { card: Card }) {
+export function CardPreview({ card, activeFace }: { card: Card; activeFace?: number | null }) {
   const t = useT();
   const lang = useLang();
   return (
@@ -740,37 +995,56 @@ export function CardPreview({ card }: { card: Card }) {
       <span className="flex h-8 items-center justify-center border-b border-ink/10 bg-parchment-2/70 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
         {t("card.card")}
       </span>
-      {card.faces.map((face, i) => {
-        const dark = DARK_ART.has(face);
-        return (
-          <span
-            key={`${card.id}-${face}-${i}`}
-            className={cn("flex min-h-0 flex-1 flex-col", i === 0 && card.faces.length > 1 && "border-b border-dashed border-ink/15")}
-          >
-            <span className={cn("relative block min-h-0 w-full flex-1 overflow-hidden", dark && "bg-ink")}>
-              {TRAIT_ART[face] ? (
-                <img
-                  src={TRAIT_ART[face]}
-                  alt=""
-                  loading="lazy"
+      {card.faces.length > 1 ? (
+        // Тот же принцип, что и у карты руки: арты колонками на всю высоту,
+        // подписи — стопкой на всю ширину.
+        <>
+          <span className="flex min-h-0 flex-1 items-stretch">
+            {card.faces.map((face, i) => {
+              const dark = DARK_ART.has(face);
+              return (
+                <span
+                  key={`art-${card.id}-${face}-${i}`}
                   className={cn(
-                    "absolute inset-0 h-full w-full",
-                    dark ? "scale-[0.86] object-contain" : "object-cover object-[50%_28%]",
+                    "relative block min-h-0 min-w-0 flex-1 overflow-hidden",
+                    i > 0 && "border-l border-dashed border-ink/15",
+                    dark && "bg-ink",
+                    activeFace === i && "evo-face-picked",
+                    activeFace != null && activeFace !== i && "opacity-45 saturate-50",
                   )}
-                />
-              ) : (
-                <span className="absolute inset-0 flex items-center justify-center bg-parchment-2">
-                  <TraitGlyph id={face} className="size-10 text-ink-soft" />
+                >
+                  <FaceArt face={face} inColumn />
                 </span>
-              )}
-            </span>
-            <span className="flex items-center gap-1 px-2 pb-1.5 pt-1.5 text-[11px] font-semibold leading-tight">
-              <TraitGlyph id={face} className="size-3.5 shrink-0" />
-              <span className="truncate">{traitName(face, lang)}</span>
-            </span>
+              );
+            })}
           </span>
-        );
-      })}
+          {card.faces.map((face, i) => (
+            <FaceLabelRow
+              key={`label-${card.id}-${face}-${i}`}
+              face={face}
+              divided={i > 0}
+              index={i}
+              count={card.faces.length}
+              siblingDim={activeFace != null && activeFace !== i}
+            />
+          ))}
+        </>
+      ) : (
+        card.faces.map((face, i) => {
+          const dark = DARK_ART.has(face);
+          return (
+            <span key={`${card.id}-${face}-${i}`} className="flex min-h-0 flex-1 flex-col">
+              <span className={cn("relative block min-h-0 w-full flex-1 overflow-hidden", dark && "bg-ink")}>
+                <FaceArt face={face} />
+              </span>
+              <span className="flex items-center gap-1 px-2 pb-1.5 pt-1.5 text-[11px] font-semibold leading-tight">
+                <TraitGlyph id={face} className="size-3.5 shrink-0" />
+                <span className="truncate">{traitName(face, lang)}</span>
+              </span>
+            </span>
+          );
+        })
+      )}
     </div>
   );
 }

@@ -32,6 +32,7 @@ import {
   isVisible,
   menuReady,
   netState,
+  newRuContext,
   roomCode,
   safeClick,
   shotsDir,
@@ -210,7 +211,7 @@ try {
   await guard("прогрев dev-сервера", () => warmupServer(browser, { log: (m) => console.log(`  ${m}`) }));
   if (problems.length) throw new Error("dev-сервер не прогрет — сценарий не запускается");
 
-  const hostCtx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const hostCtx = await newRuContext(browser, { viewport: { width: 1280, height: 900 } });
   const host = await hostCtx.newPage();
   trackPage(host, "хост");
   await gotoUrl(host, `${BASE}/`);
@@ -338,7 +339,7 @@ try {
     }
     // Гость со старым паролем не входит (throwaway-контекст, один запрос —
     // квота входов общая, UI-ретраи её съедают).
-    const oldCtx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const oldCtx = await newRuContext(browser, { viewport: { width: 1280, height: 900 } });
     const oldGuest = await oldCtx.newPage();
     trackPage(oldGuest, "старый-пароль");
     await gotoUrl(oldGuest, `${BASE}/`);
@@ -350,7 +351,7 @@ try {
   });
 
   // ── 5. Гость с новым паролем: входит и не видит пароль/карандаш ─────────────
-  const guestCtx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const guestCtx = await newRuContext(browser, { viewport: { width: 1280, height: 900 } });
   const guest = await guestCtx.newPage();
   trackPage(guest, "гость");
   await guard("гость: вход с новым паролем, пароля и карандаша нет", async () => {
@@ -529,7 +530,7 @@ try {
       throw new Error(`хост не в лобби для сравнения; экран: ${await bodyOf(host)}`);
     }
     // Гостя не трогаем: стол с ботом на отдельной вкладке.
-    const gameCtx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const gameCtx = await newRuContext(browser, { viewport: { width: 1280, height: 900 } });
     const game = await gameCtx.newPage();
     trackPage(game, "партия");
     await gotoUrl(game, `${BASE}/`);
@@ -562,7 +563,7 @@ try {
 
   // ── 9. Кнопки на мобилке (390px): высота ≥48px ──────────────────────────────
   await guard("кнопки лобби крупнее на мобилке (390px)", async () => {
-    const mobCtx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const mobCtx = await newRuContext(browser, { viewport: { width: 390, height: 844 } });
     const mob = await mobCtx.newPage();
     trackPage(mob, "мобилка");
     await gotoUrl(mob, `${BASE}/`);
@@ -592,7 +593,7 @@ try {
   // ── 10. Ожидающий стол: строки с текстурой, кнопки крупнее ──────────────────
   await guard("ожидающий стол: текстура строк и высота кнопок", async () => {
     // Заполняем стол хоста до отказа: боты добьют места, а гость переполнит.
-    const thirdCtx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const thirdCtx = await newRuContext(browser, { viewport: { width: 390, height: 844 } });
     const third = await thirdCtx.newPage();
     trackPage(third, "ожидающий");
     await gotoUrl(third, `${BASE}/`);

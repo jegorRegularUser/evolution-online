@@ -8,9 +8,13 @@ import type {
   Difficulty,
   EnabledModules,
   GameAction,
+  GameScenario,
   GameEvent,
   GameState,
   ModuleId,
+  MutatorId,
+  TableRuleId,
+  TableRules,
 } from "../../game/types.ts";
 
 /** Минимальная поверхность SQL: удовлетворяется `Sql` из @/lib/db и тестовым PGlite. */
@@ -85,6 +89,8 @@ export interface SeatInfo {
   isAI: boolean;
   /** Активен за последнюю минуту (last_seen_at обновляется poll'ом). */
   online: boolean;
+  /** Heartbeat старше disconnectedMs: сервер явно считает место отключённым. */
+  disconnected: boolean;
   /** Игрок сдался: место занято до конца партии, ходы пропускаются. */
   resigned: boolean;
   /** CSS-цвет места (hex): публичный, клиент красит имена и чат. */
@@ -102,7 +108,41 @@ export interface RoomSettings {
   difficulty?: Difficulty;
   /** Целевой размер колоды свойств (см. createGame/6-й аргумент). */
   deckSize?: number;
+  /** Волна 2: столовые правила (§1.1); лимит слотов считает modifier-compatibility. */
+  rules?: TableRules;
+  /** Волна 2: мутаторы (§1.2) — флаги, как у модулей; в createGame уходит массив. */
+  mutators?: Partial<Record<MutatorId, boolean>>;
+  /** Волна 2: пак событий «Дикий мир» (§1.3), занимает один слот. */
+  wildWorld?: boolean;
+  /** Волна 4а: сценарий изверга (кампания) — сид босса + ломающее правило. */
+  scenario?: GameScenario;
+  /**
+   * Таймер хода человека (мс): дедлайн, через который сервер сам завершит
+   * ход. 0 — таймер выключен («Выкл»): ход висит, пока игрок не завершит его
+   * сам; ботов это не касается — их шаги двигает темп PACE. Ключ может
+   * отсутствовать у старых столов — тогда действуют legacy-паузы
+   * PACE.idleTurnMs / PACE.afkTurnMs (см. turnTimeoutMs в server.ts).
+   */
+  turnTimerMs?: TurnTimerMs;
 }
+
+/**
+ * Допустимые значения таймера хода (мс): та же вилка в roomSettingsSchema и
+ * в createRoomInput — хост выбирает «Выкл / 30 с / 1 мин / 2 мин / 3 мин»,
+ * сервер принимает ровно эти метки. 1 мин — умолчание: совпадает с прежним
+ * AFK-предохранителем PACE.afkTurnMs.
+ */
+export const TURN_TIMER_CHOICES = [0, 30_000, 60_000, 120_000, 180_000] as const;
+export type TurnTimerMs = (typeof TURN_TIMER_CHOICES)[number];
+
+/** Значение таймера по умолчанию для показа в лобби (у столов без ключа). */
+export const TURN_TIMER_DEFAULT_MS = 60_000;
+
+/** Ключи столовых правил — для UI лобби (порядок как в modifiers.ts). */
+export const TABLE_RULE_KEYS: readonly TableRuleId[] = ["pack", "hungrySeason", "abundance", "startHand"];
+
+/** Ключи мутаторов — для UI лобби (порядок как в реестре). */
+export const MUTATOR_KEYS: readonly MutatorId[] = ["scavengers", "rapidEvolution"];
 
 /** Ожидающий места в лобби. Токен наружу не отдаётся. */
 export interface WaiterInfo {
@@ -164,12 +204,20 @@ export interface EventBatch {
   events: GameEvent[];
 }
 
-/** Сообщение чата; seat = -1 у ожидающего места. */
+/** Сообщение чата; seat = -1 у ожидающего места и у системных реплик «Стола». */
 export interface ChatMessage {
   id: number;
   seat: number;
   name: string;
   text: string;
+  /**
+   * Ключ словаря (ru.ts/en.ts) системной реплики: клиент при lang=en собирает
+   * текст по ключу, русский text остаётся фолбэком (контракт журнала движка).
+   * У реплик людей ключа нет.
+   */
+  key?: string;
+  /** Параметры подстановки к `key` (числа, имена). */
+  params?: Record<string, string | number>;
   /** Время отправки (мс эпохи). */
   at: number;
 }
@@ -197,6 +245,8 @@ export interface ReactionMessage {
 export interface SpectatorInfo {
   name: string;
   online: boolean;
+  /** Heartbeat старше disconnectedMs: зритель отключён. */
+  disconnected: boolean;
   /** Свежая отметка набора текста (netTyping): тот же смысл, что у SeatInfo. */
   typing: boolean;
 }
@@ -211,6 +261,11 @@ export interface PollResult {
   seat: number;
   /** Батчи событий с version > sinceVersion; без sinceVersion — пусто. */
   events: EventBatch[];
+  /** Границы окна событий; eventsTo — версия, до которой клиент может догнать. */
+  eventsFrom?: number;
+  eventsTo?: number;
+  /** Внутри окна пропущены батчи [from..to], если клиент отстал. */
+  skipped?: { from: number; to: number };
   /** Сообщения чата: id > sinceChatId либо последние 50 при подключении. */
   chat: ChatMessage[];
   /** Очередь ожидающих (виден всем в лобби, токенов здесь нет). */
@@ -226,10 +281,19 @@ export interface PollResult {
    */
   turnDeadlineAt: number | null;
   /**
+   * Следующий автошаг сервера, когда ходит БОТ (epoch ms, серверные часы);
+   * null — сейчас не ход бота. Клиент рисует по ней тикающий отсчёт до
+   * следующего действия бота на его табло: у ботов нет дедлайна «конца хода»
+   * (их темп ведёт сервер), поэтому честная метка — именно следующий шаг.
+   */
+  botStepAt: number | null;
+  /**
    * Серверное «сейчас» (epoch ms): клиент считает по нему смещение своих
    * часов, чтобы отсчёт не зависел от неточных часов устройства.
    */
   serverNow: number;
+  /** ACK применённого/повторённого действия; отсутствует у обычного poll. */
+  actionId?: string;
 }
 
 /** Ответ poll'а «ничего не изменилось»: онлайны обновляются без смены версии. */
@@ -279,6 +343,8 @@ export interface SpectatorSnapshot {
   reactions: ReactionMessage[];
   /** См. PollResult.turnDeadlineAt: отсчёт авто-конца хода виден и зрителям. */
   turnDeadlineAt: number | null;
+  /** См. PollResult.botStepAt: отсчёт до следующего шага бота виден и зрителям. */
+  botStepAt: number | null;
   /** См. PollResult.serverNow. */
   serverNow: number;
 }
@@ -305,6 +371,10 @@ export const PACE = {
   initialMs: 600,
   maxStepsPerTick: 8,
   onlineMs: 10_000,
+  /** Явный порог disconnected для heartbeat: не путаем короткий jitter с уходом. */
+  disconnectedMs: 30_000,
+  /** Сторож раз в 10 с держит AFK и автошаги без зависимости от браузера. */
+  watchdogMs: 10_000,
   roomTtlHours: 12,
   /**
    * M10: ход человека без действий (остался только пас/завершение хода)
@@ -313,6 +383,13 @@ export const PACE = {
    * клиент считает долю кругового индикатора.
    */
   idleTurnMs: 30_000,
+  /**
+   * AFK-ход игрока в фазе: 60 секунд с последнего heartbeat. Это не «время на
+   * чтение карточки» (для пустого хода действует idleTurnMs), а предохранитель
+   * от вечно висящего хода с доступными действиями. Число фиксировано здесь,
+   * чтобы сервер и UI считали одинаковый дедлайн.
+   */
+  afkTurnMs: 60_000,
 } as const;
 
 const NAME = z.string().trim().min(1).max(16);
@@ -340,12 +417,44 @@ const MODULES = z
   })
   .partial();
 
-/** Настройки стола: модули проверяются белым списком. */
+/** Столовые правила (§1.1): ключи — белый список; startHand — только 7/8/9. */
+const TABLE_RULES = z
+  .object({
+    pack: z.boolean().optional(),
+    hungrySeason: z.boolean().optional(),
+    abundance: z.boolean().optional(),
+    startHand: z.union([z.literal(7), z.literal(8), z.literal(9)]).optional(),
+  })
+  .partial();
+
+/** Мутаторы (§1.2): флаги включения, как у модулей. */
+const MUTATORS = z
+  .object({
+    scavengers: z.boolean().optional(),
+    rapidEvolution: z.boolean().optional(),
+  })
+  .partial();
+
+/** Настройки стола: модули и модификаторы проверяются белыми списками. */
 export const roomSettingsSchema = z.object({
   modules: MODULES.optional(),
   difficulty: DIFFICULTY.optional(),
   /** Границы — разумная вилка вокруг DECK_SIZE (84) с учётом всех модулей. */
   deckSize: z.number().int().min(20).max(400).optional(),
+  /** Волна 2: лимит 3 слота и запрещённые пары проверяет сервер. */
+  rules: TABLE_RULES.optional(),
+  mutators: MUTATORS.optional(),
+  wildWorld: z.boolean().optional(),
+  /** Таймер хода: только фиксированная вилка TURN_TIMER_CHOICES (0 = «Выкл»). */
+  turnTimerMs: z
+    .union([
+      z.literal(0),
+      z.literal(30_000),
+      z.literal(60_000),
+      z.literal(120_000),
+      z.literal(180_000),
+    ])
+    .optional(),
 });
 
 export const createRoomInput = z.object({
@@ -365,6 +474,28 @@ export const createRoomInput = z.object({
   modules: MODULES.default({}).optional(),
   /** Целевой размер колоды на старте; хранится в settings комнаты. */
   deckSize: z.number().int().min(20).max(400).optional(),
+  /** Волна 2: модификаторы стола (правила, мутаторы, «Дикий мир»). */
+  rules: TABLE_RULES.optional(),
+  /** Волна 4а: сценарий изверга — сид босса + ломающее правило (кампания). */
+  scenario: z
+    .object({
+      seat: z.number().int().min(0).max(7),
+      doubleHunt: z.boolean().optional(),
+      bossFeedsExtra: z.boolean().optional(),
+    })
+    .optional(),
+  mutators: MUTATORS.optional(),
+  wildWorld: z.boolean().optional(),
+  /** Таймер хода (мс, TURN_TIMER_CHOICES; 0 = «Выкл»); живёт в settings стола. */
+  turnTimerMs: z
+    .union([
+      z.literal(0),
+      z.literal(30_000),
+      z.literal(60_000),
+      z.literal(120_000),
+      z.literal(180_000),
+    ])
+    .optional(),
   /** Приватный стол: вход по паролю, в меню виден в колонке «Закрытые». */
   isPrivate: z.boolean().optional(),
   /** Пароль приватного стола; пусто — сервер сгенерирует 4 цифры. */
@@ -393,6 +524,8 @@ export const actionInput = z.object({
   code: CODE,
   token: z.string().min(10),
   action: z.custom<GameAction>((v) => typeof v === "object" && v !== null && "type" in v),
+  /** Необязательный UUID: старые клиенты продолжают работать без него. */
+  actionId: z.string().uuid().optional(),
 });
 export const pollInput = codeTokenInput.extend({
   sinceVersion: z.number().int().optional(),
@@ -429,6 +562,8 @@ export const reactionInput = codeTokenInput.extend({
 /** Сигнал «печатает…»: только факт свежести, самого текста сервер не видит. */
 export const typingInput = codeTokenInput;
 export const kickInput = codeTokenInput.extend({ seat: z.number().int().min(0).max(7) });
+/** Замена офлайн-места ботом в идущей партии (host-only). */
+export const replaceWithBotInput = kickInput;
 export const capacityInput = codeTokenInput.extend({
   capacity: z.number().int().min(2).max(8),
 });

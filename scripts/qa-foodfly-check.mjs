@@ -6,11 +6,11 @@
  * Партия — сетевой стол с ботом (соло-режим удалён): see scripts/qa-lib.mjs.
  */
 import { chromium } from "playwright";
-import { advancePhase, endPhaseStep, phaseOf, startNetGame, waitHumanTurn } from "./qa-lib.mjs";
+import { advancePhase, endPhaseStep, newRuPage, phaseOf, startNetGame, waitHumanTurn } from "./qa-lib.mjs";
 
 const base = process.env.EVO_URL ?? "http://127.0.0.1:8099";
 const browser = await chromium.launch();
-const page = await browser.newPage();
+const { page } = await newRuPage(browser);
 const errors = [];
 page.on("pageerror", (e) => errors.push("PAGEERROR: " + e.message));
 

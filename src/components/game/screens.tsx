@@ -3,12 +3,17 @@ import {
   BarChart3,
   BookOpen,
   ChevronDown,
+  Eye,
   GraduationCap,
   Lightbulb,
   Lock,
   RotateCcw,
+  X,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { BookMarked, CheckCircle2, Compass, House, ShoppingBag, Star, Swords, Target } from "lucide-react";
+import { DialogShell } from "@/components/ui/dialog-shell";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
 import { NetMenuScreen } from "@/components/game/net-screens";
@@ -16,7 +21,13 @@ import { FLORA, MARKS } from "@/game/flora";
 import { PLANTS } from "@/game/plants";
 import { CONTINENTS_TRAIT_IDS, FUNGI_TRAIT_IDS, MUTATIONS_TRAIT_IDS, PLANTS_TRAIT_IDS, TRAIT_ORDER } from "@/game/traits";
 import { TERRITORIES } from "@/game/types";
-import type { FloraKind, MarkKind, PlantKind, ScoreBreakdown, TerritoryId, TraitId } from "@/game/types";
+import type { FloraKind, MarkKind, ModuleId, MutatorId, PlantKind, ScoreBreakdown, TerritoryId, TraitId } from "@/game/types";
+import type { CosmeticSlot } from "@/lib/profile/shared";
+import { CHALLENGES } from "@/game/challenges";
+import { COSMETIC_ITEMS, cosmeticById, type CosmeticItem } from "@/lib/cosmetics";
+import { CAMPAIGN_ERAS, CAMPAIGN_MISSIONS, type CampaignMissionId } from "@/game/campaign";
+import { flushPendingSpecimens, type BestiariumEntry } from "@/game/bestiarium";
+import { challengesGet, cosmeticsBuy, cosmeticsEquip, profileGet } from "@/lib/profile/api";
 import { sfx } from "@/lib/sfx";
 import { ACHIEVEMENTS, readStats } from "@/lib/stats";
 import {
@@ -65,6 +76,252 @@ const FOCUS_VISIBLE =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 
 /**
+ * Мобильная нижняя навигация (F7): четыре страницы-раздела как таб-бар в зоне
+ * большого пальца, а по центру — домик («главная») в приподнятом круге,
+ * классический центральный action. Показывается только на телефоне (<sm,
+ * 640px): шапка на мобилке оставляет себе модалки и язык, а переходы по
+ * разделам и возврат в меню уходят вниз — паттерн iOS/Android tab bar.
+ * Иконка + короткая подпись, тап-таргет ≥44px, активная вкладка подсвечена
+ * акцентом и полоской сверху (Link ставит data-status="active" и aria-current
+ * сам). Панель прижата к нижнему краю и уважает жест-полосу iPhone:
+ * padding-bottom из env(safe-area-inset-bottom) задаёт .mobile-tabbar в
+ * styles.css.
+ */
+const MOBILE_TABS = [
+  { to: "/shop", labelKey: "shop.title", Icon: ShoppingBag },
+  { to: "/bestiary", labelKey: "bestiarium.title", Icon: BookMarked },
+  { to: "/campaign", labelKey: "campaign.title", Icon: Compass },
+  { to: "/challenges", labelKey: "challenges.title", Icon: Target },
+] as const satisfies Array<{ to: "/shop" | "/bestiary" | "/campaign" | "/challenges"; labelKey: TKey; Icon: typeof ShoppingBag }>;
+
+export function MobileTabBar() {
+  const tt = useT();
+  const renderTab = ({ to, labelKey, Icon }: (typeof MOBILE_TABS)[number]) => (
+    <Link
+      key={to}
+      to={to}
+      activeOptions={{ exact: true }}
+      data-testid="mobile-tab"
+      className="flex min-h-14 flex-col items-center justify-center gap-1 px-1 py-1.5 text-[10px] font-medium leading-none text-muted transition-colors duration-[var(--motion-fast)] hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[status=active]:text-accent"
+    >
+      {({ isActive }) => (
+        <>
+          <Icon className="size-5 shrink-0" aria-hidden />
+          <span>{tt(labelKey)}</span>
+          <span
+            aria-hidden
+            className={cn(
+              "h-0.5 w-7 rounded-full transition-colors",
+              isActive ? "bg-accent" : "bg-transparent",
+            )}
+          />
+        </>
+      )}
+    </Link>
+  );
+  return (
+    <nav
+      aria-label={tt("nav.tabbar")}
+      data-testid="mobile-tabbar"
+      className="mobile-tabbar fixed inset-x-0 bottom-0 z-30 border-t border-border bg-bg/95 backdrop-blur-sm sm:hidden"
+    >
+      {/* Пять мест: два раздела | домик по центру | два раздела. Домик —
+          единственный путь назад в меню с телефона: отдельной кнопки «Назад»
+          в шапке страниц больше нет. */}
+      <div className="mx-auto grid w-full max-w-lg grid-cols-5">
+        {MOBILE_TABS.slice(0, 2).map(renderTab)}
+        <Link
+          to="/"
+          activeOptions={{ exact: true }}
+          data-testid="mobile-tab-home"
+          aria-label={tt("nav.home")}
+          className="flex min-h-14 items-center justify-center px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        >
+          {({ isActive }) => (
+            <span
+              className={cn(
+                "-translate-y-3 flex size-11 items-center justify-center rounded-full border shadow-[var(--shadow-card)] transition-[transform,background-color,border-color,color] duration-[var(--motion-fast)] active:scale-95",
+                isActive ? "border-accent bg-accent text-accent-fg" : "border-border bg-surface text-fg",
+              )}
+            >
+              <House className="size-5" aria-hidden />
+            </span>
+          )}
+        </Link>
+        {MOBILE_TABS.slice(2).map(renderTab)}
+      </div>
+    </nav>
+  );
+}
+
+/** Разделы в верхней навигации — порядок как в шапке меню. */
+const TOP_NAV_PAGES = [
+  { to: "/bestiary", labelKey: "bestiarium.title", Icon: BookMarked },
+  { to: "/campaign", labelKey: "campaign.title", Icon: Compass },
+  { to: "/challenges", labelKey: "challenges.title", Icon: Target },
+  { to: "/shop", labelKey: "shop.title", Icon: ShoppingBag },
+] as const satisfies Array<{ to: "/shop" | "/bestiary" | "/campaign" | "/challenges"; labelKey: TKey; Icon: typeof ShoppingBag }>;
+
+/**
+ * Верхняя навигация меню и страниц-разделов: обучение, правила, четыре
+ * раздела, статистика и звук (язык добавляет сам TopBar). Активный раздел
+ * выводится из URL (useRouterState): страница /shop показывает ровно ту же
+ * шапку, что и меню, только с подсвеченной кнопкой «Магазин» — переход на
+ * страницу ощущается обычной сменой раздела, отдельная кнопка «Назад» не
+ * нужна. Модалки здесь только открываются: сами панели рендерит вызывающий
+ * экран ЗА пределами шапки — backdrop-blur шапки стал бы для fixed-панели
+ * containing block и сломал бы её позиционирование.
+ */
+export function TopBarNav({
+  onTutorial,
+  onRules,
+  onStats,
+}: {
+  onTutorial: () => void;
+  onRules: () => void;
+  onStats: () => void;
+}) {
+  const tt = useT();
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  return (
+    <>
+      {/* На узком экране подписи скрыты — кнопки остаются иконочными,
+          поэтому у каждой есть постоянное доступное имя. max-xl:h-11 —
+          тап-таргет 44px на телефоне и планшете. max-sm:hidden у обучения
+          и разделов: на телефоне эти места живут в нижнем таб-баре. */}
+      <Button variant="ghost" size="sm" className="max-xl:h-11 max-sm:hidden" aria-label={tt("topbar.tutorial")} title={tt("topbar.tutorial")} onClick={onTutorial}>
+        <GraduationCap className="size-4" />
+        <span className="hidden sm:inline">{tt("topbar.tutorial")}</span>
+      </Button>
+      <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.rules")} title={tt("topbar.rules")} onClick={onRules}>
+        <BookOpen className="size-4" />
+        <span className="hidden sm:inline">{tt("topbar.rules")}</span>
+      </Button>
+      {TOP_NAV_PAGES.map(({ to, labelKey, Icon }) => {
+        const active = pathname === to;
+        return (
+          <Button
+            key={to}
+            variant="ghost"
+            size="sm"
+            aria-current={active ? "page" : undefined}
+            data-active={active ? "true" : undefined}
+            className={cn(
+              "max-xl:h-11 max-sm:hidden",
+              active && "bg-accent/10 text-accent hover:bg-accent/15",
+            )}
+            aria-label={tt(labelKey)}
+            title={tt(labelKey)}
+            onClick={() => {
+              sfx.play("click");
+              navigate({ to });
+            }}
+          >
+            <Icon className="size-4" />
+            <span className="hidden sm:inline">{tt(labelKey)}</span>
+          </Button>
+        );
+      })}
+      <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.stats")} title={tt("topbar.stats")} onClick={onStats}>
+        <BarChart3 className="size-4" />
+        <span className="hidden sm:inline">{tt("topbar.stats")}</span>
+      </Button>
+      <SoundToggle />
+    </>
+  );
+}
+
+/**
+ * Каркас страницы-раздела (магазин, бестиарий, кампания, вызовы): фон и шапка
+ * — ровно те же, что у главного меню (общая TopBarNav, активный раздел
+ * подсвечен), отдельной шапки раздела и кнопки «Назад» нет: попадая на /shop
+ * или /bestiary, человек видит знакомую навигацию и содержимое ниже —
+ * страница ощущается обычным переходом. Заголовок раздела и содержимое
+ * рендерит content-компонент экрана в children; модальный вариант при
+ * необходимости — тот же компонент, обёрнутый в DialogShell (см.
+ * RulesPanel/StatsScreen). Модалки шапки (обучение, правила, статистика)
+ * открываются и отсюда; панели рендерятся вне шапки, чтобы backdrop-blur
+ * не ломал их fixed-позиционирование. На телефоне (<sm) шапка без лого и
+ * названия (компактная строка модалок + звук + язык), внизу таб-бар разделов
+ * с домиком — контент получает нижний паддинг, чтобы не прятаться под панелью.
+ */
+export function FeaturePage({ titleKey, children }: { titleKey: TKey; children: ReactNode }) {
+  const tt = useT();
+  // Заголовок вкладки браузера: LangInit в __root ставит app.name на
+  // монтировании и при смене языка; этот эффект перебивает его позже
+  // (дерево ниже), поэтому у каждой страницы свой title.
+  const title = tt(titleKey);
+  useEffect(() => {
+    document.title = title;
+  }, [title]);
+  // Модалки шапки — те же, что в меню; состояние живёт на странице, панели —
+  // за пределами шапки (см. TopBarNav).
+  const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
+  return (
+    <>
+      <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
+        {/* Зелёная долина и бумажная текстура — ровно как под меню и столом. */}
+        <img src={BG.valley} alt="" className="h-full w-full object-cover opacity-40" />
+        <div className="absolute inset-0 bg-gradient-to-b from-bg/80 via-bg/55 to-bg" />
+        <div className="absolute inset-0 paper-desk opacity-[0.14]" />
+      </div>
+      <div className="relative flex min-h-dvh flex-col">
+        <TopBar subtitle={tt("app.brand")} hideBrandOnMobile>
+          <TopBarNav
+            onTutorial={() => {
+              sfx.play("modal");
+              setTutorialOpen(true);
+            }}
+            onRules={() => {
+              sfx.play("modal");
+              setRulesOpen(true);
+            }}
+            onStats={() => {
+              sfx.play("modal");
+              setStatsOpen(true);
+            }}
+          />
+        </TopBar>
+        {/* Ширина чуть больше модальной панели (max-w-2xl): страница дышит,
+            сетки каталога получают те же два столбца, что и в модалке.
+            Нижний паддинг на телефоне — под таб-бар (F7). */}
+        <main className="mx-auto w-full max-w-3xl flex-1 px-4 pb-[calc(4.75rem_+_env(safe-area-inset-bottom))] pt-6 sm:pb-6">
+          {children}
+        </main>
+        <MobileTabBar />
+      </div>
+      {tutorialOpen ? (
+        <TutorialScreen
+          onClose={() => {
+            sfx.play("modal");
+            setTutorialOpen(false);
+          }}
+        />
+      ) : null}
+      {rulesOpen ? (
+        <RulesPanel
+          onClose={() => {
+            sfx.play("modal");
+            setRulesOpen(false);
+          }}
+        />
+      ) : null}
+      {statsOpen ? (
+        <StatsScreen
+          onClose={() => {
+            sfx.play("modal");
+            setStatsOpen(false);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
  * Главное меню: три колонки, как в столе ожидания. Слева — имя и вход или
  * создание стола, в центре — открытые столы, справа — закрытые (пароль
  * спрашивается по клику на строку). Все три колонки одной высоты, списки
@@ -107,29 +364,20 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
       </div>
       <div className="relative flex min-h-dvh flex-col">
         {/* Полоса навигации — как шапка игрового стола: лого и название
-            слева, справа правила, обучение, статистика и звук. */}
-        <TopBar subtitle={tt("app.brand")}>
-          {/* На узком экране подписи скрыты — кнопки остаются иконочными,
-              поэтому у каждой есть постоянное доступное имя. max-xl:h-11 —
-              тап-таргет 44px на телефоне и планшете. */}
-          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.tutorial")} title={tt("topbar.tutorial")} onClick={openTutorial}>
-            <GraduationCap className="size-4" />
-            <span className="hidden sm:inline">{tt("topbar.tutorial")}</span>
-          </Button>
-          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.rules")} title={tt("topbar.rules")} onClick={onRules}>
-            <BookOpen className="size-4" />
-            <span className="hidden sm:inline">{tt("topbar.rules")}</span>
-          </Button>
-          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.stats")} title={tt("topbar.stats")} onClick={openStats}>
-            <BarChart3 className="size-4" />
-            <span className="hidden sm:inline">{tt("topbar.stats")}</span>
-          </Button>
-          <SoundToggle />
+            слева, справа обучение, правила, разделы, статистика и звук
+            (общая TopBarNav — на страницах-разделах она та же, активный
+            раздел подсвечен). На телефоне (F7) шапка компактная: без лого
+            и названия, без обучения и кнопок разделов (они ушли в нижний
+            таб-бар с домиком) — остаются правила, статистика, звук и язык. */}
+        <TopBar subtitle={tt("app.brand")} hideBrandOnMobile>
+          <TopBarNav onTutorial={openTutorial} onRules={onRules} onStats={openStats} />
         </TopBar>
 
         {/* Столы — единственный путь в партию: соло-режим убран, игра с ботами
-            идёт через «Создать стол» → боты в лобби → «Начать год». */}
-        <div className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col px-4 py-4 lg:h-[calc(100dvh-3.5rem)] lg:flex-[1_1_0px] lg:overflow-hidden">
+            идёт через «Создать стол» → боты в лобби → «Начать год».
+            Нижний паддинг на телефоне — под таб-бар разделов (F7), на sm+ —
+            прежние 1rem. */}
+        <div className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col px-4 pt-4 pb-[calc(4.75rem_+_env(safe-area-inset-bottom))] sm:pb-4 lg:h-[calc(100dvh-3.5rem)] lg:flex-[1_1_0px] lg:overflow-hidden">
           <header className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <h1 className="font-display text-2xl tracking-[0.08em] text-fg sm:text-3xl">{tt("app.name")}</h1>
             <p className="text-xs text-muted sm:text-sm">{tt("menu.subtitle")}</p>
@@ -159,14 +407,20 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
             <NetMenuScreen />
           </div>
         </div>
+        {/* Мобильный таб-бар разделов: Магазин · Бестиарий · [домик] ·
+            Кампания · Вызовы. На <sm шапка разделы больше не дублирует. */}
+        <MobileTabBar />
       </div>
+      {/* Обучение и статистика остались модалками меню; магазин, бестиарий,
+          кампания и вызовы переехали на страницы /shop, /bestiary, /campaign
+          и /challenges (см. src/routes/). */}
       {tutorialOpen ? <TutorialScreen onClose={closeTutorial} /> : null}
       {statsOpen ? <StatsScreen onClose={closeStats} /> : null}
     </>
   );
 }
 
-type RulesTab = "base" | "continents" | "plants" | "fungi" | "mutations";
+type RulesTab = "base" | "continents" | "plants" | "fungi" | "mutations" | "mods" | "fossils" | "campaign";
 
 /** Подпись вкладки правил — ключ словаря. */
 const RULES_TAB_KEYS: Record<RulesTab, TKey> = {
@@ -175,9 +429,59 @@ const RULES_TAB_KEYS: Record<RulesTab, TKey> = {
   plants: "rules.tab.plants",
   fungi: "rules.tab.fungi",
   mutations: "rules.tab.mutations",
+  mods: "rules.tab.mods",
+  fossils: "rules.tab.fossils",
+  campaign: "rules.tab.campaign",
 };
 
-const TRAITS_BY_TAB: Record<RulesTab, TraitId[]> = {
+/**
+ * Группы вкладок: «подстрочка» — мелкая подпись над кнопками своей группы.
+ * Обёртки групп помечены role="presentation", поэтому с точки зрения
+ * доступности все role=tab остаются «детьми» единственного tablist.
+ */
+const RULES_TAB_GROUPS: Array<{ captionKey: TKey; tabs: RulesTab[] }> = [
+  { captionKey: "rules.group.base", tabs: ["base"] },
+  { captionKey: "rules.group.expansions", tabs: ["continents", "plants", "fungi", "mutations"] },
+  { captionKey: "rules.group.modes", tabs: ["mods", "fossils", "campaign"] },
+];
+
+/**
+ * Вкладка «Модификаторы»: столовые правила и мутаторы — по одному пункту на
+ * каждый. Имена берём из ключей лобби (единый источник: в лобби и в правилах
+ * пункт называется одинаково), тексты — правила.
+ */
+const MODIFIER_RULE_ENTRIES: Array<{ nameKey: TKey; textKey: TKey }> = [
+  { nameKey: "lobby.rule.pack", textKey: "rules.mods.rule.pack.text" },
+  { nameKey: "lobby.rule.hungrySeason", textKey: "rules.mods.rule.hungrySeason.text" },
+  { nameKey: "lobby.rule.abundance", textKey: "rules.mods.rule.abundance.text" },
+  { nameKey: "lobby.rule.startHand", textKey: "rules.mods.rule.startHand.text" },
+];
+
+const MODIFIER_MUTATOR_ENTRIES: Array<{ nameKey: TKey; textKey: TKey }> = [
+  { nameKey: "lobby.mutator.scavengers", textKey: "rules.mods.mutator.scavengers.text" },
+  { nameKey: "lobby.mutator.rapidEvolution", textKey: "rules.mods.mutator.rapidEvolution.text" },
+];
+
+/** События «Дикого мира» в правилах — короткие строки «событие — эффект». */
+const WILD_EVENT_KEYS: TKey[] = [
+  "rules.mods.wild.iceAge",
+  "rules.mods.wild.goldenAge",
+  "rules.mods.wild.resettlement",
+  "rules.mods.wild.cropFailure",
+  "rules.mods.wild.meteorite",
+  "rules.mods.wild.wildfire",
+];
+
+/** Изверги кампании: имя — ключ реестра миссий, текст — сценарный эффект. */
+const CAMPAIGN_BOSS_ENTRIES: Array<{ nameKey: TKey; textKey: TKey }> = [
+  { nameKey: "campaign.boss.trilobite", textKey: "rules.campaign.boss.trilobite" },
+  { nameKey: "campaign.boss.bonecrusher", textKey: "rules.campaign.boss.bonecrusher" },
+  { nameKey: "campaign.boss.atroxabilis", textKey: "rules.campaign.boss.atroxabilis" },
+];
+
+/** Свойства по вкладкам с trait-списками: механические вкладки (модификаторы,
+ *  ископаемые, кампания) списков свойств не показывают. */
+const TRAITS_BY_TAB: Record<Exclude<RulesTab, "mods" | "fossils" | "campaign">, TraitId[]> = {
   base: TRAIT_ORDER.filter(
     (id) =>
       !CONTINENTS_TRAIT_IDS.has(id) &&
@@ -395,6 +699,7 @@ function RuleCard({ src, label }: { src: string; label?: string }) {
 export function RulesPanel({ onClose }: { onClose: () => void }) {
   const tt = useT();
   const [tab, setTab] = useState<RulesTab>("base");
+  const titleId = useId();
   // Правила закрываются и Esc, и кликом по затемнению вокруг карточки.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -404,39 +709,55 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-0 sm:items-center sm:p-6"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <DialogShell
+      titleId={titleId}
+      overlayClassName="fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-0 sm:items-center sm:p-6"
+      panelClassName="max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-t-[var(--radius-xl)] border border-border bg-surface p-5 sm:rounded-[var(--radius-xl)] sm:p-8"
+      onBackdropClick={onClose}
     >
-      <div className="max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-t-[var(--radius-xl)] border border-border bg-surface p-5 sm:rounded-[var(--radius-xl)] sm:p-8">
         <div className="mb-4 flex items-start justify-between gap-4">
-          <h2 className="text-2xl">{tt("rules.title")}</h2>
+          <h2 id={titleId} tabIndex={-1} className="text-2xl">{tt("rules.title")}</h2>
           <Button variant="ghost" size="sm" onClick={onClose}>
             {tt("common.close")}
           </Button>
         </div>
-        <div role="tablist" aria-label={tt("rules.tabs")} className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {(Object.keys(RULES_TAB_KEYS) as RulesTab[]).map((id) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={tab === id}
-              onClick={() => setTab(id)}
-              className={cn(
-                FOCUS_VISIBLE,
-                "h-11 rounded-[var(--radius-md)] border px-1 text-sm font-medium",
-                tab === id
-                  ? "border-accent bg-accent text-accent-fg"
-                  : "border-border bg-bg text-fg hover:bg-surface-2",
-              )}
-            >
-              {tt(RULES_TAB_KEYS[id])}
-            </button>
+        {/* Группы вкладок с «подстрочками»: мелкая подпись над кнопками
+            своей группы. flex-wrap: на узких экранах группы переносятся
+            целиком, кнопки — внутри своей группы. Обёртки групп —
+            presentation, поэтому tablist по-прежнему «напрямую владеет»
+            всеми вкладками. */}
+        <div role="tablist" aria-label={tt("rules.tabs")} className="mb-5 flex flex-wrap items-start gap-x-6 gap-y-3">
+          {RULES_TAB_GROUPS.map((group) => (
+            <div key={group.captionKey} role="presentation" className="min-w-0">
+              <p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-subtle">
+                {tt(group.captionKey)}
+              </p>
+              <div role="presentation" className="flex flex-wrap gap-2">
+                {group.tabs.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="tab"
+                    id={`${titleId}-tab-${id}`}
+                    aria-controls={`${titleId}-panel`}
+                    aria-selected={tab === id}
+                    onClick={() => setTab(id)}
+                    className={cn(
+                      FOCUS_VISIBLE,
+                      "h-11 rounded-[var(--radius-md)] border px-3 text-sm font-medium",
+                      tab === id
+                        ? "border-accent bg-accent text-accent-fg"
+                        : "border-border bg-bg text-fg hover:bg-surface-2",
+                    )}
+                  >
+                    {tt(RULES_TAB_KEYS[id])}
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
+        <div role="tabpanel" id={`${titleId}-panel`} aria-labelledby={`${titleId}-tab-${tab}`} tabIndex={0}>
         {tab === "base" && (
           <div className="space-y-4 text-sm text-muted">
             <p>{tt("rules.base.intro")}</p>
@@ -595,8 +916,95 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
             <p className="text-xs">{tt("rules.mut.footnote")}</p>
           </div>
         )}
-      </div>
-    </div>
+        {tab === "mods" && (
+          <div className="space-y-4 text-sm text-muted">
+            <p>{tt("rules.mods.intro")}</p>
+            <ul className="list-decimal space-y-2 pl-5">
+              <li>
+                <strong className="text-fg">{tt("rules.mods.slots")}</strong> {tt("rules.mods.slots.text")}
+              </li>
+            </ul>
+            <h3 className="text-fg">{tt("rules.mods.rules.title")}</h3>
+            <ul className="space-y-2">
+              {MODIFIER_RULE_ENTRIES.map((entry) => (
+                <li key={entry.nameKey}>
+                  <strong className="text-fg">{tt(entry.nameKey)}.</strong> {tt(entry.textKey)}
+                </li>
+              ))}
+            </ul>
+            <h3 className="text-fg">{tt("rules.mods.mutators.title")}</h3>
+            <ul className="space-y-2">
+              {MODIFIER_MUTATOR_ENTRIES.map((entry) => (
+                <li key={entry.nameKey}>
+                  <strong className="text-fg">{tt(entry.nameKey)}.</strong> {tt(entry.textKey)}
+                </li>
+              ))}
+            </ul>
+            <h3 className="text-fg">{tt("rules.mods.wild.title")}</h3>
+            <p>{tt("rules.mods.wild.text")}</p>
+            <ul className="list-disc space-y-1.5 pl-5">
+              {WILD_EVENT_KEYS.map((key) => (
+                <li key={key}>{tt(key)}</li>
+              ))}
+            </ul>
+            <h3 className="text-fg">{tt("rules.mods.compat.title")}</h3>
+            <p>{tt("rules.mods.compat")}</p>
+          </div>
+        )}
+        {tab === "fossils" && (
+          <div className="space-y-4 text-sm text-muted">
+            <p>{tt("rules.fossils.intro")}</p>
+            <h3 className="text-fg">{tt("rules.fossils.earn.title")}</h3>
+            <ul className="space-y-2">
+              <li>
+                <strong className="text-fg">{tt("rules.fossils.earn.challenges")}</strong> {tt("rules.fossils.earn.challenges.text")}
+              </li>
+              <li>
+                <strong className="text-fg">{tt("rules.fossils.earn.feats")}</strong> {tt("rules.fossils.earn.feats.text")}
+              </li>
+              <li>
+                <strong className="text-fg">{tt("rules.fossils.earn.daily")}</strong> {tt("rules.fossils.earn.daily.text")}
+              </li>
+              <li>
+                <strong className="text-fg">{tt("rules.fossils.earn.cap")}</strong> {tt("rules.fossils.earn.cap.text")}
+              </li>
+            </ul>
+            <h3 className="text-fg">{tt("rules.fossils.spend.title")}</h3>
+            <p>{tt("rules.fossils.spend.text")}</p>
+            <p className="text-xs">{tt("rules.fossils.where")}</p>
+          </div>
+        )}
+        {tab === "campaign" && (
+          <div className="space-y-4 text-sm text-muted">
+            <p>{tt("rules.campaign.intro")}</p>
+            <ul className="list-decimal space-y-2 pl-5">
+              <li>
+                <strong className="text-fg">{tt("rules.campaign.eras")}</strong> {tt("rules.campaign.eras.text")}
+              </li>
+              <li>
+                <strong className="text-fg">{tt("rules.campaign.goals")}</strong> {tt("rules.campaign.goals.text")}
+              </li>
+              <li>
+                <strong className="text-fg">{tt("rules.campaign.diary")}</strong> {tt("rules.campaign.diary.text")}
+              </li>
+              <li>
+                <strong className="text-fg">{tt("rules.campaign.hard")}</strong> {tt("rules.campaign.hard.text")}
+              </li>
+            </ul>
+            <h3 className="text-fg">{tt("rules.campaign.bosses.title")}</h3>
+            <ul className="space-y-2">
+              {CAMPAIGN_BOSS_ENTRIES.map((entry) => (
+                <li key={entry.nameKey}>
+                  <strong className="text-fg">{tt(entry.nameKey)}</strong> — {tt(entry.textKey)}
+                </li>
+              ))}
+            </ul>
+            <p className="text-xs">{tt("rules.campaign.bosses.note")}</p>
+            <p className="text-xs">{tt("rules.campaign.where")}</p>
+          </div>
+        )}
+        </div>
+    </DialogShell>
   );
 }
 
@@ -604,14 +1012,8 @@ export function RulesPanel({ onClose }: { onClose: () => void }) {
 export function StatsScreen({ onClose }: { onClose: () => void }) {
   const tt = useT();
   const lang = useLang();
+  const titleId = useId();
   const stats = useMemo(() => readStats(), []);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   const games = stats.games;
   const wins = games.filter((g) => g.won).length;
@@ -636,15 +1038,18 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
   ];
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-3 backdrop-blur-sm sm:p-6"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+    <DialogShell
+      titleId={titleId}
+      overlayClassName="fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-3 backdrop-blur-sm sm:p-6"
+      panelClassName="relative flex max-h-[92dvh] w-full max-w-2xl flex-col rounded-[var(--radius-xl)] border border-border bg-surface shadow-[var(--shadow-card)]"
+      onBackdropClick={onClose}
+      onEscape={(event) => {
+        event.preventDefault();
+        onClose();
       }}
     >
-      <div className="relative flex max-h-[92dvh] w-full max-w-2xl flex-col rounded-[var(--radius-xl)] border border-border bg-surface shadow-[var(--shadow-card)]">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
-          <h2 className="text-xl">{tt("stats.title")}</h2>
+          <h2 id={titleId} tabIndex={-1} className="text-xl">{tt("stats.title")}</h2>
           <Button variant="secondary" size="sm" onClick={onClose}>
             {tt("common.close")}
           </Button>
@@ -741,7 +1146,7 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
                         key={a.id}
                         className={cn(
                           "flex items-start gap-3 rounded-[var(--radius-md)] border px-3 py-2.5",
-                          got ? "border-accent/60 bg-accent/10" : "border-border bg-bg opacity-60",
+                          got ? "border-accent/60 bg-accent/10" : "border-border bg-bg",
                         )}
                       >
                         {got ? (
@@ -761,8 +1166,7 @@ export function StatsScreen({ onClose }: { onClose: () => void }) {
             </>
           )}
         </div>
-      </div>
-    </div>
+    </DialogShell>
   );
 }
 
@@ -772,6 +1176,16 @@ function formatDate(ms: number, lang: "ru" | "en"): string {
     month: "2-digit",
     year: "2-digit",
   });
+}
+
+/**
+ * Имя строки финального счёта: у флоры («Трава и грибы») имя лежит в данных
+ * движка по-русски, поэтому при lang=en показываем словарное имя дополнения
+ * (module.fungi). Флора опознаётся по playerId === -1 — как в sourceLabels.
+ * Остальные строки — имена игроков (боты-учёные переводятся, люди — как есть).
+ */
+export function scoreRowName(row: ScoreBreakdown, lang: Lang): string {
+  return row.playerId === -1 ? translate(lang, "module.fungi") : scientistName(row.name, lang);
 }
 
 /**
@@ -853,7 +1267,7 @@ function explainDefeat(scores: ScoreBreakdown[], winnerIds: number[], humanId: n
     return translate(lang, "final.defeat.flora", {
       gap,
       points: pw,
-      name: scientistName(leader.name, lang),
+      name: scoreRowName(leader, lang),
       leader: leader.total,
       human: human.total,
     });
@@ -933,7 +1347,7 @@ function ScoreRow({
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate font-medium">
-            {place}. {scientistName(row.name, lang)}
+            {place}. {scoreRowName(row, lang)}
           </p>
           {winner ? <p className="mt-0.5 text-[10px] uppercase tracking-wide text-accent">{tt("final.best")}</p> : null}
         </div>
@@ -1183,12 +1597,683 @@ export function GameOverScreen({
               {tt("final.again")}
             </Button>
           ) : null}
+          <ShareReportButton />
           <Button variant="secondary" className="flex-1" size="md" onClick={onMenu}>
             {onAgain ? tt("final.menu") : tt("final.leave")}
           </Button>
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * «Скопировать отчёт» (волна 1.5, дизайн-пакет §5): текстовый матч-отчёт в
+ * буфер — победители, места с разбивкой, год, модули/модификаторы и сид
+ * (партии по сиду воспроизводимы — отчёт позволяет переиграть и сверить).
+ * Реплей-таймлайн — отдельная крупная ставка из старых планов, сюда не входит.
+ */
+function ShareReportButton() {
+  const tt = useT();
+  const state = useGameStore((s) => s.state);
+  const [copied, setCopied] = useState(false);
+  if (!state?.scores || !state.winnerIds) return null;
+  const copy = async () => {
+    const rows = [...state.scores!].sort((a, b) => b.total - a.total || b.discard - a.discard);
+    const winnerNames = rows
+      .filter((r) => state.winnerIds!.includes(r.playerId))
+      .map((r) => r.name);
+    const lines: string[] = [];
+    lines.push(tt("final.report.head"));
+    lines.push(tt("final.report.winners", { names: winnerNames.join(", ") }));
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i]!;
+      lines.push(
+        tt("final.report.line", {
+          place: i + 1,
+          name: r.name,
+          total: r.total,
+          animals: r.animals,
+          traits: r.traits,
+          discard: r.discard,
+        }),
+      );
+    }
+    const modules = (Object.entries(state.modules) as Array<[ModuleId, boolean]>)
+      .filter(([, on]) => on)
+      .map(([id]) => tt(MODULE_NAME_KEYS[id]));
+    const mods: string[] = [];
+    if (state.rules?.pack) mods.push(tt("lobby.rule.pack"));
+    if (state.rules?.hungrySeason) mods.push(tt("lobby.rule.hungrySeason"));
+    if (state.rules?.abundance) mods.push(tt("lobby.rule.abundance"));
+    if (state.rules?.startHand) mods.push(tt("lobby.rule.startHand"));
+    for (const m of state.mutators ?? []) mods.push(tt(MUTATOR_NAME_KEYS[m]));
+    if (state.wildWorld) mods.push(tt("lobby.wildWorld"));
+    lines.push(
+      tt("final.report.meta", {
+        year: state.year,
+        modules: modules.join(", ") || "—",
+        modifiers: mods.join(", ") || "—",
+      }),
+    );
+    lines.push(tt("final.report.seed", { seed: state.rngSeed }));
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      // Клипборд недоступен (не https или нет разрешения) — тихо игнорируем.
+    }
+  };
+  return (
+    <Button variant="secondary" className="flex-1" size="md" onClick={copy}>
+      {copied ? tt("final.report.copied") : tt("final.report.button")}
+    </Button>
+  );
+}
+
+/** Имена модулей и модификаторов для отчёта — литеральные ключи (типобезопасный i18n). */
+const MODULE_NAME_KEYS: Record<ModuleId, TKey> = {
+  continents: "module.continents",
+  plants: "module.plants",
+  fungi: "module.fungi",
+  randomMutations: "module.randomMutations",
+};
+const MUTATOR_NAME_KEYS: Record<MutatorId, TKey> = {
+  scavengers: "lobby.mutator.scavengers",
+  rapidEvolution: "lobby.mutator.rapidEvolution",
+};
+
+/**
+ * Магазин v1 (волна 3б, дизайн-пакет §3): только earned-валюта, только
+ * видимое за столом (сукно и кубик), полный каталог без ротации, декларация
+ * «0% pay-to-win» в шапке. Покупка — серверная (цена из серверного каталога),
+ * экипировка — cosmeticsEquip, применение — через equippedCosmetics в сторе.
+ *
+ * Витрина: крупные карточки с честным превью внешности — у сукна сам его фон
+ * (cssClass из каталога; все .felt-skin-* включая классику есть в styles.css),
+ * у кубика живой Dice3D с тоном скина (cosmetics.diceTint) на классическом
+ * сукне — цвет читается так же, как за столом. Кнопка «Превью» раскрывает
+ * моковый стол: сукно + образцы карт + кости; один превью на всю страницу.
+ * Показан ровно эффект самого предмета: для сукна кости нейтральные, для
+ * кубика сукно классическое.
+ *
+ * Содержимое без диалоговой оболочки: живёт на странице /shop (FeaturePage).
+ * Если когда-нибудь понадобится модалка — обернуть в DialogShell: заголовок
+ * уже внутри содержимого.
+ */
+export function ShopContent() {
+  const tt = useT();
+  const setEquippedCosmetics = useGameStore((s) => s.setEquippedCosmetics);
+  const equipped = useGameStore((s) => s.equippedCosmetics);
+  const [balance, setBalance] = useState<number | null>(null);
+  const [owned, setOwned] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  // Открытое превью — один на всю страницу: клик по другому предмету
+  // закрывает прежнее, повторный клик по тому же — сворачивает.
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const [prof, ch] = await Promise.all([profileGet(), challengesGet()]);
+        if (!alive) return;
+        if (!prof.ok || !ch.ok) {
+          setError(tt("tutorial.startError"));
+          return;
+        }
+        setBalance(prof.balance);
+        setOwned(new Set(prof.owned.map((o) => o.itemId)));
+        const map: Partial<Record<string, string>> = {};
+        for (const e of prof.equipped) map[e.slot] = e.itemId;
+        setEquippedCosmetics(map);
+      } catch {
+        if (alive) setError(tt("tutorial.startError"));
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [tt, setEquippedCosmetics]);
+
+  const buy = async (itemId: string) => {
+    setBusy(itemId);
+    setError(null);
+    try {
+      const res = await cosmeticsBuy({ data: { itemId } });
+      if (!res.ok) {
+        setError(res.code === "insufficient-funds" ? tt("shop.err.funds") : tt("shop.err.generic"));
+        return;
+      }
+      setBalance(res.balance);
+      setOwned((prev) => new Set(prev).add(itemId));
+      sfx.play("cheer");
+      await equip(itemId);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const equip = async (itemId: string) => {
+    const item = cosmeticById(itemId);
+    if (!item) return;
+    const res = await cosmeticsEquip({ data: { slot: item.slot, itemId } });
+    if (res.ok) {
+      setEquippedCosmetics({ ...equipped, [item.slot]: itemId });
+      sfx.play("click");
+    }
+  };
+
+  const previewItem = previewId ? cosmeticById(previewId) : undefined;
+  const slots: CosmeticSlot[] = ["felt", "dice"];
+  return (
+    <>
+      {/* Заголовок страницы; счётчик ископаемых — справа от названия. */}
+      <header className="mb-4 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <div>
+          <h1 className="font-display text-2xl tracking-[0.08em] text-fg sm:text-3xl">{tt("shop.title")}</h1>
+          <p className="mt-1 text-xs text-muted">{tt("shop.declaration")}</p>
+        </div>
+        {balance !== null ? (
+          <span className="rounded-[var(--radius-sm)] border border-border bg-bg px-2 py-1 text-xs tabular-nums text-fg">
+            {tt("challenges.balance", { n: balance })}
+          </span>
+        ) : null}
+      </header>
+      {error ? (
+        <p role="alert" className="mb-3 rounded-[var(--radius-sm)] border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-clay">
+          {error}
+        </p>
+      ) : null}
+      {slots.map((slot) => {
+        const showPreviewHere = previewItem?.slot === slot;
+        return (
+          <section key={slot} className="mb-7">
+            <h3 className="mb-2 text-xs uppercase tracking-[0.18em] text-muted">
+              {tt(slot === "felt" ? "shop.slot.felt" : "shop.slot.dice")}
+            </h3>
+            <div className="grid items-start gap-3 sm:grid-cols-2">
+              {COSMETIC_ITEMS.filter((item) => item.slot === slot).map((item) => (
+                <ShopItemCard
+                  key={item.id}
+                  item={item}
+                  balance={balance}
+                  owned={item.price === 0 || owned.has(item.id)}
+                  equipped={equipped[item.slot] === item.id}
+                  busy={busy !== null}
+                  previewOpen={previewId === item.id}
+                  onTogglePreview={() => setPreviewId((cur) => (cur === item.id ? null : item.id))}
+                  onBuy={() => void buy(item.id)}
+                  onEquip={() => void equip(item.id)}
+                />
+              ))}
+            </div>
+            {showPreviewHere && previewItem ? (
+              <ShopPreview item={previewItem} onClose={() => setPreviewId(null)} />
+            ) : null}
+          </section>
+        );
+      })}
+    </>
+  );
+}
+
+/** Описание предмета в каталоге: ключ на каждый id, пропуск — заголовок. */
+const SHOP_ITEM_DESC_KEYS: Record<string, TKey> = {
+  "felt.classic": "shop.desc.felt.classic",
+  "felt.tundra": "shop.desc.felt.tundra",
+  "felt.savanna": "shop.desc.felt.savanna",
+  "felt.glacial": "shop.desc.felt.glacial",
+  "dice.bone": "shop.desc.dice.bone",
+  "dice.amber": "shop.desc.dice.amber",
+  "dice.obsidian": "shop.desc.dice.obsidian",
+};
+
+/**
+ * Карточка предмета витрины. Витрина занимает верхнюю часть и показывает
+ * реальный внешний вид: сукно — собственный фон (cssClass), кубик — живой
+ * Dice3D с тоном скина поверх классического сукна (Dice3D сам строит сцену
+ * только при появлении в кадре и засыпает после укладки — три канваса
+ * каталога стоят копейки).
+ */
+function ShopItemCard({
+  item,
+  balance,
+  owned,
+  equipped,
+  busy,
+  previewOpen,
+  onTogglePreview,
+  onBuy,
+  onEquip,
+}: {
+  item: CosmeticItem;
+  balance: number | null;
+  owned: boolean;
+  equipped: boolean;
+  busy: boolean;
+  previewOpen: boolean;
+  onTogglePreview: () => void;
+  onBuy: () => void;
+  onEquip: () => void;
+}) {
+  const tt = useT();
+  const name = tt(item.titleKey);
+  return (
+    <article
+      className={cn(
+        "flex flex-col overflow-hidden rounded-[var(--radius-md)] border transition-colors",
+        equipped ? "border-accent bg-accent/10" : "border-border bg-bg/60",
+      )}
+    >
+      {/* Витрина 16:10: образ dominate — видно сукно или кости с любого места сетки. */}
+      <div className="relative aspect-[16/10] w-full border-b border-ink/10">
+        {item.slot === "felt" ? (
+          <span aria-hidden className={cn("absolute inset-0", item.cssClass)} />
+        ) : (
+          <>
+            <span aria-hidden className="felt absolute inset-0" />
+            <span aria-hidden className="absolute inset-0 flex items-center justify-center">
+              <Dice3D values={[2, 5]} dieSize={52} gap={12} tint={item.diceTint} />
+            </span>
+          </>
+        )}
+        <span className="absolute right-2 top-2 rounded-full border border-ink/25 bg-surface/90 px-2 py-0.5 text-[11px] font-medium tabular-nums text-fg shadow-sm">
+          {item.price === 0 ? tt("shop.free") : tt("shop.price", { n: item.price })}
+        </span>
+      </div>
+      <div className="flex flex-1 flex-col gap-1.5 p-3">
+        <div className="flex items-center gap-2">
+          <p className="min-w-0 flex-1 truncate text-sm font-medium text-fg">{name}</p>
+          {item.rarity === "rare" ? (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-accent">
+              <Star className="size-3" aria-hidden />
+              {tt("shop.rarity.rare")}
+            </span>
+          ) : (
+            <span className="shrink-0 rounded-full border border-border bg-surface px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-muted">
+              {tt("shop.rarity.common")}
+            </span>
+          )}
+        </div>
+        <p className="text-xs leading-snug text-muted">{tt(SHOP_ITEM_DESC_KEYS[item.id] ?? item.titleKey)}</p>
+        <div className="mt-auto flex gap-2 pt-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            aria-expanded={previewOpen}
+            aria-label={tt("shop.preview.aria", { name })}
+            onClick={onTogglePreview}
+          >
+            <Eye className="size-4" />
+            {tt("shop.preview")}
+          </Button>
+          {equipped ? (
+            <span className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-accent/40 bg-accent/10 px-2 py-1.5 text-xs font-medium text-accent">
+              <CheckCircle2 className="size-4" aria-hidden />
+              {tt("shop.equipped")}
+            </span>
+          ) : owned ? (
+            <Button variant="secondary" className="flex-1" size="sm" disabled={busy} onClick={onEquip}>
+              {tt("shop.equip")}
+            </Button>
+          ) : (
+            <Button
+              variant="default"
+              className="flex-1"
+              size="sm"
+              disabled={busy || (balance !== null && balance < item.price)}
+              onClick={onBuy}
+            >
+              {tt("shop.buy")}
+            </Button>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+/**
+ * Моковый стол с экипированным предметом: сукно базовым классом .felt плюс
+ * скин предмета (для кубика сукно остаётся классическим). На сукне — образцы
+ * со стола (карта в руке, карточка свойства) и живые кости Dice3D: для
+ * сукна — нейтральные (дефолтный тон), для кубика — с тоном предмета.
+ */
+function ShopPreview({ item, onClose }: { item: CosmeticItem; onClose: () => void }) {
+  const tt = useT();
+  const isFelt = item.slot === "felt";
+  const name = tt(item.titleKey);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Панель раскрывается под сеткой секции — на телефоне она может оказаться
+  // за нижним краем: подтягиваем минимально (мгновенно, без smooth).
+  useEffect(() => {
+    panelRef.current?.scrollIntoView({ block: "nearest" });
+  }, []);
+  return (
+    <div
+      ref={panelRef}
+      role="region"
+      aria-label={tt("shop.preview.title", { name })}
+      className="mt-3 overflow-hidden rounded-[var(--radius-md)] border border-accent/50 bg-surface shadow-sm"
+    >
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm text-fg">{tt("shop.preview.title", { name })}</p>
+          <p className="text-xs text-muted">{tt("shop.preview.hint")}</p>
+        </div>
+        <Button
+          variant="ghost"
+          size="iconSm"
+          aria-label={tt("shop.preview.close")}
+          title={tt("shop.preview.close")}
+          onClick={onClose}
+        >
+          <X className="size-4" />
+        </Button>
+      </div>
+      <div className="p-3 pb-2">
+        <div
+          className={cn(
+            "felt relative flex min-h-[200px] items-center justify-center gap-4 overflow-hidden rounded-[var(--radius-md)] border border-ink/30 px-4 sm:min-h-[230px] sm:gap-6",
+            isFelt && item.cssClass,
+          )}
+        >
+          {/* Образцы со стола: карта в руке и карточка свойства читаются на любом сукне. */}
+          <img
+            src={BG.cardBack}
+            alt=""
+            aria-hidden
+            className="aspect-[2/3] w-16 rounded-[var(--radius-sm)] border border-ink/40 object-cover shadow-md sm:w-20"
+          />
+          <img
+            src={TRAIT_ART.carnivore!}
+            alt=""
+            aria-hidden
+            className="aspect-[2/3] w-14 rounded-[var(--radius-sm)] border border-ink/40 object-cover shadow-md sm:w-16"
+          />
+          <Dice3D values={[3, 4]} dieSize={48} gap={12} tint={isFelt ? undefined : item.diceTint} />
+        </div>
+        {/* Честность превью: показан только эффект самого предмета. */}
+        <p className="px-1 py-2 text-xs text-muted">
+          {tt(isFelt ? "shop.preview.note.felt" : "shop.preview.note.dice")}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Бестиарий натуралиста (волна 4б, §4.1Д): альбом именованных животных.
+ * Карточка = кличка + свойства + итог партии; никакой силы, только память
+ * и статус. Пустой альбом объясняет, как завести первого питомца.
+ *
+ * Содержимое без диалоговой оболочки: живёт на странице /bestiary
+ * (FeaturePage). Чтение альбома — ПОСЛЕ монтирования: альбом device-bound
+ * (localStorage), SSR про него не знает, иначе hydration mismatch. Заодно
+ * монтирование — точка перепроверки чердака: погибшие в партиях питомцы
+ * оседают в альбоме, даже если их партия так и не доигралась.
+ */
+export function BestiariumContent() {
+  const tt = useT();
+  const [entries, setEntries] = useState<BestiariumEntry[] | null>(null);
+  useEffect(() => {
+    setEntries(flushPendingSpecimens());
+  }, []);
+  return (
+    <>
+      <header className="mb-4">
+        <h1 className="font-display text-2xl tracking-[0.08em] text-fg sm:text-3xl">{tt("bestiarium.title")}</h1>
+        <p className="mt-1 text-xs text-muted">{tt("bestiarium.subtitle")}</p>
+      </header>
+      {entries === null ? null : entries.length === 0 ? (
+        <p className="rounded-[var(--radius-md)] border border-border bg-bg/60 px-4 py-6 text-center text-sm text-muted">
+          {tt("bestiarium.empty")}
+        </p>
+      ) : (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {entries.map((e, i) => (
+            <div key={`${e.name}-${e.at}-${i}`} className="rounded-[var(--radius-md)] border border-border bg-bg/60 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="truncate font-display text-sm tracking-wide text-fg">{e.name}</p>
+                {e.won ? (
+                  <span className="flex shrink-0 items-center gap-1 text-xs text-accent">
+                    <Star className="size-3.5" aria-hidden />
+                    {tt("bestiarium.won")}
+                  </span>
+                ) : null}
+              </div>
+              <p className="mt-1 truncate text-xs text-muted">
+                {e.traits.length ? e.traits.map((t) => tt(traitTitleKey(t))).join(" · ") : tt("bestiarium.noTraits")}
+              </p>
+              <p className="mt-0.5 text-[11px] text-subtle">{tt("bestiarium.year", { n: e.year })}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Ключ имени свойства — термины живут в terms.ts, отсюда литеральный ключ. */
+function traitTitleKey(t: TraitId): TKey {
+  return ("trait." + t) as TKey;
+}
+
+/**
+ * Кампания «Эры» (волна 4а, дизайн-пакет §4.1А): эпохи → миссии → изверги.
+ * Прогресс — localStorage (evo-campaign) через стор; «Хард» открывается после
+ * «Нормы». Миссия запускает обычную комнату с лёгким/обычным/тяжёлым ботом;
+ * у изверга — сценарное ломающее правило (GameScenario в движке).
+ *
+ * Содержимое без диалоговой оболочки: живёт на странице /campaign
+ * (FeaturePage). После успешного старта миссии вызывается onStarted —
+ * страница уводит в меню, где лобби партии открывает GameApp.
+ */
+export function CampaignContent({ onStarted }: { onStarted?: () => void }) {
+  const tt = useT();
+  const name = "Evo";
+  const progress = useGameStore((s) => s.campaignProgress);
+  const startCampaign = useGameStore((s) => s.startCampaign);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const start = async (id: CampaignMissionId, hard: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await startCampaign(id, hard, name);
+      onStarted?.();
+    } catch {
+      setError(tt("tutorial.startError"));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <header className="mb-4">
+        <h1 className="font-display text-2xl tracking-[0.08em] text-fg sm:text-3xl">{tt("campaign.title")}</h1>
+        <p className="mt-1 text-xs text-muted">{tt("campaign.subtitle")}</p>
+      </header>
+      {error ? (
+        <p role="alert" className="mb-3 rounded-[var(--radius-sm)] border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-clay">{error}</p>
+      ) : null}
+      {CAMPAIGN_ERAS.map((era) => {
+        const missions = Object.values(CAMPAIGN_MISSIONS).filter((m) => m.era === era.id);
+        return (
+          <section key={era.id} className="mb-5">
+            <h3 className="mb-2 font-display text-sm uppercase tracking-[0.18em] text-muted">{tt(era.titleKey)}</h3>
+            <div className="grid gap-2">
+              {missions.map((m) => {
+                const done = progress.done.includes(m.id);
+                const hardDone = progress.hard.includes(m.id);
+                // Лесенка (§4.1А): миссия открыта, если выполнена предыдущая
+                // миссия ЭТОЙ ЖЕ эпохи (первая миссия эпохи — всегда открыта).
+                const eraMissions = Object.values(CAMPAIGN_MISSIONS).filter((x) => x.era === m.era);
+                const index = eraMissions.findIndex((x) => x.id === m.id);
+                const prevDone =
+                  index <= 0 ||
+                  progress.done.includes(eraMissions[index - 1]!.id) ||
+                  done;
+                return (
+                  <div
+                    key={m.id}
+                    className={cn(
+                      "rounded-[var(--radius-md)] border p-3",
+                      done ? "border-good/45 bg-good/10" : "border-border bg-bg/60",
+                    )}
+                  >
+                    {/* flex-wrap: на телефоне кнопки переносятся под название —
+                        nowrap-кнопка «Пройди предыдущую миссию» иначе распирает
+                        карточку и даёт странице горизонтальный скролл. */}
+                    <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
+                      <p className="flex min-w-0 items-center gap-2 text-sm text-fg">
+                        {done ? <CheckCircle2 className="size-4 shrink-0 text-good" aria-hidden /> : null}
+                        <span className="truncate">{tt(m.titleKey)}</span>
+                        {m.boss ? (
+                          <span className="inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] border border-danger/40 bg-danger/10 px-1.5 py-0.5 text-[10px] text-clay">
+                            {m.boss.scenario.doubleHunt ? <Swords className="size-3" aria-hidden /> : <Lock className="size-3" aria-hidden />}
+                            {tt(m.boss.nameKey)}
+                          </span>
+                        ) : null}
+                      </p>
+                      <div className="flex shrink-0 gap-1.5">
+                        <Button
+                          variant={done ? "secondary" : "default"}
+                          size="sm"
+                          disabled={busy || !prevDone}
+                          title={prevDone ? undefined : tt("campaign.locked")}
+                          onClick={() => start(m.id, false)}
+                        >
+                          {prevDone ? tt("campaign.start") : tt("campaign.locked")}
+                        </Button>
+                        {done ? (
+                          <Button variant="secondary" size="sm" disabled={busy} onClick={() => start(m.id, true)}>
+                            {hardDone ? tt("campaign.hard.done") : tt("campaign.hard")}
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                    <p className="mt-1.5 text-xs leading-snug text-muted">{tt(m.diaryKey)}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * «Вызовы» (волна 3а, дизайн-пакет §4.1В): сеть целей с тирами поверх любых
+ * партий. Прогресс и баланс — с сервера (профиль волны 0), каталог — общий
+ * модуль src/game/challenges.ts; награда «Ископаемыми» начисляется сервером
+ * идемпотентно, тир не может упасть дважды.
+ *
+ * Содержимое без диалоговой оболочки: живёт на странице /challenges
+ * (FeaturePage).
+ */
+export function ChallengesContent() {
+  const tt = useT();
+  const [loaded, setLoaded] = useState<
+    | { ok: false }
+    | { ok: true; progress: Record<string, number>; claimed: string[]; featsDone: string[]; balance: number }
+    | null
+  >(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const [ch, prof] = await Promise.all([challengesGet(), profileGet()]);
+        if (!alive) return;
+        if (!ch.ok || !prof.ok) {
+          setLoaded({ ok: false });
+          return;
+        }
+        setLoaded({
+          ok: true,
+          progress: ch.progress,
+          claimed: ch.claimed,
+          featsDone: ch.featsDone,
+          balance: prof.balance,
+        });
+      } catch {
+        if (alive) setLoaded({ ok: false });
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return (
+    <>
+      {/* Заголовок страницы; счётчик ископаемых — справа от названия. */}
+      <header className="mb-4 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <div>
+          <h1 className="font-display text-2xl tracking-[0.08em] text-fg sm:text-3xl">{tt("challenges.title")}</h1>
+          <p className="mt-1 text-xs text-muted">{tt("challenges.subtitle")}</p>
+        </div>
+        {loaded?.ok ? (
+          <span className="rounded-[var(--radius-sm)] border border-border bg-bg px-2 py-1 text-xs tabular-nums text-fg">
+            {tt("challenges.balance", { n: loaded.balance })}
+          </span>
+        ) : null}
+      </header>
+      {loaded === null ? (
+        <p className="py-8 text-center text-sm text-muted">…</p>
+      ) : !loaded.ok ? (
+        <p role="alert" className="py-8 text-center text-sm text-danger">
+          {tt("tutorial.startError")}
+        </p>
+      ) : (
+        <ul className="grid gap-2">
+          {CHALLENGES.map((ch) => {
+            const isFeat = Boolean(ch.feat);
+            const done = isFeat ? loaded.featsDone.includes(ch.id) : false;
+            const value = loaded.progress[ch.id] ?? 0;
+            const claimedTiers = ch.tiers.filter((_, i) => loaded.claimed.includes(`${ch.id}:${i}`));
+            const nextTier = ch.tiers.find((_, i) => !loaded.claimed.includes(`${ch.id}:${i}`));
+            const allDone = claimedTiers.length === ch.tiers.length;
+            return (
+              <li
+                key={ch.id}
+                className={cn(
+                  "flex items-center justify-between gap-3 rounded-[var(--radius-md)] border px-3 py-2.5",
+                  allDone || done
+                    ? "border-good/45 bg-good/10"
+                    : "border-border bg-bg/60",
+                )}
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm text-fg">{tt(ch.titleKey)}</p>
+                  <p className="text-xs text-muted">
+                    {isFeat
+                      ? done
+                        ? tt("challenges.done")
+                        : tt("challenges.progress", { value: 0, goal: 1 })
+                      : nextTier
+                        ? tt("challenges.progress", { value, goal: nextTier.n })
+                        : tt("challenges.done")}
+                  </p>
+                </div>
+                <div className="shrink-0 text-right">
+                  {nextTier && !isFeat ? (
+                    <span className="text-xs font-semibold tabular-nums text-accent">
+                      {tt("challenges.reward", { n: nextTier.coins })}
+                    </span>
+                  ) : allDone || done ? (
+                    <CheckCircle2 className="size-5 text-good" aria-hidden />
+                  ) : null}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </>
   );
 }
 

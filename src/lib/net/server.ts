@@ -18,6 +18,19 @@ import {
   legalFeedActions,
 } from "../../game/engine.ts";
 import { chooseAIAction } from "../../game/ai.ts";
+import {
+  CHANCES,
+  categorizePlayerMessage,
+  emptyBotMemory,
+  eventTriggers,
+  pickBotLine,
+  type BotChatMemory,
+  type BotLine,
+  type BotReplyCategory,
+  type BotSpeaker,
+} from "../../game/bot-chat.ts";
+import { moduleCompatibilityError } from "../../game/module-compatibility.ts";
+import { modifierCompatibilityError, mutatorList } from "../../game/modifier-compatibility.ts";
 import type {
   Difficulty,
   GameAction,
@@ -97,16 +110,19 @@ export type NetErrorCode =
   | "no-free-seats"
   | "seat-race"
   | "seats-unfinished"
+  | "players-offline"
   | "bot-chat"
   | "bot-resign"
   | "bot-rename"
   | "empty-name"
   | "seat-missing"
+  | "player-online"
   | "retry"
   | "rename-phase"
   | "rename-turn"
   | "rename-owner"
   | "rename-length"
+  | "close-people"
   | "generic";
 
 export class NetError extends Error {
@@ -125,6 +141,8 @@ const CODE_ALPHABET_LEN = CODE_ALPHABET.length;
 const MAX_EVENT_BATCHES = 40;
 const POLL_MAX_BATCHES = 30;
 const POLL_MAX_EVENTS = 60;
+/** Сколько последних actionId помнить для защиты от ретрая/повторного POST. */
+const ACTION_ID_HISTORY = 100;
 /** Чат: история при подключении, порция поллинга, длина и лимиты отправки. */
 const CHAT_HISTORY = 50;
 const CHAT_POLL_LIMIT = 100;
@@ -205,6 +223,8 @@ interface RoomRow {
   version: number;
   state: GameState | null;
   events: EventBatch[];
+  /** Последние actionId для идемпотентности повторов. */
+  action_ids: string[];
   auto_step_at: unknown;
   /**
    * M10: когда сервер сам закончит ход человека, у которого не осталось
@@ -385,6 +405,7 @@ interface RoomRowRaw {
   version: number;
   state_json: unknown;
   events_json: unknown;
+  action_ids: unknown;
   settings_json: unknown;
   auto_step_at: unknown;
   turn_deadline_at: unknown;
@@ -397,7 +418,7 @@ async function readRoom(sql: SqlLike, code: string): Promise<RoomRow | null> {
   const rows = await sql.query<RoomRowRaw>(
     `select code, status, capacity, difficulty, modules, settings as settings_json,
             host_seat, version, state as state_json, events as events_json,
-            auto_step_at, turn_deadline_at, created_at, is_private, password
+            action_ids, auto_step_at, turn_deadline_at, created_at, is_private, password
        from evo_rooms where code = $1`,
     [code],
   );
@@ -414,6 +435,9 @@ async function readRoom(sql: SqlLike, code: string): Promise<RoomRow | null> {
     version: r.version,
     state: (r.state_json as GameState | null) ?? null,
     events: (r.events_json as EventBatch[] | null) ?? [],
+    action_ids: Array.isArray(r.action_ids)
+      ? (r.action_ids as string[])
+      : [],
     auto_step_at: r.auto_step_at,
     turn_deadline_at: r.turn_deadline_at,
     created_at: r.created_at,
@@ -490,16 +514,20 @@ function metaOf(room: RoomRow, seats: SeatRow[], now: () => number, viewerSeat?:
 }
 
 function seatsInfo(seats: SeatRow[], now: () => number): SeatInfo[] {
-  return seats.map((s) => ({
-    seat: s.seat,
-    name: s.name,
-    isAI: s.is_ai,
-    online: now() - toMs(s.last_seen_at) < PACE.onlineMs,
-    resigned: s.resigned,
-    // Старые строки без цвета получают детерминированный из палитры.
-    color: colorForSeat(s.seat, s.color),
-    typing: now() - toMs(s.typing_at) < TYPING_FRESH_MS,
-  }));
+  return seats.map((s) => {
+    const age = now() - toMs(s.last_seen_at);
+    return {
+      seat: s.seat,
+      name: s.name,
+      isAI: s.is_ai,
+      online: age < PACE.onlineMs,
+      disconnected: !s.is_ai && age >= PACE.disconnectedMs,
+      resigned: s.resigned,
+      // Старые строки без цвета получают детерминированный из палитры.
+      color: colorForSeat(s.seat, s.color),
+      typing: now() - toMs(s.typing_at) < TYPING_FRESH_MS,
+    };
+  });
 }
 
 /** Включённые дополнения — белым списком и в фиксированном порядке. */
@@ -533,18 +561,43 @@ function countFreeSeats(capacity: number, seats: SeatRow[]): number {
 
 // ── журнал событий и чат: чтение порциями ──────────────────────────────────
 
-/** Батчи с version > sinceVersion; жёсткий лимит, чтобы кадр не распухал. */
-function batchesSince(all: EventBatch[], sinceVersion: number): EventBatch[] {
-  const out: EventBatch[] = [];
-  let total = 0;
-  for (const b of all) {
-    if (b.version <= sinceVersion) continue;
-    if (out.length >= POLL_MAX_BATCHES) break;
-    if (out.length > 0 && total + b.events.length > POLL_MAX_EVENTS) break;
-    out.push(b);
-    total += b.events.length;
+/** Окно событий с явной границей: при переполнении отдаём свежий хвост. */
+interface EventWindow {
+  batches: EventBatch[];
+  eventsFrom: number | undefined;
+  eventsTo: number;
+  skipped?: { from: number; to: number };
+}
+
+function eventWindow(
+  all: EventBatch[],
+  sinceVersion: number,
+  currentVersion: number,
+): EventWindow {
+  const available = all.filter((b) => b.version > sinceVersion);
+  if (!available.length) {
+    return { batches: [], eventsFrom: undefined, eventsTo: currentVersion };
   }
-  return out;
+  const selected: EventBatch[] = [];
+  let total = 0;
+  // Сначала выбираем свежий хвост, затем обрезаем его по числу событий.
+  for (let i = available.length - 1; i >= 0; i--) {
+    const batch = available[i]!;
+    if (selected.length >= POLL_MAX_BATCHES) break;
+    if (selected.length > 0 && total + batch.events.length > POLL_MAX_EVENTS) break;
+    selected.unshift(batch);
+    total += batch.events.length;
+  }
+  const first = selected[0]?.version ?? currentVersion;
+  const skipped = first > sinceVersion + 1
+    ? { from: sinceVersion + 1, to: first - 1 }
+    : undefined;
+  return {
+    batches: selected,
+    eventsFrom: first,
+    eventsTo: currentVersion,
+    ...(skipped ? { skipped } : {}),
+  };
 }
 
 /** Те же события, но уже без чужой скрытой информации. */
@@ -554,9 +607,12 @@ function viewEventBatches(batches: EventBatch[], seat: number, full: GameState):
 
 /** sinceId не задан — последние сообщения (подключение/возврат за стол). */
 async function readChat(sql: SqlLike, code: string, sinceId?: number): Promise<ChatMessage[]> {
+  // «key»/params — локализация системных реплик (см. 0011_chat_key_params.sql):
+  // у реплик людей оба поля пустые, клиент показывает русский text как есть.
   if (sinceId === undefined) {
     const rows = await sql.query<ChatMessage>(
       `select id::int as id, seat, name, text,
+              "key" as key, params,
               (extract(epoch from created_at) * 1000)::float8 as at
          from evo_chat where room_code = $1 order by id desc limit ${CHAT_HISTORY}`,
       [code],
@@ -565,6 +621,7 @@ async function readChat(sql: SqlLike, code: string, sinceId?: number): Promise<C
   }
   return sql.query<ChatMessage>(
     `select id::int as id, seat, name, text,
+            "key" as key, params,
             (extract(epoch from created_at) * 1000)::float8 as at
        from evo_chat where room_code = $1 and id > $2 order by id limit ${CHAT_POLL_LIMIT}`,
     [code, sinceId],
@@ -581,11 +638,15 @@ async function readSpectators(
        from evo_spectators where room_code = $1 order by created_at`,
     [code],
   );
-  return rows.map((s) => ({
-    name: s.name,
-    online: now() - toMs(s.last_seen_at) < PACE.onlineMs,
-    typing: now() - toMs(s.typing_at) < TYPING_FRESH_MS,
-  }));
+  return rows.map((s) => {
+    const age = now() - toMs(s.last_seen_at);
+    return {
+      name: s.name,
+      online: age < PACE.onlineMs,
+      disconnected: age >= PACE.disconnectedMs,
+      typing: now() - toMs(s.typing_at) < TYPING_FRESH_MS,
+    };
+  });
 }
 
 async function readReactions(
@@ -661,6 +722,10 @@ async function casUpdate(
     hostSeat?: number | null;
     events?: EventBatch[];
     eventsAppend?: GameEvent[];
+    /** UUID, который нужно запомнить атомарно вместе с state. */
+    actionId?: string;
+    /** Полный сброс истории actionId (новый раунд). */
+    actionIds?: string[];
     /** Доступ к столу: приватность и пароль (null — пароля нет). */
     isPrivate?: boolean;
     password?: string | null;
@@ -710,6 +775,18 @@ async function casUpdate(
         `) recent)`,
     );
   }
+  if (fields.actionId !== undefined) {
+    params.push(fields.actionId);
+    const p = params.length;
+    set.push(
+      `action_ids = (select coalesce(jsonb_agg(e order by ord), '[]'::jsonb) from (` +
+        `select e, ord from jsonb_array_elements(` +
+        `action_ids || jsonb_build_array(to_jsonb($${p}::text))` +
+        `) with ordinality as t(e, ord) order by ord desc limit ${ACTION_ID_HISTORY}` +
+        `) recent)`,
+    );
+  }
+  if (fields.actionIds !== undefined) push("action_ids =", JSON.stringify(fields.actionIds), "::jsonb");
   params.push(code, version);
   const rows = await sql.query<{ version: number }>(
     `update evo_rooms set ${set.join(", ")}
@@ -720,29 +797,54 @@ async function casUpdate(
   return rows.length === 1;
 }
 
-/** Повторяет casUpdate на свежей версии; бросает при исчерпании попыток. */
+type CasFields = Parameters<typeof casUpdate>[3];
+
+/**
+ * Повторяет casUpdate на свежей версии; бросает при исчерпании попыток.
+ * Если payload зависит от state, повтор без rebase недопустим: старый next
+ * затёр бы чужое состояние. Владелец такого payload обязан передать rebase
+ * и пересчитать поля от свежей строки (для action это делает полный retry).
+ */
 async function casUpdateStrict(
   sql: SqlLike,
   code: string,
   version: number,
-  fields: Parameters<typeof casUpdate>[3],
+  fields: CasFields,
+  rebase?: (fresh: RoomRow) => CasFields,
 ): Promise<void> {
   let v = version;
+  let current = fields;
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (await casUpdate(sql, code, v, fields)) return;
+    if (await casUpdate(sql, code, v, current)) return;
     const fresh = await readRoom(sql, code);
     if (!fresh) throw new NetError("Стол не найден — проверьте код", "room-gone");
+    if (fields.state !== undefined && !rebase) {
+      throw new NetError("Стол изменился, попробуйте ещё раз", "retry");
+    }
     v = fresh.version;
+    current = rebase ? rebase(fresh) : fields;
   }
   throw new NetError("Стол изменился, попробуйте ещё раз", "retry");
 }
 
 async function janitor(sql: SqlLike): Promise<void> {
+  // Идущая партия не имеет TTL: даже давно созданный playing-стол нельзя
+  // удалить посреди хода. Для lobby/finished считаем последнюю активность:
+  // CAS обновляет updated_at, heartbeat — last_seen_at, а зритель — свой
+  // last_seen_at. Каскад сам уносит места/события/чат комнаты.
   await sql.query(
-    `delete from evo_seats where room_code in
-       (select code from evo_rooms where created_at < now() - interval '12 hours')`,
+    `delete from evo_rooms as r
+      where r.status <> 'playing'
+        and greatest(
+          r.updated_at,
+          r.created_at,
+          coalesce((select max(s.last_seen_at) from evo_seats s
+                     where s.room_code = r.code), r.updated_at),
+          coalesce((select max(s.last_seen_at) from evo_spectators s
+                     where s.room_code = r.code), r.updated_at)
+        ) < now() - ($1::int * interval '1 hour')`,
+    [PACE.roomTtlHours],
   );
-  await sql.query(`delete from evo_rooms where created_at < now() - interval '12 hours'`);
   // Ожидающие и следы киков не должны переживать свои комнаты и TTL.
   await sql.query(
     `delete from evo_waiters where room_code not in (select code from evo_rooms)
@@ -762,7 +864,10 @@ async function janitor(sql: SqlLike): Promise<void> {
  */
 export function endTurnStepFor(state: GameState, _actorId: number): GameAction {
   if (state.phase === "development") return { type: "devPass" };
-  if (state.pendingAttack) return { type: "chooseDefense", kind: "none" };
+  if (state.pendingAttack) {
+    if (state.pendingAttack.choosingPlantDefense) return legalDefenseActions(state, state.pendingAttack.waitingFor)[0]!;
+    return { type: "chooseDefense", kind: "none" };
+  }
   return { type: "feedEndTurn" };
 }
 
@@ -772,7 +877,10 @@ export function endTurnStepFor(state: GameState, _actorId: number): GameAction {
  */
 function resignedStepFor(state: GameState): GameAction {
   if (state.phase === "development") return { type: "devPass" };
-  if (state.pendingAttack) return { type: "chooseDefense", kind: "none" };
+  if (state.pendingAttack) {
+    if (state.pendingAttack.choosingPlantDefense) return legalDefenseActions(state, state.pendingAttack.waitingFor)[0]!;
+    return { type: "chooseDefense", kind: "none" };
+  }
   return { type: "feedSkip" };
 }
 
@@ -801,15 +909,44 @@ export function noChoicesLeft(state: GameState, actor: Player): boolean {
 }
 
 /**
- * Дедлайн авто-конца хода человека без действий (epoch ms) — клиент рисует по
- * нему круговой отсчёт у имени. null: таймера нет (бот, автофаза, есть ходы).
+ * Дедлайн текущего хода человека (epoch ms): idleTurnMs для хода без
+ * действий и afkTurnMs для хода с действиями. null: ход бота/автофазы.
  */
 function turnDeadlineOf(room: RoomRow): number | null {
   if (room.status !== "playing" || !room.state || room.turn_deadline_at === null) return null;
-  if (nextAutoStep(room.state) !== null) return null;
   const actor = currentActor(room.state);
-  if (!actor || !noChoicesLeft(room.state, actor)) return null;
+  if (!actor || actor.isAI || actor.resigned) return null;
   return toMs(room.turn_deadline_at);
+}
+
+/**
+ * Следующий автошаг сервера, когда ходит БОТ (epoch ms), либо null: у бота
+ * нет дедлайна «конца хода» — его темп ведёт сервер шаг за шагом, поэтому
+ * честная метка для чужого табло — время следующего шага. В автофазах
+ * (банк/вымирание/рост) актора нет — метки тоже нет.
+ */
+function botStepAtOf(room: RoomRow): number | null {
+  if (room.status !== "playing" || !room.state || room.auto_step_at === null) return null;
+  const actor = currentActor(room.state);
+  if (!actor || !actor.isAI) return null;
+  return toMs(room.auto_step_at);
+}
+
+/**
+ * Пауза до авто-конца хода человека (мс) по настройке стола «Таймер хода»:
+ * — ключ есть и 0 («Выкл») → null: дедлайна нет, сервер не завершает ход
+ *   принудительно вовсе (игрок заканчивает его сам);
+ * — ключ есть и > 0 → значение настройки: ход (пустой и с действиями)
+ *   длится ровно столько, как хост выбрал в лобби;
+ * — ключа нет (старые столы, прямой путь создания) → прежнее поведение:
+ *   idleTurnMs для хода без действий, afkTurnMs — с действиями.
+ * Темп ботов (stepDelay) не зависит от настройки — она только про людей.
+ */
+export function turnTimeoutMs(settings: RoomSettings | null | undefined, idle: boolean): number | null {
+  const raw = settings?.turnTimerMs;
+  if (raw === undefined) return idle ? PACE.idleTurnMs : PACE.afkTurnMs;
+  if (raw === null || !Number.isFinite(raw) || raw <= 0) return null;
+  return raw;
 }
 
 /** Следующий шаг, который сервер делает сам; null — ждём ход человека. */
@@ -848,6 +985,10 @@ const SPOTLIGHT_MS: Partial<Record<GameEvent["kind"], number>> = {
   preyKilled: 3000,
   plantAttack: 2500,
   paralyzed: 2300,
+  // ── Волна 1/2: «Дикий мир» (зеркало карточек spotlight.tsx) ──
+  wildEventPlanned: 2400,
+  wildEventStarted: 2400,
+  wildMeteorite: 2800,
 };
 /** Защита добычи: бросок «Быстрого» — самый длинный показ с вердиктом. */
 const SPOTLIGHT_DEFENSE_MS: Record<"running" | "mimicry" | "tailLoss" | "none", number> = {
@@ -965,6 +1106,8 @@ export interface RoomService {
   setBots(input: { code: string; token: string; count: number }): Promise<void>;
   /** Кик игрока хостом: в лобби место освобождается, в партии становится ботом. */
   kick(code: string, token: string, seat: number): Promise<void>;
+  /** Заменить именно отключённого игрока ботом во время партии. */
+  replaceWithBot(code: string, token: string, seat: number): Promise<void>;
   setCapacity(code: string, token: string, capacity: number): Promise<void>;
   /** Настройки до старта: модули/сложность/размер колоды. */
   setSettings(code: string, token: string, settings: RoomSettings): Promise<void>;
@@ -1036,7 +1179,7 @@ export interface RoomService {
   typing(code: string, token: string): Promise<void>;
   rejoin(code: string, token: string, source?: Source): Promise<PollResult>;
   start(code: string, token: string): Promise<PollResult>;
-  action(code: string, token: string, action: GameAction): Promise<PollResult>;
+  action(code: string, token: string, action: GameAction, actionId?: string): Promise<PollResult>;
   poll(
     code: string,
     token: string,
@@ -1045,6 +1188,14 @@ export interface RoomService {
     sinceReactionId?: number,
   ): Promise<PollResult | UnchangedPoll>;
   again(input: { code: string; token: string }): Promise<void>;
+  /**
+   * Закрыть стол целиком (#4): участник сносит комнатку, где все ОСТАЛЬНЫЕ
+   * места — боты (обучение, кампания, «сам с ботами»). Идемпотентно: уже
+   * закрытый стол закрывается успехом (двойной клик и гонка с janitor).
+   */
+  closeTable(code: string, token: string): Promise<void>;
+  /** Фоновый проход по playing-столам: AFK-дедлайны и janitor. */
+  watchdog(): Promise<void>;
 }
 
 export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {}): RoomService {
@@ -1058,6 +1209,25 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
    * вызовы и тесты передают источник явно (без источника лимиты не считаются).
    */
   const rateHits = new Map<string, number[]>();
+
+  // ── реплики ботов в чат (#9) ──────────────────────────────────────────────
+  /**
+   * Чистая логика выбора фраз — в game/bot-chat.ts; здесь только память
+   * комнаты и вставка в evo_chat. Обе карты живут в инстансе сервиса: закрыли
+   * стол — память уходит (closeTable/watchdog), воскрешать репликой закрытую
+   * комнату нельзя.
+   */
+
+  /** Память реплик по коду комнаты: кто, когда и сколько раз говорил. */
+  const botChatMemory = new Map<string, BotChatMemory>();
+
+  /** Отложенный ответ бота на сообщение человека: жребий брошен в chat(), говорит бот на следующем advance. */
+  interface BotReplyRequest {
+    category: BotReplyCategory;
+    /** Подстановка {name} — имя автора сообщения. */
+    playerName: string;
+  }
+  const botReplyQueue = new Map<string, BotReplyRequest[]>();
 
   /** Окно ключа без записей: заодно чистим окно от старых отметок. */
   function rateWindow(key: string, windowMs: number): number[] {
@@ -1294,21 +1464,174 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
     return { ...room, host_seat: next, version: room.version + 1 };
   }
 
+  // ── реплики ботов: выбор и вставка ────────────────────────────────────────
+
+  function botMemoryOf(code: string): BotChatMemory {
+    let mem = botChatMemory.get(code);
+    if (!mem) {
+      mem = emptyBotMemory();
+      botChatMemory.set(code, mem);
+    }
+    return mem;
+  }
+
+  function botsOf(state: GameState): BotSpeaker[] {
+    return state.players.filter((p) => p.isAI).map((p) => ({ seat: p.id, name: p.name }));
+  }
+
+  /**
+   * Вставка реплики от имени бота: отдельный путь в evo_chat, мимо лимитов
+   * chat() — те защищают людей от спама, у ботов темп держит bot-chat.ts
+   * (кулдауны, кап на год). Стол мог закрыться, пока реплика выбиралась:
+   * пишем только в живую комнату (playing; finished — сразу после финального
+   * шага, реплика о победе/поражении дожна доехать), никогда не воскрешаем
+   * закрытый стол и не трогаем чужие ограничения чата.
+   */
+  async function insertBotLine(code: string, line: BotLine): Promise<void> {
+    const room = await readRoom(sql, code);
+    if (!room || (room.status !== "playing" && room.status !== "finished")) return;
+    await sql.query(`insert into evo_chat (room_code, seat, name, text) values ($1, $2, $3, $4)`, [
+      code,
+      line.speaker.seat,
+      line.speaker.name,
+      line.text,
+    ]);
+  }
+
+  /**
+   * Первая удачная реплика по списку триггеров (в порядке событий шага):
+   * не больше одной реплики ботов за вызов advance/action.
+   */
+  async function sayBotLineForTriggers(
+    code: string,
+    room: RoomRow,
+    triggers: ReturnType<typeof eventTriggers>,
+  ): Promise<boolean> {
+    if (!room.state) return false;
+    for (const trigger of triggers) {
+      const line = pickBotLine({
+        category: trigger.category,
+        candidates: trigger.candidates,
+        chance: trigger.chance,
+        nowMs: now(),
+        version: room.version,
+        round: room.state.year,
+        params: trigger.params,
+        rng: Math.random,
+        memory: botMemoryOf(code),
+      });
+      if (!line) continue;
+      botChatMemory.set(code, line.memory);
+      await insertBotLine(code, line);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Реплики по событиям выполненных шагов (охоты, смерти, вымирание, финал).
+   * Если события промолчали — редкий «фоновый» комментарий бота, только пока
+   * партия идёт (шаги выполнялись) и только при живых ботах.
+   */
+  async function flushBotEventLines(
+    code: string,
+    steps: Array<{ before: GameState; events: GameEvent[] }>,
+  ): Promise<void> {
+    if (!steps.length) return;
+    const room = await readRoom(sql, code);
+    if (!room?.state || (room.status !== "playing" && room.status !== "finished")) return;
+    for (const step of steps) {
+      if (await sayBotLineForTriggers(code, room, eventTriggers(step.before, step.events))) return;
+    }
+    if (room.status !== "playing") return;
+    const bots = botsOf(room.state);
+    if (!bots.length) return;
+    const line = pickBotLine({
+      category: "idle",
+      // Порядок кандидатов не фиксирован: фоновая реплика — от случайного бота.
+      candidates: bots.slice().sort(() => Math.random() - 0.5),
+      chance: CHANCES.idle,
+      nowMs: now(),
+      version: room.version,
+      round: room.state.year,
+      rng: Math.random,
+      memory: botMemoryOf(code),
+    });
+    if (!line) return;
+    botChatMemory.set(code, line.memory);
+    await insertBotLine(code, line);
+  }
+
+  /** Жребий ответа на сообщение человека брошен здесь (шанс CHANCES.chatReply). */
+  function queueBotReply(code: string, playerName: string, text: string): void {
+    if (Math.random() >= CHANCES.chatReply) return;
+    const request: BotReplyRequest = { category: categorizePlayerMessage(text), playerName };
+    const queue = botReplyQueue.get(code) ?? [];
+    queue.push(request);
+    // Отвечаем максимум на два последних сообщения: длинный спор людей
+    // боты не комментируют строка в строку.
+    botReplyQueue.set(code, queue.slice(-2));
+  }
+
+  /** Отложить ответ нельзя (сервер без таймеров): первая попытка — на следующем advance. */
+  async function flushQueuedBotReply(code: string): Promise<void> {
+    const queue = botReplyQueue.get(code);
+    if (!queue?.length) return;
+    const room = await readRoom(sql, code);
+    if (!room?.state || room.status !== "playing") {
+      // Стол закрыт/закончился — очередь не должна его воскрешать.
+      botReplyQueue.delete(code);
+      return;
+    }
+    const reply = queue.shift()!;
+    if (queue.length) botReplyQueue.set(code, queue);
+    else botReplyQueue.delete(code);
+    const line = pickBotLine({
+      category: reply.category,
+      candidates: botsOf(room.state),
+      chance: 1, // жребий брошен в chat(): здесь только кап года и кулдауны
+      nowMs: now(),
+      version: room.version,
+      round: room.state.year,
+      params: { name: reply.playerName },
+      rng: Math.random,
+      memory: botMemoryOf(code),
+    });
+    if (!line) return;
+    botChatMemory.set(code, line.memory);
+    await insertBotLine(code, line);
+  }
+
   async function advance(code: string): Promise<void> {
-    for (let i = 0; i < PACE.maxStepsPerTick; i++) {
+    // Отложенный ответ на сообщение человека — до шагов: реплика догоняет
+    // реплику игрока с задержкой в один поллинг.
+    await flushQueuedBotReply(code);
+    // События выполненных шагов — для реплик ботов. Проход почти всегда
+    // кончается ранним return (темп шага, ход человека), поэтому flush —
+    // в finally: не больше одной реплики ботов на advance, где бы цикл
+    // ни кончился.
+    const botSteps: Array<{ before: GameState; events: GameEvent[] }> = [];
+    try {
+      for (let i = 0; i < PACE.maxStepsPerTick; i++) {
       const room = await readRoom(sql, code);
       if (!room?.state || room.status !== "playing") return;
       const before = room.state;
       const step = nextAutoStep(before);
       if (!step) {
-        // Ход человека. M10: если действий у него не осталось — держим для
-        // него окно PACE.idleTurnMs и затем заканчиваем ход сами; если
-        // действия есть — таймера нет вовсе (решение владельца Q2).
+        // Ход человека: «ход» — полный ход игрока в текущей фазе. Паузу до
+        // авто-конца задаёт настройка стола «Таймер хода» (turnTimerMs);
+        // у столов без ключа — прежние idleTurnMs/afkTurnMs. «Выкл» (0)
+        // означает: сервер ход не заканчивает вовсе — игрок завершает его сам.
+        // Оба значения абсолютны и не зависят от интервала поллинга; watchdog
+        // держит их даже без браузера.
         const actor = currentActor(before);
-        const idle = actor && noChoicesLeft(before, actor) ? actor : null;
-        if (!idle) {
-          // Действия есть: ждать нечего, метки автошагов снимаем.
-          if (room.auto_step_at !== null || room.turn_deadline_at !== null) {
+        if (!actor) return;
+        const idle = noChoicesLeft(before, actor);
+        const timeoutMs = turnTimeoutMs(room.settings, idle);
+        if (timeoutMs === null) {
+          // «Выкл»: снимаем хвосты прошлого шага (устаревший auto_step_at),
+          // но дедлайн не ставим — ход висит, пока игрок не завершит сам.
+          if (room.turn_deadline_at !== null || room.auto_step_at !== null) {
             await casUpdate(sql, code, room.version, {
               autoStepAt: null,
               turnDeadlineAt: null,
@@ -1316,20 +1639,23 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
           }
           return;
         }
-        const due = room.turn_deadline_at === null ? 0 : toMs(room.turn_deadline_at);
-        if (due === 0) {
-          // Начало бездействия: метка (turnDeadlineAt) видна клиентам — по
-          // ней они рисуют круговой отсчёт.
+        if (room.turn_deadline_at === null) {
           await casUpdate(sql, code, room.version, {
             autoStepAt: null,
-            turnDeadlineAt: now() + PACE.idleTurnMs,
+            turnDeadlineAt: now() + timeoutMs,
           }).catch(() => false);
           return;
         }
-        if (due - now() > 0) return; // ещё есть время на осмотр стола
-        // Время вышло — сервер заканчивает ход сам, как за сдавшегося.
-        // Запись state сама снимет turn_deadline_at (см. casUpdate).
-        const forced = endTurnStepFor(before, idle.id);
+        if (room.auto_step_at !== null) {
+          await casUpdate(sql, code, room.version, {
+            autoStepAt: null,
+            turnDeadlineAt: toMs(room.turn_deadline_at),
+          }).catch(() => false);
+          return;
+        }
+        if (toMs(room.turn_deadline_at) - now() > 0) return;
+        // Время вышло — сервер завершает именно ход игрока в этой фазе.
+        const forced = endTurnStepFor(before, actor.id);
         const after = applyAction(before, forced);
         const finished = after.phase === "gameOver";
         const ok = await casUpdate(sql, code, room.version, {
@@ -1339,7 +1665,8 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
           eventsAppend: after.lastEvents.length ? after.lastEvents : undefined,
         });
         if (!ok) return; // обогнали — следующий запрос доведёт
-        if (finished) return;
+        botSteps.push({ before, events: after.lastEvents });
+        if (finished) break;
         continue;
       }
       const due = room.auto_step_at === null ? 0 : toMs(room.auto_step_at);
@@ -1353,14 +1680,23 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         eventsAppend: after.lastEvents.length ? after.lastEvents : undefined,
       });
       if (!ok) return; // обогнали — следующий запрос доведёт
-      if (finished) return;
+      botSteps.push({ before, events: after.lastEvents });
+      if (finished) break;
+    }
+    } finally {
+      if (botSteps.length) await flushBotEventLines(code, botSteps);
     }
   }
 
   async function snapshot(
     code: string,
     seat: number,
-    opts: { sinceVersion?: number; sinceChatId?: number; sinceReactionId?: number } = {},
+    opts: {
+      sinceVersion?: number;
+      sinceChatId?: number;
+      sinceReactionId?: number;
+      actionId?: string;
+    } = {},
   ): Promise<PollResult> {
     const [room, seats, waiters, spectators, reactions] = await Promise.all([
       readRoom(sql, code),
@@ -1373,10 +1709,12 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
     const full = room.state;
     // Первый кадр после подключения/реконнекта историю не вываливает:
     // батчи отдаются только при явном sinceVersion.
-    const events =
-      opts.sinceVersion !== undefined && full
-        ? viewEventBatches(batchesSince(room.events, opts.sinceVersion), seat, full)
-        : [];
+    const eventWin = opts.sinceVersion !== undefined && full
+      ? eventWindow(room.events, opts.sinceVersion, room.version)
+      : null;
+    const events = eventWin
+      ? viewEventBatches(eventWin.batches, seat, full!)
+      : [];
     const chat = await readChat(sql, code, opts.sinceChatId);
     return {
       version: room.version,
@@ -1386,17 +1724,173 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       seat,
       state: full && room.status !== "lobby" ? viewFor(full, seat) : null,
       events,
+      ...(eventWin
+        ? {
+            eventsFrom: eventWin.eventsFrom,
+            eventsTo: eventWin.eventsTo,
+            ...(eventWin.skipped ? { skipped: eventWin.skipped } : {}),
+          }
+        : {}),
       chat,
       waiters: waiterInfos(waiters, now),
       spectators,
       reactions,
       turnDeadlineAt: turnDeadlineOf(room),
+      botStepAt: botStepAtOf(room),
       serverNow: now(),
+      ...(opts.actionId ? { actionId: opts.actionId } : {}),
     };
+  }
+
+  /**
+   * Пересобрать патч действия от конкретного снимка комнаты. Повтор CAS
+   * обязан пройти через эту функцию заново: иначе старый state.player[]
+   * вернёт ушедшего игрока и затрёт его сдачу.
+   */
+  function actionFields(room: RoomRow, me: SeatRow, sent: GameAction): CasFields {
+    if (room.status !== "playing" || !room.state) {
+      throw new NetError("Партия не идёт", "not-playing");
+    }
+    const st = room.state;
+    if (me.resigned || st.players[me.seat]?.resigned) {
+      throw new NetError("Вы сдались — ваши ходы пропускаются автоматически", "resigned");
+    }
+    const isReorder =
+      sent.type === "reorderAnimal" &&
+      (st.phase === "development" || st.phase === "feeding") &&
+      st.currentPlayerId === me.seat &&
+      (st.players[me.seat]?.animals ?? []).some((a) => a.id === sent.animalId);
+    const isRename =
+      sent.type === "renameAnimal" &&
+      typeof sent.name === "string" &&
+      sent.name.trim().length <= 24 &&
+      (st.phase === "development" || st.phase === "feeding") &&
+      st.currentPlayerId === me.seat &&
+      (st.players[me.seat]?.animals ?? []).some((a) => a.id === sent.animalId);
+    let action: GameAction = sent;
+    if (!isReorder && !isRename) {
+      const allowed =
+        st.pendingAttack && st.pendingAttack.waitingFor === me.seat
+          ? legalDefenseActions(st, me.seat)
+          : st.phase === "development"
+            ? legalDevActions(st, me.seat)
+            : st.phase === "feeding"
+              ? legalFeedActions(st, me.seat)
+              : [];
+      const canonical = allowed.find((candidate) => sameAction(candidate, sent));
+      if (!canonical) {
+        if (sent.type === "reorderAnimal") {
+          if (st.phase !== "development" && st.phase !== "feeding") {
+            throw new NetError("Сейчас нельзя переставлять животных", "reorder-phase");
+          }
+          if (st.currentPlayerId !== me.seat) {
+            throw new NetError(
+              "Переставлять животных можно только в свой ход (сейчас ход другого игрока)",
+              "reorder-turn",
+            );
+          }
+          if (!(st.players[me.seat]?.animals ?? []).some((a) => a.id === sent.animalId)) {
+            throw new NetError("Переставлять можно только своих животных", "reorder-owner");
+          }
+        }
+        if (sent.type === "renameAnimal") {
+          if (st.phase !== "development" && st.phase !== "feeding") {
+            throw new NetError("Сейчас нельзя переименовывать животных", "rename-phase");
+          }
+          if (st.currentPlayerId !== me.seat) {
+            throw new NetError(
+              "Переименовывать животных можно только в свой ход (сейчас ход другого игрока)",
+              "rename-turn",
+            );
+          }
+          if (!(st.players[me.seat]?.animals ?? []).some((a) => a.id === sent.animalId)) {
+            throw new NetError("Переименовывать можно только своих животных", "rename-owner");
+          }
+          if (typeof sent.name !== "string" || sent.name.trim().length > 24) {
+            throw new NetError("Имя животного — до 24 символов", "rename-length");
+          }
+        }
+        throw new NetError("Такой ход сейчас недопустим", "move-illegal");
+      }
+      action = canonical;
+    }
+    const cosmetic = isReorder || isRename;
+    const next = applyAction(cosmetic ? { ...st, humanId: me.seat } : st, action);
+    if (cosmetic && next.humanId !== st.humanId) next.humanId = st.humanId;
+    const finished = next.phase === "gameOver";
+    const needsAuto = !finished && nextAutoStep(next) !== null;
+    const humanGap = phaseGapMs(st, next);
+    return {
+      state: next,
+      status: finished ? "finished" : undefined,
+      autoStepAt: finished ? null : needsAuto ? now() + humanGap : null,
+      // Перестановка/переименование не считаются игровым ходом: не сбрасываем
+      // AFK-дедлайн, иначе cosmetics можно было бы повторять бесконечно.
+      turnDeadlineAt: cosmetic
+        ? room.turn_deadline_at === null
+          ? null
+          : toMs(room.turn_deadline_at)
+        : undefined,
+      eventsAppend: next.lastEvents.length ? next.lastEvents : undefined,
+    };
+  }
+
+  /** Замена человека ботом в партии; state всегда пересобирается на retry. */
+  async function replaceSeatWithBot(
+    code: string,
+    room: RoomRow,
+    seats: SeatRow[],
+    seatNo: number,
+    victim: SeatRow,
+  ): Promise<void> {
+    if (room.status !== "playing" || !room.state) {
+      throw new NetError("Партия уже закончена", "game-finished");
+    }
+    const botName = await uniqueName(code, AI_NAMES[seatNo % AI_NAMES.length]!, victim.token);
+    const stateWithBot = (source: GameState): GameState => {
+      const next = structuredClone(source);
+      const player = next.players[seatNo];
+      if (player) {
+        player.isAI = true;
+        player.name = botName;
+        player.resigned = false;
+      }
+      return next;
+    };
+    const initial = stateWithBot(room.state);
+    await casUpdateStrict(
+      sql,
+      code,
+      room.version,
+      { state: initial },
+      (fresh) => {
+        if (fresh.status !== "playing" || !fresh.state) {
+          throw new NetError("Партия уже закончена", "game-finished");
+        }
+        return { state: stateWithBot(fresh.state) };
+      },
+    );
+    await sql.query(
+      `update evo_seats set is_ai = true, name = $3, token = '', resigned = false,
+              color = $4, last_seen_at = now()
+        where room_code = $1 and seat = $2`,
+      [code, seatNo, botName, botColor(seatNo, takenColors(seats))],
+    );
   }
 
   const service: RoomService = {
     async create(input, source) {
+      const incompatibility = moduleCompatibilityError(input.modules ?? {});
+      if (incompatibility) throw new NetError(incompatibility);
+      // Волна 2: лимит 3 слота модификаций и запрещённые пары — та же схема
+      // отказа, что у несовместимых модулей (клиент превалирует, сервер — право).
+      const modIncompatibility = modifierCompatibilityError({
+        modules: input.modules ?? {},
+        rules: input.rules,
+        mutators: input.mutators,
+        wildWorld: input.wildWorld,
+      });
+      if (modIncompatibility) throw new NetError(modIncompatibility);
       // S7: мягкая квота на источнике — спам комнатами раздувает БД.
       // Порог настраивается EVO_CREATE_PER_HOUR (QA-прогоны создают десятки
       // столов); без переменной окружения действует прежний лимит.
@@ -1421,6 +1915,17 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         modules: input.modules ?? {},
         difficulty: input.difficulty,
         ...(input.deckSize ? { deckSize: input.deckSize } : {}),
+        // Волна 2: модификаторы живут в settings jsonb — отдельная колонка
+        // не нужна (в отличие от modules, читаемых по комнатам давно).
+        ...(input.rules ? { rules: input.rules } : {}),
+        ...(input.mutators ? { mutators: input.mutators } : {}),
+        ...(input.wildWorld ? { wildWorld: true } : {}),
+        // Волна 4а: сценарий изверга живёт в settings комнаты — иначе старт
+        // (effectiveSettings) его не увидит и изверг выйдет без правила.
+        ...(input.scenario ? { scenario: input.scenario } : {}),
+        // Таймер хода пишем только когда клиент его прислал: столы, созданные
+        // без ключа (старые клиенты, прямые вызовы), живут по legacy-паузам.
+        ...(input.turnTimerMs !== undefined ? { turnTimerMs: input.turnTimerMs } : {}),
       };
       for (let attempt = 0; attempt < 6; attempt++) {
         const code = makeCode();
@@ -1557,32 +2062,39 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       if (victim.is_ai) throw new NetError("Ботов убирают кнопкой «Бот»", "kick-bot");
       if (room.status === "lobby") {
         await sql.query(`delete from evo_seats where room_code = $1 and seat = $2`, [code, seatNo]);
-      } else if (room.status === "playing" && room.state) {
+      } else if (room.status === "playing") {
         // Место в идущей партии освободить нельзя — движок ждал бы его вечно.
         // Превращаем игрока в бота: партия продолжается, клиент получает «kicked».
-        const state = structuredClone(room.state);
-        // Имя бота-замены — из AI_NAMES, с нумерацией от уже занятых имён.
-        const botName = await uniqueName(code, AI_NAMES[seatNo % AI_NAMES.length]!, victim.token);
-        const p = state.players[seatNo];
-        if (p) {
-          p.isAI = true;
-          p.name = botName;
-          p.resigned = false;
-        }
-        await casUpdateStrict(sql, code, room.version, { state });
-        await sql.query(
-          // Замена ботом: имя из списка учёных, цвет — прежний цвет места
-          // остаётся его же (эксклюзивность не нарушается), меняется только
-          // владелец. До волны 10 цвет места не был уникальным, поэтому на
-          // всякий случай берём свободный, если прежний кому-то совпал.
-          `update evo_seats set is_ai = true, name = $3, token = '', resigned = false,
-                  color = $4, last_seen_at = now()
-            where room_code = $1 and seat = $2`,
-          [code, seatNo, botName, botColor(seatNo, takenColors(seats))],
-        );
+        await replaceSeatWithBot(code, room, seats, seatNo, victim);
+
       } else {
         throw new NetError("Партия уже закончена", "game-finished");
       }
+      await sql.query(
+        `insert into evo_kicks (room_code, token) values ($1, $2) on conflict do nothing`,
+        [code, victim.token],
+      );
+    },
+
+    async replaceWithBot(code, token, seatNo) {
+      const { room, seats, me } = await requireHost(
+        code,
+        token,
+        "Заменять офлайн-игрока может только хост",
+        "host-only",
+      );
+      if (room.status !== "playing") throw new NetError("Партия уже закончена", "game-finished");
+      if (seatNo === me.seat) throw new NetError("Себя заменить ботом нельзя", "kick-self");
+      const victim = seats.find((s) => s.seat === seatNo);
+      if (!victim) throw new NetError("Это место уже свободно", "seat-free");
+      if (victim.is_ai) throw new NetError("Это место уже играет ботом", "kick-bot");
+      if (now() - toMs(victim.last_seen_at) < PACE.disconnectedMs) {
+        throw new NetError(
+          "Игрок ещё в сети — заменить можно только после отключения",
+          "player-online",
+        );
+      }
+      await replaceSeatWithBot(code, room, seats, seatNo, victim);
       await sql.query(
         `insert into evo_kicks (room_code, token) values ($1, $2) on conflict do nothing`,
         [code, victim.token],
@@ -1659,17 +2171,29 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       if (hostSeat !== room.host_seat) patch.hostSeat = hostSeat;
       await casUpdateStrict(sql, code, room.version, patch);
 
-      // Системное сообщение: состав изменился не по своей воле.
+      // Системное сообщение: состав изменился не по своей воле. Русский text —
+      // источник правды (старые клиенты и фолбэк); рядом едут key+params, чтобы
+      // клиент собрал реплику на своём языке (контракт журнала движка).
       if (victims.length) {
         const movedHumans = victims.filter((v) => !v.is_ai).map((v) => v.name);
+        const bots = victims.length - movedHumans.length;
         const parts: string[] = [];
-        if (victims.length - movedHumans.length) {
-          parts.push(`убраны боты: ${victims.length - movedHumans.length}`);
-        }
+        if (bots) parts.push(`убраны боты: ${bots}`);
         if (movedHumans.length) parts.push(`в очередь ожидающих: ${movedHumans.join(", ")}`);
+        // Вариант формулировки — по составу жертв: боты, люди или и те и другие.
+        const key =
+          bots && movedHumans.length
+            ? "chat.capacityBotsQueue"
+            : bots
+              ? "chat.capacityBots"
+              : "chat.capacityQueue";
+        const params: Record<string, string | number> = { capacity };
+        if (bots) params.bots = bots;
+        if (movedHumans.length) params.names = movedHumans.join(", ");
         await sql.query(
-          `insert into evo_chat (room_code, seat, name, text) values ($1, -1, $2, $3)`,
-          [code, "Стол", `Мест стало ${capacity}: ${parts.join("; ")}`],
+          `insert into evo_chat (room_code, seat, name, text, "key", params)
+           values ($1, -1, $2, $3, $4, $5)`,
+          [code, "Стол", `Мест стало ${capacity}: ${parts.join("; ")}`, key, JSON.stringify(params)],
         );
       }
     },
@@ -1678,9 +2202,28 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       const { room } = await requireHost(code, token, "Менять настройки может только хост", "host-only");
       if (room.status !== "lobby") throw new NetError("Настройки меняют до начала партии", "lobby-only");
       const next: RoomSettings = { ...effectiveSettings(room) };
-      if (patch.modules !== undefined) next.modules = { ...patch.modules };
+      if (patch.modules !== undefined) {
+        const incompatibility = moduleCompatibilityError(patch.modules);
+        if (incompatibility) throw new NetError(incompatibility);
+        next.modules = { ...patch.modules };
+      }
       if (patch.difficulty !== undefined) next.difficulty = patch.difficulty;
       if (patch.deckSize !== undefined) next.deckSize = patch.deckSize;
+      // Волна 2: слоты и запрещённые пары считаются по СЛИТОЙ конфигурации —
+      // лимит общий на правила, мутаторы и «Дикий мир» (§0.10).
+      if (patch.rules !== undefined) next.rules = patch.rules;
+      if (patch.mutators !== undefined) next.mutators = patch.mutators;
+      if (patch.wildWorld !== undefined) next.wildWorld = patch.wildWorld;
+      // Таймер хода: 0 («Выкл») — валидное значение, поэтому проверка на
+      // undefined, а не на falsy. Меняется только до старта (выше).
+      if (patch.turnTimerMs !== undefined) next.turnTimerMs = patch.turnTimerMs;
+      const modIncompatibility = modifierCompatibilityError({
+        modules: next.modules,
+        rules: next.rules,
+        mutators: next.mutators,
+        wildWorld: next.wildWorld,
+      });
+      if (modIncompatibility) throw new NetError(modIncompatibility);
       await casUpdateStrict(sql, code, room.version, {
         settings: next,
         difficulty: next.difficulty ?? room.difficulty,
@@ -1816,6 +2359,9 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
           throw new NetError("Вас нет за этим столом", "seat-taken");
         }
       }
+      await sql
+        .query(`update evo_rooms set updated_at = now() where code = $1`, [code])
+        .catch(() => {});
       const free = firstFreeSeat(room.capacity, seats);
       return {
         room: metaOf(room, seats, now),
@@ -1900,6 +2446,10 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
                    (extract(epoch from created_at) * 1000)::float8 as at`,
         [code, author.seat, author.name, clean],
       );
+      // Сообщение от человека — шанс, что бот ответит на следующем advance
+      // (flushQueuedBotReply). Лимиты чата людей ботов не касаются: у тех
+      // свой темп в bot-chat.ts.
+      queueBotReply(code, author.name, clean);
       return inserted[0]!;
     },
 
@@ -1930,6 +2480,9 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         [code, token],
       );
       if (!rows[0]) throw new NetError("Зритель больше не подключён", "seat-taken");
+      await sql
+        .query(`update evo_rooms set updated_at = now() where code = $1`, [code])
+        .catch(() => {});
       await advance(code);
       const fresh = (await readRoom(sql, code)) ?? room;
       const [seats, spectators, chat, reactions] = await Promise.all([
@@ -1947,6 +2500,7 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         chat,
         reactions,
         turnDeadlineAt: turnDeadlineOf(fresh),
+        botStepAt: botStepAtOf(fresh),
         serverNow: now(),
       };
     },
@@ -2043,7 +2597,38 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       if (seats.length !== room.capacity) {
         throw new NetError("Заполните все места — людьми или ботами", "seats-unfinished");
       }
+      // Сам start — heartbeat хоста; гости должны подтвердить присутствие
+      // свежим poll/heartbeat, иначе партия стартует с заведомо AFK-ходом.
+      await sql.query(
+        `update evo_seats set last_seen_at = now() where room_code = $1 and token = $2`,
+        [code, token],
+      );
+      const liveSeats = await readSeats(sql, code);
+      // Онлайн считает БД (серверные часы), а не тестовый now(): один
+      // request-clock источник не должен уметь «состарить» реальный heartbeat.
+      const offlineRows = await sql.query<{ seat: number }>(
+        `select seat from evo_seats
+          where room_code = $1 and not is_ai and not resigned
+            and last_seen_at < now() - ($2::int * interval '1 millisecond')`,
+        [code, PACE.onlineMs],
+      );
+      const offline = liveSeats.filter((s) => offlineRows.some((row) => row.seat === s.seat));
+      if (offline.length) {
+        throw new NetError(
+          `Не в сети: ${offline.map((s) => s.name).join(", ")}. Замените игрока ботом`,
+          "players-offline",
+        );
+      }
       const cfg = effectiveSettings(room);
+      const incompatibility = moduleCompatibilityError(cfg.modules ?? room.modules ?? {});
+      if (incompatibility) throw new NetError(incompatibility);
+      const modIncompatibility = modifierCompatibilityError({
+        modules: cfg.modules ?? room.modules ?? {},
+        rules: cfg.rules,
+        mutators: cfg.mutators,
+        wildWorld: cfg.wildWorld,
+      });
+      if (modIncompatibility) throw new NetError(modIncompatibility);
       const defs = seats.map((s) => ({ name: s.name, isAI: s.is_ai }));
       const state = createGame(
         room.capacity,
@@ -2052,6 +2637,22 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         defs,
         cfg.modules ?? room.modules ?? {},
         cfg.deckSize,
+        // Волна 2: модификаторы стола уходит в состояние партии.
+        {
+          rules: cfg.rules,
+          mutators: mutatorList(cfg.mutators),
+          wildWorld: cfg.wildWorld,
+        },
+        // Волна 4а: сценарий изверга (кампания). Правило применяется только
+        // если место босса РЕАЛЬНО занято ИИ на момент старта: хост мог
+        // пересадить места или убрать бота в лобби — тогда сценарий тихо
+        // снимается, вместо ломающего правила на живом человеке.
+        cfg.scenario &&
+        cfg.scenario.seat > 0 &&
+        cfg.scenario.seat < defs.length &&
+        defs[cfg.scenario.seat]?.isAI
+          ? cfg.scenario
+          : undefined,
       );
       // Ожидающие при старте автоматически становятся зрителями: место не
       // занимают, но стол видят. Токен и имя сохраняются — клиент продолжает
@@ -2069,6 +2670,23 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         autoStepAt: now() + PACE.initialMs,
         events: [],
       });
+      // Приветствие от бота на старте партии (шанс в CHANCES.greeting).
+      const greeting = botsOf(state).length
+        ? pickBotLine({
+            category: "greeting",
+            candidates: botsOf(state),
+            chance: CHANCES.greeting,
+            nowMs: now(),
+            version: room.version + 1,
+            round: state.year,
+            rng: Math.random,
+            memory: botMemoryOf(code),
+          })
+        : null;
+      if (greeting) {
+        botChatMemory.set(code, greeting.memory);
+        await insertBotLine(code, greeting);
+      }
       return snapshot(code, me.seat);
     },
 
@@ -2138,126 +2756,49 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       return { name: final };
     },
 
-    async action(code, token, sent) {
-      const room = await requireRoom(code);
-      const me = await seatByToken(code, token);
-      if (room.status !== "playing" || !room.state) throw new NetError("Партия не идёт", "not-playing");
-      const st = room.state;
-      // Сдавшийся наблюдает: сервер сам пропускает его ходы, ручные — отказ.
-      if (me.resigned || st.players[me.seat]?.resigned) {
-        throw new NetError("Вы сдались — ваши ходы пропускаются автоматически", "resigned");
-      }
-      // M6: перестановка своего животного (в ряду или перенос между
-      // территориями «Континентов») — структурное действие, которого нет и не
-      // должно быть в legalDevActions/legalFeedActions: те списки гоняет UI
-      // карт, а перетаскивание идёт мимо них. Пропускаем её отдельно: фаза
-      // development/feeding, ход свой, животное своё; владельца и фазу движок
-      // проверяет повторно (reorderAnimal/moveAnimalToZoneHuman по humanId).
-      const isReorder =
-        sent.type === "reorderAnimal" &&
-        (st.phase === "development" || st.phase === "feeding") &&
-        st.currentPlayerId === me.seat &&
-        (st.players[me.seat]?.animals ?? []).some((a) => a.id === sent.animalId);
-      // Кличка своего животного — та же косметика мимо легальных списков:
-      // фаза development/feeding, ход свой, животное своё, имя 1–24 символа
-      // после трима (пустое — допустимый сброс на дефолт). Движок триммит и
-      // режет длину повторно (renameOwnAnimal по humanId).
-      const isRename =
-        sent.type === "renameAnimal" &&
-        typeof sent.name === "string" &&
-        sent.name.trim().length <= 24 &&
-        (st.phase === "development" || st.phase === "feeding") &&
-        st.currentPlayerId === me.seat &&
-        (st.players[me.seat]?.animals ?? []).some((a) => a.id === sent.animalId);
-      // Каноническое действие: применяем ровно тот объект из легального
-      // списка, который совпал с присланным (S4). Присланные поля не участвуют —
-      // подменённые amount/moves/plantId/floraId/zoneId/intent не проходят.
-      let action: GameAction = sent;
-      if (!isReorder && !isRename) {
-        const allowed =
-          st.pendingAttack && st.pendingAttack.waitingFor === me.seat
-            ? legalDefenseActions(st, me.seat)
-            : st.phase === "development"
-              ? legalDevActions(st, me.seat)
-              : st.phase === "feeding"
-                ? legalFeedActions(st, me.seat)
-                : [];
-        const canonical = allowed.find((a) => sameAction(a, sent));
-        if (!canonical) {
-          // Перестановка и переименование — структурные косметические
-          // действия без легального списка: причина отказа объясняется по шагам.
-          if (sent.type === "reorderAnimal") {
-            if (st.phase !== "development" && st.phase !== "feeding") {
-              throw new NetError("Сейчас нельзя переставлять животных", "reorder-phase");
-            }
-            if (st.currentPlayerId !== me.seat) {
-              throw new NetError(
-                "Переставлять животных можно только в свой ход (сейчас ход другого игрока)",
-                "reorder-turn",
-              );
-            }
-            if (!(st.players[me.seat]?.animals ?? []).some((a) => a.id === sent.animalId)) {
-              throw new NetError("Переставлять можно только своих животных", "reorder-owner");
-            }
-          }
-          if (sent.type === "renameAnimal") {
-            if (st.phase !== "development" && st.phase !== "feeding") {
-              throw new NetError("Сейчас нельзя переименовывать животных", "rename-phase");
-            }
-            if (st.currentPlayerId !== me.seat) {
-              throw new NetError(
-                "Переименовывать животных можно только в свой ход (сейчас ход другого игрока)",
-                "rename-turn",
-              );
-            }
-            if (!(st.players[me.seat]?.animals ?? []).some((a) => a.id === sent.animalId)) {
-              throw new NetError("Переименовывать можно только своих животных", "rename-owner");
-            }
-            if (typeof sent.name !== "string" || sent.name.trim().length > 24) {
-              throw new NetError("Имя животного — до 24 символов", "rename-length");
-            }
-          }
-          throw new NetError("Такой ход сейчас недопустим", "move-illegal");
+    async action(code, token, sent, actionId) {
+      // Читаем, валидируем и пишем в одном retry-цикле. При проигранном CAS
+      // actionFields запускается заново от свежего state, поэтому чужая сдача
+      // или ход не могут исчезнуть из результата.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const room = await requireRoom(code);
+        const me = await seatByToken(code, token);
+        // Повторный POST того же действия возвращает текущий результат, не
+        // применяя его второй раз. Проверка и запись action_id идут через CAS.
+        if (actionId && room.action_ids.includes(actionId)) {
+          return snapshot(code, me.seat, { actionId });
         }
-        action = canonical;
+        const fields = actionFields(room, me, sent);
+        if (actionId) fields.actionId = actionId;
+        if (await casUpdate(sql, code, room.version, fields)) {
+          // Реплика бота на ход человека (его охоту, смерть зверя, финал).
+          // actionFields уже бросил бы «Партия не идёт» без state — тут он точно есть.
+          await flushBotEventLines(
+            code,
+            fields.eventsAppend
+              ? [{ before: room.state as GameState, events: fields.eventsAppend }]
+              : [],
+          );
+          return snapshot(code, me.seat, actionId ? { actionId } : {});
+        }
       }
-      // Каноническое состояние живёт с humanId=0, а движок сверяет с humanId
-      // владельца животного: косметике (перестановка/кличка) на время применения
-      // подставляем место ходящего и возвращаем канонический humanId обратно.
-      const cosmetic = isReorder || isRename;
-      const next = applyAction(cosmetic ? { ...st, humanId: me.seat } : st, action);
-      if (cosmetic && next.humanId !== st.humanId) next.humanId = st.humanId;
-      const finished = next.phase === "gameOver";
-      const needsAuto = !finished && nextAutoStep(next) !== null;
-      // Ход человека завершил фазу (например, «Закончить питание»): карточки
-      // его событий — сводка вымирания и т.п. — должны проиграться ДО того,
-      // как сервер двинет автошаги следующего этапа, иначе переход срезает
-      // показ (см. spotlightMsOf).
-      const humanGap = phaseGapMs(st, next);
-      await casUpdateStrict(sql, code, room.version, {
-        state: next,
-        status: finished ? "finished" : undefined,
-        // Таймер нужен только когда дальше идёт бот/автофаза; иначе лишний
-        // пустой тик делал бы второй инкремент версии без события.
-        autoStepAt: finished ? null : needsAuto ? now() + humanGap : null,
-        eventsAppend: next.lastEvents.length ? next.lastEvents : undefined,
-      });
-      // Шаг бота НЕ делаем здесь: сначала клиент должен увидеть свой ход
-      // (lastEvents своего действия), а автошаг произойдёт на следующем poll —
-      // autoStepAt его и разбудит (сразу, либо после паузы на показ карточек).
-      return snapshot(code, me.seat);
+      throw new NetError("Стол изменился, попробуйте ещё раз", "retry");
     },
 
     async poll(code, token, sinceVersion, sinceChatId, sinceReactionId) {
       if (Math.random() < 0.05) await janitor(sql).catch(() => {});
       const me = await seatByToken(code, token);
       // Метка присутствия до advance: свои же авточаги видят свежий онлайн.
-      await sql
-        .query(`update evo_seats set last_seen_at = now() where room_code = $1 and seat = $2`, [
-          code,
-          me.seat,
-        ])
-        .catch(() => {});
+      await Promise.all([
+        sql
+          .query(`update evo_seats set last_seen_at = now() where room_code = $1 and seat = $2`, [
+            code,
+            me.seat,
+          ])
+          .catch(() => {}),
+        // Heartbeat — часть TTL комнаты, а не только индикатора online.
+        sql.query(`update evo_rooms set updated_at = now() where code = $1`, [code]).catch(() => {}),
+      ]);
       let room = await readRoom(sql, code);
       if (!room) throw new NetError("Стол не найден — проверьте код", "room-gone");
       room = await persistHost(code, room, await readSeats(sql, code));
@@ -2303,9 +2844,64 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         state: null,
         status: "lobby",
         autoStepAt: null,
-        // Старые события не должны доехать до новой партии/лобби.
+        // Старые события и actionId не должны доехать до новой партии/лобби.
         events: [],
+        actionIds: [],
       });
+    },
+
+    async closeTable(code, token) {
+      const seats = await sql.query<{ seat: number; token: string; is_ai: boolean }>(
+        `select seat, token, is_ai from evo_seats where room_code = $1`,
+        [code],
+      );
+      const me = seats.find((row) => row.token === token && token !== "");
+      if (!me) {
+        // Идемпотентность: стол уже закрыт (двойной клик, гонка с janitor,
+        // параллельный выход с другого устройства) — повторное закрытие не ошибка.
+        const room = await readRoom(sql, code);
+        if (!room) return;
+        await goneReason(code, token);
+      }
+      // Право снести стол есть только у единственного человека за ним: любое
+      // живое место другого игрока (лобби или партия) блокирует закрытие.
+      const otherHumans = seats.filter((row) => row.token !== token && !row.is_ai);
+      if (otherHumans.length) {
+        throw new NetError(
+          "За столом есть другие игроки — закрыть его нельзя",
+          "close-people",
+        );
+      }
+      // Полная зачистка строк комнаты. Каскад по FK снял бы дочерние строки сам,
+      // но явные DELETE не зависят от схемы миграций; реакции идут первыми —
+      // они ссылаются на чат (chat_id). Кик-записи тоже: мёртвому столу они
+      // не нужны, а goneReason по токену оставшегося был бы врёт «вас удалили».
+      await sql.query(`delete from evo_reactions where room_code = $1`, [code]);
+      await sql.query(`delete from evo_chat where room_code = $1`, [code]);
+      await sql.query(`delete from evo_kicks where room_code = $1`, [code]);
+      await sql.query(`delete from evo_waiters where room_code = $1`, [code]);
+      await sql.query(`delete from evo_spectators where room_code = $1`, [code]);
+      await sql.query(`delete from evo_seats where room_code = $1`, [code]);
+      await sql.query(`delete from evo_rooms where code = $1`, [code]);
+      // Память реплик ботов и очередь ответов не переживают свой стол:
+      // иначе закрытая комната могла бы «воскреснуть» чужой репликой.
+      botChatMemory.delete(code);
+      botReplyQueue.delete(code);
+    },
+
+    async watchdog() {
+      // Один проход не блокирует запросы: CAS сам разрулит гонку с poll.
+      await janitor(sql).catch(() => {});
+      // Память реплик и очередь ответов не переживают свои комнаты
+      // (TTL, закрытие стола): подчистим за комнатами, которых больше нет.
+      const liveCodes = await sql.query<{ code: string }>(`select code from evo_rooms`);
+      const live = new Set(liveCodes.map((r) => r.code));
+      for (const key of botChatMemory.keys()) if (!live.has(key)) botChatMemory.delete(key);
+      for (const key of botReplyQueue.keys()) if (!live.has(key)) botReplyQueue.delete(key);
+      const rooms = await sql.query<{ code: string }>(
+        `select code from evo_rooms where status = 'playing'`,
+      );
+      for (const row of rooms) await advance(row.code).catch(() => {});
     },
   };
 
@@ -2314,6 +2910,7 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
 
 type GlobalRef = typeof globalThis & {
   __evoNetService__?: Promise<RoomService>;
+  __evoNetWatchdog__?: ReturnType<typeof setInterval>;
 };
 
 /**
@@ -2327,13 +2924,16 @@ const SERVICE_METHODS = [
   "join",
   "listRooms",
   "setBots",
+  "replaceWithBot",
   "setName",
   "setColor",
   "setRoomPrivacy",
   "setPassword",
   "poll",
+  "watchdog",
   "spectate",
   "typing",
+  "closeTable",
 ] as const;
 
 function hasServiceMethods(s: RoomService): boolean {
@@ -2341,22 +2941,31 @@ function hasServiceMethods(s: RoomService): boolean {
   return SERVICE_METHODS.every((m) => typeof obj[m] === "function");
 }
 
-/** Свежий сервис поверх общей БД (схема гарантируется на месте, см. DDL). */
+/** Свежий сервис поверх общей БД; схему гарантируют migrations через db.ts. */
 function makeRoomService(): Promise<RoomService> {
   return import("@/lib/db").then(async ({ getSql }) => {
     const sql = await getSql();
-    for (const statement of splitStatements(NET_TABLES_DDL)) await sql.query(statement);
-    return createRoomService(sql as SqlLike);
+    const service = createRoomService(sql as SqlLike);
+    const g = globalThis as GlobalRef;
+    if (g.__evoNetWatchdog__ === undefined) {
+      const timer = setInterval(() => {
+        void service.watchdog().catch(() => {});
+      }, PACE.watchdogMs);
+      // Не держим Node-процесс в тестах/CLI; в worker-окружении это обычный
+      // серверный таймер, а serverless всё равно полагается на запросы.
+      if (typeof timer === "object" && "unref" in timer) {
+        (timer as { unref: () => void }).unref();
+      }
+      g.__evoNetWatchdog__ = timer;
+    }
+    return service;
   });
 }
 
 /**
- * Та же схема, что в migrations/0002_net_rooms.sql … 0008_chat_reactions_typing.sql,
- * но исполняется и в рантайме: на Vercel `db:migrate` выполняется на этапе
- * билда и молча пропускается, если DATABASE_URL не был виден процессу сборки.
- * Идемпотентно — можно вызывать всегда. Колонка M10 turn_deadline_at добавлена
- * здесь же через `add column if not exists`: миграции волны уже отыграны, а
- * alter идемпотентен и для живых, и для новых баз.
+ * Аварийный полный DDL для изолированных тестов/старых dev-окружений.
+ * В рабочем request-path не выполняется: единственный источник схемы —
+ * migrations/*.sql, которые применяют scripts/migrate.mjs и db.ts.
  */
 export const NET_TABLES_DDL = `
 create table if not exists evo_rooms (
@@ -2386,6 +2995,7 @@ alter table evo_rooms add column if not exists modules jsonb not null default '{
 alter table evo_rooms add column if not exists host_seat int;
 alter table evo_rooms add column if not exists settings jsonb not null default '{}';
 alter table evo_rooms add column if not exists events jsonb not null default '[]';
+alter table evo_rooms add column if not exists action_ids jsonb not null default '[]';
 alter table evo_rooms add column if not exists is_private boolean not null default false;
 alter table evo_rooms add column if not exists password text;
 alter table evo_rooms add column if not exists turn_deadline_at timestamptz;
@@ -2438,6 +3048,10 @@ alter table evo_seats add column if not exists typing_at timestamptz;
 alter table evo_waiters add column if not exists typing_at timestamptz;
 alter table evo_spectators add column if not exists typing_at timestamptz;
 alter table evo_reactions add column if not exists chat_id integer references evo_chat(id) on delete cascade;
+-- Локализация системных реплик чата (migrations/0011): ключ словаря и параметры
+-- подстановки рядом с русским текстом, у реплик людей оба поля пустые.
+alter table evo_chat add column if not exists "key" text;
+alter table evo_chat add column if not exists params jsonb;
 `;
 
 /**
@@ -2456,7 +3070,8 @@ export function splitStatements(ddl: string): string[] {
 /**
  * Общий экземпляр для прод-сервера. @/lib/db импортируется динамически:
  * node-тесты подставляют свой SqlLike и никогда не трогают Vite-специфику db.ts.
- * Перед первым использованием гарантируем схему (см. NET_TABLES_DDL).
+ * Перед первым использованием схему применяет db.ts из migrations/*.sql;
+ * NET_TABLES_DDL остаётся аварийным экспортом для изолированных тестов.
  *
  * Кэш в globalThis переживает HMR: без проверки актуальности после правок
  * server.ts клиент получал «s.setName is not a function» — старый объект
@@ -2495,9 +3110,12 @@ export function getRoomService(): Promise<RoomService> {
 // не дожидаясь первого запроса (страховка к проверке методов в getRoomService).
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    delete (globalThis as GlobalRef).__evoNetService__;
+    const g = globalThis as GlobalRef;
+    if (g.__evoNetWatchdog__ !== undefined) clearInterval(g.__evoNetWatchdog__);
+    delete g.__evoNetService__;
+    delete g.__evoNetWatchdog__;
   });
 }
 
 /** Для тестов: прямая проверка оптимистичной записи, чтения и кэша сервиса. */
-export const _internals = { casUpdate, readRoom, hasServiceMethods };
+export const _internals = { casUpdate, readRoom, hasServiceMethods, janitor };

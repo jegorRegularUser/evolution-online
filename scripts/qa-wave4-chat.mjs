@@ -25,6 +25,7 @@ import {
   confirmDialog,
   gotoUrl,
   isVisible,
+  newRuContext,
   openMenu,
   roomCode,
   safeClick,
@@ -67,7 +68,7 @@ const shot = (page, name) => page.screenshot({ path: `${SHOTS}/${name}.png` }).c
 const pageProblems = [];
 
 async function newPage(label, viewport = { width: 1400, height: 900 }) {
-  const ctx = await browser.newContext({ viewport });
+  const ctx = await newRuContext(browser, { viewport });
   const page = await ctx.newPage();
   // Расхождение SSR/клиента в dev — шум (в т.ч. от параллельных правок).
   pageProblems.push(trackPage(page, label, { ignore: [/hydrated but some attributes/] }));

@@ -69,6 +69,101 @@ export type Phase =
 export type ModuleId = "continents" | "plants" | "fungi" | "randomMutations";
 export type EnabledModules = Partial<Record<ModuleId, boolean>>;
 
+/**
+ * Сценарий изверга (волна 4а, дизайн-пакет §4.2): сид босса + ОДНО ломающее
+ * правило. Правило действует только на место босса (ИИ) — самая дешёвая и
+ * «настольно-легальная» эскалация; подсчёт очков не искажается.
+ */
+export interface GameScenario {
+  /** Место босса (ИИ) в комнате. */
+  seat: number;
+  /** «Атроксабилис»: после удачной охоты хищник босса охотится второй раз в тот же ход. */
+  doubleHunt?: boolean;
+  /** «Костолом»: в начале каждой фазы кормления животные босса получают +1 еды. */
+  bossFeedsExtra?: boolean;
+}
+
+/**
+ * Метрики одной партии для своего игрока (волна 3а). Копятся в applyAction
+ * по событиям, финализируются в finishGame (игры/победы/место). Отчёт о них
+ * сервер считает входом «Вызовов» — предикаты каталога чистые и переиспользуем
+ * на сервере и клиенте (src/game/challenges.ts).
+ */
+export interface GameRunStats {
+  preyEaten: number;
+  defended: number;
+  fatStored: number;
+  traitsPlaced: number;
+  animalsPlaced: number;
+  animalsLost: number;
+  maxTraitsOnAnimal: number;
+  scavenges: number;
+  /** Годов с активным событием «Дикого мира», которые дожил до конца. */
+  wildYearsSurvived: number;
+  games: number;
+  wins: number;
+  bestPlace: number;
+  /** Победы с включёнными модулями (для вызовов «победа с модулем»). */
+  winsModule: Partial<Record<ModuleId, number>>;
+  /** Плоские счётчики побед с модулем — прямые ключи каталога вызовов. */
+  winsContinents?: number;
+  winsPlants?: number;
+  winsFungi?: number;
+  winsMutations?: number;
+  /** Победа, в которой у игрока было хищное животное с 3+ свойствами (feat). */
+  bigCarnivoreWin?: boolean;
+}
+
+// ── Волна 2: модификаторы стола ─────────────────────────────────────────────
+// Три уровня по дизайн-пакету (plans/design-expansion-pack.md §1): параметрические
+// столовые правила, структурные мутаторы и пак событий «Дикий мир». Все они
+// занимают общий лимит — 3 слота на стол (§0.10); совместимость считает слоты
+// и запрещённые пары (modifier-compatibility.ts).
+
+/** Идентификаторы столовых правил (параметрические, §1.1). */
+export type TableRuleId = "pack" | "hungrySeason" | "abundance" | "startHand";
+
+/**
+ * Столовые правила: не нейтральны, честно меняют мета. startHand — число карт
+ * стартовой руки (7/8/9; классика — 6, поле тогда не задано).
+ */
+export interface TableRules {
+  /** «Стая»: каждый начинает с двумя животными. */
+  pack?: boolean;
+  /** «Голодный сезон»: кормовая база бросается дважды, берётся меньший. */
+  hungrySeason?: boolean;
+  /** «Изобилие»: +1 к кормовой базе (с «Континентами» — на каждую бросаемую территорию). */
+  abundance?: boolean;
+  /** Стартовая рука 7/8/9 (классика — 6; с «Растениями» классика — 8). */
+  startHand?: 7 | 8 | 9;
+}
+
+/** Идентификаторы мутаторов (структурные, §1.2). Реестр — modifiers.ts. */
+export type MutatorId = "scavengers" | "rapidEvolution";
+
+/** События года «Дикий мир» (§1.3): предикат + эффект над GameState. */
+export type WildEventId =
+  | "iceAge"
+  | "goldenAge"
+  | "resettlement"
+  | "cropFailure"
+  | "meteorite"
+  | "wildfire";
+
+/**
+ * Состояние «Дикого мира». Раскрытие: событие года N читается до фазы
+ * развития года N — прогноз ровно на год. Активация (разовые эффекты и
+ * условия броска) — в revealAndStartFood, «начало года» по §6.
+ */
+export interface WildWorldState {
+  /** Событие текущего года: объявлено, действует на бросок этого года. */
+  active: WildEventId | null;
+  /** Прогноз: событие года planned.year, раскрытое заранее. */
+  planned: { year: number; id: WildEventId } | null;
+  /** События подряд без «Метеорита»: pity — не позже 8-го события серии. */
+  sinceMeteorite: number;
+}
+
 export interface Card {
   id: string;
   faces: TraitId[];
@@ -85,6 +180,12 @@ export interface TraitInstance {
   fatFilled?: boolean;
   /** Свойство отключено (шов под неоплазию и мутации): не действует и не даёт очков. */
   disabled?: boolean;
+  /** Temporary suppression by nematocysts; restored after feeding. */
+  paralyzed?: boolean;
+  /** Recombination pair: last year in which its exchange was used. */
+  recombinedYear?: number;
+  /** Hibernation use follows the card through recombination. */
+  hibernationUsedYear?: number;
   /** Шов под неоплазию: растущие по годам счётчики вируса. */
   virus?: number;
 }
@@ -120,6 +221,15 @@ export interface Animal {
    * Вне модуля всегда 1; еда засчитывается накормленным животным.
    */
   population?: number;
+  /** Последний год успешного почкования; отсутствует в старых сохранениях. */
+  buddedYear?: number;
+  /**
+   * Год последней охоты этим животным. По правилам «Хищник» атакует не чаще
+   * одного раза в год (свойство, которое можно применить один раз за год).
+   * Решение владельца от 24.09.2026: дополнительно в пределах одного хода
+   * (хода игрока в фазе) атакуют не более двух хищников.
+   */
+  huntedYear?: number;
   /** Шов под «Континенты»: зона размещения (по умолчанию единое поле). */
   zoneId?: TerritoryId;
   /** «Растения»: жетон убежища с растения — защита от хищников до конца фазы питания. */
@@ -193,6 +303,12 @@ export interface PendingAttack {
    * жертвы (выбирается автоматически; защиты жертвы с ним не работают).
    */
   ignoredTraitId?: string;
+  /**
+   * «Растения»: контратака хищного растения — сосед справа выбирает ровно
+   * одно свойство жертвы, которое атака проигнорирует (p.9). Шаг живёт в
+   * pendingAttack, поэтому сетевое сохранение/возобновление и бот-сдача работают.
+   */
+  choosingPlantDefense?: boolean;
 }
 
 /** Шов под «Континенты»: зоны размещения животных. */
@@ -305,7 +421,7 @@ export type GameEvent =
     }
   | { kind: "foodFromBank"; animalId: string; playerId: number; via: "take" | "communication" }
   | { kind: "foodToFat"; animalId: string }
-  | { kind: "blueFood"; animalId: string; reason: "hunt" | "cooperation" | "scavenger" | "tailLoss" | "piracy" | "fat" | "soaring" | "beetle" }
+  | { kind: "blueFood"; animalId: string; reason: "hunt" | "cooperation" | "scavenger" | "tailLoss" | "piracy" | "fat" | "soaring" | "beetle" | "nutritious" | "scenario" }
   | { kind: "traitPlaced"; animalId: string; type: TraitId; hidden: boolean }
   | { kind: "animalPlaced"; animalId: string; ownerId: number; zoneId?: TerritoryId }
   | { kind: "huntDeclared"; carnivoreId: string; preyId: string }
@@ -357,6 +473,19 @@ export type GameEvent =
   | { kind: "budding"; animalId: string; playerId: number }
   | { kind: "populationGrown"; animalId: string; to: number }
   | { kind: "populationLost"; animalId: string; to: number }
+  // ── Волна 2: мутаторы и «Дикий мир» ──
+  /** «Падальщики»: вымершее животное вернуло владельцу карту из сброса. */
+  | { kind: "scavenged"; playerId: number; animalId: string }
+  /** Прогноз «Дикого мира»: событие года year раскрыто до его фазы развития. */
+  | { kind: "wildEventPlanned"; year: number; event: WildEventId }
+  /** Событие года year вступило в силу (разовые эффекты применены следом). */
+  | { kind: "wildEventStarted"; year: number; event: WildEventId }
+  /** «Переселение»: каждый передал соседу по часовой карту (had — была ли карта). */
+  | { kind: "wildResettlement"; moves: Array<{ fromPlayerId: number; toPlayerId: number; had: boolean }> }
+  /** «Метеорит»: жир потеряло affected животных (без жира — ничего). */
+  | { kind: "wildMeteorite"; affected: number }
+  /** «Пожар»: флора потеряла burned фишек (по 2 с карты). */
+  | { kind: "wildWildfire"; burned: number }
   /** Партия завершена: победители посчитаны (в т.ч. флора с playerId -1). */
   | { kind: "gameFinished"; winnerIds: number[] };
 
@@ -387,6 +516,16 @@ export interface ScoreBreakdown {
   discard: number;
 }
 
+/** Съеденное «регенерировавшее» животное: свойства и владелец ждут восстановления. */
+export interface RegenPending {
+  ownerId: number;
+  animalId?: string;
+  zoneId?: TerritoryId;
+  traits?: TraitInstance[];
+  /** Старые снимки не содержали типов свойств; сохраняем их без угадывания. */
+  cardIds?: string[];
+}
+
 /** Что уже использовано в текущем ходе питания (ход = пока не «Закончить ход»). */
 export interface FeedTurnUse {
   /** Хищники, атаковавшие в этот ход. */
@@ -399,6 +538,11 @@ export interface FeedTurnUse {
   foodTaken: boolean;
   /** В этот ход уже были боевые действия (хищник/пират) — еду брать нельзя. */
   combatUsed: boolean;
+  /**
+   * Сценарий изверга «Атроксабилис» (волна 4а): вторая охота в этом ходу уже
+   * использована — иначе босс с двойной охотой не передавал бы ход никогда.
+   */
+  doubleHuntUsed?: boolean;
   /**
    * «Континенты»: объявлена «Миграция» — этот ход потрачен на переезд;
    * больше ничего (кроме свойств мигрирующих) использовать нельзя.
@@ -430,13 +574,26 @@ export interface GameState {
   foodRoll: number[] | null;
   /** Территория, к которой привязан текущий ход питания («Континенты»). */
   turnTerritory?: TerritoryId;
-  /** Территория, выбранная для будущей миграции (ход «миграция» ещё не завершён). */
-  pendingMigration?: Array<{ animalId: string; to: TerritoryId }>;
+  /** Optional remora responses, starting with the migrant's owner, then clockwise. */
+  pendingMigration?: {
+    ownerId: number;
+    responders: number[];
+    routes: Array<{ animalId: string; from?: TerritoryId; to: TerritoryId }>;
+    followed: string[];
+  };
   /**
    * Съеденные животные со «регенерацией»: их свойства ждут восстановления —
    * в вымирание владелец кладёт на них карту из руки как новое животное.
+   * Каждая запись хранит полные экземпляры свойств: при восстановлении они
+   * возвращаются животному как были (порядок, пары, скрытость, id карт).
    */
-  pendingRegeneration?: Array<{ ownerId: number; cardIds: string[] }> | null;
+  pendingRegeneration?: RegenPending[] | null;
+  /**
+   * Сколько животных каждый игрок вернул регенерацией в текущем вымирании:
+   * добор «выжившие + 1» их не учитывает. Часть состояния (а не глобальная
+   * переменная), чтобы партии не влияли друг на друга.
+   */
+  regeneratedThisYear?: Record<number, number>;
   currentPlayerId: number;
   firstPlayerId: number;
   phase: Phase;
@@ -474,11 +631,40 @@ export interface GameState {
   eventSeq: number;
   /** События последнего применённого действия. */
   lastEvents: GameEvent[];
+  /**
+   * Накопитель метрик партии для «Вызовов» (волна 3а, дизайн-пакет §4.1В):
+   * счётчики СВОЕГО (humanId) игрока, растут по событиям действий.
+   * Опционален — старые сохранённые партии живут без него; движок заводит
+   * его лениво при первом событии. Часть состояния (jsonb комнаты), поэтому
+   * переживает F5 и реплей — то, чего не мог транзиентный lastEvents.
+   */
+  stats?: GameRunStats;
+  /** Год, за который «пережил дикий год» уже засчитан (анти-дубль trackStats). */
+  statsWildYearCredited?: number;
+  /** Финализация (games/wins/место) выполнена ровно один раз. */
+  statsFinalized?: boolean;
+  /** Сценарий изверга (волна 4а): сид босса + ломающее правило. */
+  scenario?: GameScenario;
   /** Значение playSeq на старте развития года: свойства с большим playSeq вложены в этом году. */
   devStartPlaySeq: number;
   /** Животные, ожидающие гибели в показанной стадии вымирания. */
   extinctionDeaths: string[];
   modules: EnabledModules;
+  /**
+   * Волна 2: столовые правила (§1.1). undefined — классические правила;
+   * валидируются modifier-compatibility.ts при создании/старте стола.
+   */
+  rules?: TableRules;
+  /** Волна 2: включённые мутаторы (§1.2), реестр — modifiers.ts. */
+  mutators?: MutatorId[];
+  /** Волна 2: «Дикий мир» (§1.3). undefined — пак выключен. */
+  wildWorld?: WildWorldState;
+  /**
+   * «Ускоренная эволюция»: сколько действий развития уже сделано текущим
+   * игроком в этом круге (лимит 2). Сбрасывается при передаче хода и в новом
+   * году; вне мутатора всегда 0.
+   */
+  devActionsUsed?: number;
   /**
    * «Континенты»: хищники, парализованные стрекательными клетками до конца
    * фазы питания (в океане теряют и водоплавающее — вытеснены на континент).
@@ -572,6 +758,18 @@ export type GameAction =
   | { type: "feedSkip" }
   /** «Континенты»: объявить ход миграции (свойства «миграция»/«прилипала»). */
   | { type: "feedMigrate"; moves: Array<{ animalId: string; to: TerritoryId }> }
+  | { type: "feedRemora"; animalId: string; migrantId: string }
+  | { type: "feedFinishMigration" }
+  | {
+      /** «Континенты»: рекомбинация — обмен одним непарным свойством внутри пары (раз за год). */
+      type: "feedRecombine";
+      giverId: string;
+      takerId: string;
+      traitId: string;
+      otherTraitId: string;
+      /** Continent chosen for the partner losing swimming in the ocean. */
+      to?: Exclude<TerritoryId, "ocean">;
+    }
   | {
       /** Переставить своё животное (косметика; шов под «Континенты» — поле toZoneId). */
       type: "reorderAnimal";
@@ -591,7 +789,9 @@ export type GameAction =
     }
   | {
       type: "chooseDefense";
-      kind: "running" | "mimicry" | "tailLoss" | "none";
+      kind: "running" | "mimicry" | "tailLoss" | "none" | "ignore";
       mimicryTargetId?: string;
       discardTraitId?: string;
+      /** Только kind:"ignore" — свойство жертвы, которое контратака игнорирует. */
+      ignoredTraitId?: string;
     };

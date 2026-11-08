@@ -22,25 +22,28 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { DialogShell } from "@/components/ui/dialog-shell";
 import { ConfirmDialog } from "@/components/game/confirm-dialog";
 import { deckSizeFor } from "@/game/deck";
-import type { Difficulty } from "@/game/types";
-import { PLAYER_COLORS, type PlayerColor, type ReactionEmoji, type RoomSummary, type SeatInfo } from "@/lib/net/shared";
+import { modifierCompatibilityError, modifierSlotsUsed } from "@/game/modifier-compatibility";
+import { moduleCompatibilityError } from "@/game/module-compatibility";
+import type { Difficulty, MutatorId, TableRuleId } from "@/game/types";
+import { PLAYER_COLORS, TURN_TIMER_DEFAULT_MS, type PlayerColor, type ReactionEmoji, type RoomSummary, type SeatInfo, type TurnTimerMs } from "@/lib/net/shared";
 import { EventFeed, reactionsByChatId, type FeedItem } from "./event-feed";
-import { HintNote } from "./hint-note";
 import { loadLastNetConfig, typingNamesOf } from "@/store/game-store";
 import { loadName, saveName } from "@/lib/net/session";
 import { SoundToggle } from "./sound-toggle";
 import { RulesPanel, StatsScreen } from "./screens";
 import { TutorialScreen } from "./tutorial";
+import { TutorialMissionBlock } from "./tutorial-missions";
 import { TopBar } from "./top-bar";
 import { useGameStore, type NetUiState } from "@/store/game-store";
 import { cn } from "@/lib/utils";
-import { scientistName, useLang, useT } from "@/lib/i18n";
+import { scientistName, translate, useLang, useT } from "@/lib/i18n";
 
-import type { TFn } from "@/lib/i18n";
+import type { TFn, TKey } from "@/lib/i18n";
 
 /** Сложность бота — ключ словаря (id совпадает с Difficulty). */
 const DIFF_KEYS = {
@@ -55,6 +58,32 @@ const MODULE_OPTIONS: Array<[ModuleKey, Parameters<TFn>[0], Parameters<TFn>[0]]>
   ["plants", "module.plants", "module.plants.hint"],
   ["fungi", "module.fungi", "module.fungi.hint"],
   ["randomMutations", "module.randomMutations", "module.randomMutations.hint"],
+];
+
+/** Волна 2: столовые правила лобби (§1.1); стартовая рука — отдельный ряд 7/8/9. */
+const RULE_OPTIONS: Array<[TableRuleId, TKey, TKey]> = [
+  ["pack", "lobby.rule.pack", "lobby.rule.pack.hint"],
+  ["hungrySeason", "lobby.rule.hungrySeason", "lobby.rule.hungrySeason.hint"],
+  ["abundance", "lobby.rule.abundance", "lobby.rule.abundance.hint"],
+];
+
+/** Волна 2: мутаторы лобби (§1.2). */
+const MUTATOR_OPTIONS: Array<[MutatorId, TKey, TKey]> = [
+  ["scavengers", "lobby.mutator.scavengers", "lobby.mutator.scavengers.hint"],
+  ["rapidEvolution", "lobby.mutator.rapidEvolution", "lobby.mutator.rapidEvolution.hint"],
+];
+
+/**
+ * Таймер хода: значения настройки (мс) и их подписи. Значения обязаны
+ * совпадать с TURN_TIMER_CHOICES в net/shared.ts (та же вилка в zod-схеме);
+ * 0 — «Выкл»: сервер не завершает ход принудительно вовсе.
+ */
+const TURN_TIMER_OPTIONS: ReadonlyArray<readonly [TurnTimerMs, TKey]> = [
+  [0, "lobby.turnTimer.off"],
+  [30_000, "lobby.turnTimer.30"],
+  [60_000, "lobby.turnTimer.60"],
+  [120_000, "lobby.turnTimer.120"],
+  [180_000, "lobby.turnTimer.180"],
 ];
 
 /**
@@ -325,17 +354,19 @@ export function NetMenuScreen() {
   const rooms = useGameStore((s) => s.rooms);
   const netRefreshRooms = useGameStore((s) => s.netRefreshRooms);
 
-  // Форма входа раскрывается кнопкой «Присоединиться к столу»; поле пароля
-  // появляется только когда сервер его запросил (код password-required/wrong).
-  const [joinOpen, setJoinOpen] = useState(false);
+  // Поле пароля появляется только когда сервер его запросил
+  // (код password-required/wrong). Поле кода стола видно всегда (F10) —
+  // раньше оно пряталось за кнопкой «Присоединиться к столу».
+  const [needPassword, setNeedPassword] = useState(false);
   // Имя из localStorage подставляем ПОСЛЕ гидратации, а не в useState: на
   // сервере localStorage нет, и состояние «Аня» против SSR-разметки «пусто»
   // оставляло кнопку «Создать стол» навсегда disabled — React такие
   // расхождения атрибутов не патчит («won't be patched up»).
   const [name, setName] = useState("");
+  const nameRef = useRef<HTMLInputElement>(null);
+  const codeInputRef = useRef<HTMLInputElement>(null);
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
-  const [needPassword, setNeedPassword] = useState(false);
   const [makePrivate, setMakePrivate] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -354,7 +385,6 @@ export function NetMenuScreen() {
     const room = new URLSearchParams(window.location.search).get("room");
     if (!room) return;
     setCode(room.toUpperCase());
-    setJoinOpen(true);
     // На телефоне форма входа живёт во вкладке «Создать» — открываем её.
     setTab("create");
     // Возвращение за своё место по токену — без формы, если получится.
@@ -389,7 +419,6 @@ export function NetMenuScreen() {
       const code = (e as { code?: unknown } | null)?.code;
       if (typeof code === "string" && code.startsWith("password")) {
         setNeedPassword(true);
-        setJoinOpen(true);
         setTab("create");
       }
     } finally {
@@ -402,6 +431,12 @@ export function NetMenuScreen() {
   const canJoin = named && code.length === 4;
 
   function createNow() {
+    if (!named) {
+      setError(tt("menu.err.name"));
+      setTab("create");
+      nameRef.current?.focus();
+      return;
+    }
     // Последние настройки запущенной партии (см. netStart в сторе):
     // новое открывается с ними же, всё правится в лобби.
     const last = loadLastNetConfig();
@@ -415,6 +450,12 @@ export function NetMenuScreen() {
         difficulty: last.difficulty ?? "normal",
         modules: last.modules,
         deckSize: last.deckSize,
+        // Волна 2: модификаторы последнего стола подхватываются сами.
+        rules: last.rules,
+        mutators: last.mutators,
+        wildWorld: last.wildWorld,
+        // Таймер хода тоже запоминается между партиями (меняется в лобби).
+        turnTimerMs: last.turnTimerMs,
         isPrivate: makePrivate,
       }),
     );
@@ -538,6 +579,7 @@ export function NetMenuScreen() {
         <label className="block">
           <span className="mb-1 block text-xs text-muted">{tt("menu.name")}</span>
           <input
+            ref={nameRef}
             value={name}
             onChange={(e) => setName(e.target.value)}
             maxLength={16}
@@ -548,20 +590,84 @@ export function NetMenuScreen() {
         </label>
 
         <div className="grid gap-2">
-          <Button size="lg" disabled={busy || !named} onClick={createNow}>
+          <Button
+            size="lg"
+            disabled={busy}
+            aria-disabled={!named}
+            aria-describedby={!named ? "create-name-hint" : undefined}
+            className={!named ? "opacity-60" : undefined}
+            onClick={createNow}
+          >
             <Play className="size-4" />
             {tt("menu.create")}
           </Button>
-          <Button
-            variant="secondary"
-            size="lg"
-            aria-expanded={joinOpen}
-            disabled={busy}
-            onClick={() => setJoinOpen((v) => !v)}
+        </div>
+        {!named ? (
+          <p id="create-name-hint" role="status" className="text-xs leading-snug text-muted">
+            {tt("menu.err.name")}
+          </p>
+        ) : null}
+
+        {/* ── Вход по коду (F10) ──
+            Поле кода видно всегда: раньше оно пряталось за кнопкой
+            «Присоединиться к столу» и раскрывалось панелью где-то внизу
+            колонки — неочевидно и далеко. Заголовок блока остался кнопкой
+            (клик уводит фокус в поле кода) — по нему же проходят QA-сценарии. */}
+        <div className="rounded-[var(--radius-lg)] border border-border bg-bg/50 p-3">
+          <button
+            type="button"
+            className={cn(
+              TOGGLE_BASE,
+              "-mx-1 -mt-1 flex min-h-11 items-center gap-1.5 rounded-[var(--radius-sm)] px-1 text-xs font-medium uppercase tracking-[0.14em] text-subtle transition-colors hover:text-fg",
+            )}
+            onClick={() => codeInputRef.current?.focus()}
           >
-            <Users className="size-4" />
+            <Users className="size-3.5 shrink-0" aria-hidden />
             {tt("menu.join")}
-          </Button>
+          </button>
+          <label className="mb-3 mt-1 block">
+            <span className="mb-1 block text-xs text-muted">{tt("menu.code")}</span>
+            <input
+              ref={codeInputRef}
+              value={code}
+              onChange={(e) => setCode(e.target.value.toUpperCase().slice(0, 4))}
+              maxLength={4}
+              placeholder={tt("menu.code.placeholder")}
+              aria-label={tt("menu.code")}
+              className="h-11 w-full rounded-[var(--radius-md)] border border-border bg-bg px-3 font-display text-lg tracking-[0.3em] uppercase text-fg outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            />
+          </label>
+          {needPassword ? (
+            <label className="mb-3 block">
+              <span className="mb-1 block text-xs text-muted">{tt("menu.password")}</span>
+              <input
+                value={password}
+                onChange={(e) => setPassword(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                inputMode="numeric"
+                maxLength={4}
+                autoFocus
+                placeholder={tt("menu.digits4")}
+                aria-label={tt("menu.password")}
+                className="h-11 w-full rounded-[var(--radius-md)] border border-border bg-bg px-3 font-display text-lg tracking-[0.3em] tabular-nums text-fg outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+              />
+            </label>
+          ) : null}
+          <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+            <Button size="lg" disabled={busy || !canJoin} onClick={joinNow}>
+              <Play className="size-4" />
+              {tt("common.enter")}
+            </Button>
+            <Button
+              variant="secondary"
+              size="lg"
+              disabled={busy || !canJoin}
+              title={tt("menu.watch.title")}
+              onClick={watchNow}
+            >
+              <Eye className="size-4" />
+              {tt("menu.watch")}
+            </Button>
+          </div>
         </div>
 
         {/* min-h-11: чекбокс — тап-таргет 44px на телефоне, а не полоса в одну строку текста. */}
@@ -576,54 +682,10 @@ export function NetMenuScreen() {
           {tt("menu.private")}
         </label>
 
-        {joinOpen ? (
-          <div className="rounded-[var(--radius-lg)] border border-border bg-bg/50 p-3">
-            <label className="mb-3 block">
-              <span className="mb-1 block text-xs text-muted">{tt("menu.code")}</span>
-              <input
-                value={code}
-                onChange={(e) => setCode(e.target.value.toUpperCase().slice(0, 4))}
-                maxLength={4}
-                placeholder={tt("menu.code.placeholder")}
-                aria-label={tt("menu.code")}
-                className="h-11 w-full rounded-[var(--radius-md)] border border-border bg-bg px-3 font-display text-lg tracking-[0.3em] uppercase text-fg outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-              />
-            </label>
-            {needPassword ? (
-              <label className="mb-3 block">
-                <span className="mb-1 block text-xs text-muted">{tt("menu.password")}</span>
-                <input
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                  inputMode="numeric"
-                  maxLength={4}
-                  autoFocus
-                  placeholder={tt("menu.digits4")}
-                  aria-label={tt("menu.password")}
-                  className="h-11 w-full rounded-[var(--radius-md)] border border-border bg-bg px-3 font-display text-lg tracking-[0.3em] tabular-nums text-fg outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-                />
-              </label>
-            ) : null}
-            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-              <Button size="lg" disabled={busy || !canJoin} onClick={joinNow}>
-                <Play className="size-4" />
-                {tt("common.enter")}
-              </Button>
-              <Button
-                variant="secondary"
-                size="lg"
-                disabled={busy || !canJoin}
-                title={tt("menu.watch.title")}
-                onClick={watchNow}
-              >
-                <Eye className="size-4" />
-                {tt("menu.watch")}
-              </Button>
-            </div>
-          </div>
-        ) : null}
-
-        <HintNote>{tt("menu.hint")}</HintNote>
+        {/* Обучение (волна 1.5): интерактивные миссии против лёгкого бота.
+            По F10 — в самом низу колонки: ниже присоединения и приватности.
+            Когда все миссии пройдены, блок исчезает сам. */}
+        <TutorialMissionBlock name={name} busy={busy} />
 
         {error ? <p className="text-sm text-clay">{error}</p> : null}
       </MenuColumn>
@@ -1039,6 +1101,7 @@ function useTableFeedItems(net: NetUiState | null): FeedItem[] {
   const system = net?.system;
   const reactions = net?.reactions;
   const myName = net?.name;
+  const lang = useLang();
   const colorBySeat = useMemo(() => {
     const map = new Map<number, string>();
     for (const s of seats ?? []) map.set(s.seat, s.color);
@@ -1048,11 +1111,16 @@ function useTableFeedItems(net: NetUiState | null): FeedItem[] {
     const byChat = reactionsByChatId(reactions, myName);
     const chatItems: FeedItem[] = (chat ?? []).map((m) => {
       const rs = byChat.get(m.id);
+      // Системная реплика «Стола» (key+params от сервера): текст собирается
+      // по ключу на языке рендера, русский text — фолбэк для старых строк;
+      // ник системной реплики — по ключу, обычные ники — как есть.
+      const text = m.key ? translate(lang, m.key as TKey, m.params ?? undefined) : m.text;
+      const playerName = m.key ? translate(lang, "chat.table") : scientistName(m.name, lang);
       return {
         id: `chat-${m.id}`,
         kind: "chat" as const,
-        text: m.text,
-        playerName: m.name,
+        text,
+        playerName,
         seat: m.seat,
         chatId: m.id,
         at: m.at,
@@ -1074,7 +1142,7 @@ function useTableFeedItems(net: NetUiState | null): FeedItem[] {
       .map((item, i) => ({ item, i }))
       .sort((a, b) => (a.item.at ?? 0) - (b.item.at ?? 0) || a.i - b.i)
       .map((x) => x.item);
-  }, [chat, system, colorBySeat, reactions, myName]);
+  }, [chat, system, colorBySeat, reactions, myName, lang]);
 }
 
 /**
@@ -1118,6 +1186,7 @@ function seatOfItem(item: FeedItem): number | null {
  */
 export function LobbyScreen() {
   const tt = useT();
+  const lang = useLang();
   const net = useGameStore((s) => s.net);
   const netAddBots = useGameStore((s) => s.netAddBots);
   const netStart = useGameStore((s) => s.netStart);
@@ -1138,6 +1207,8 @@ export function LobbyScreen() {
   // Чат лобби — тот же компонент, что журнал в игре: чат плюс системные
   // события стола (кто вошёл, вышел, сдался).
   const [chatOpen, setChatOpen] = useState(false);
+  const chatTitleId = useId();
+  const chatButtonRef = useRef<HTMLButtonElement>(null);
   const lastSeenChatRef = useRef(0);
   const chatItems = useTableFeedItems(net);
   const typingNames = useTypingNames(net);
@@ -1174,16 +1245,35 @@ export function LobbyScreen() {
   const shareUrl = `${window.location.origin}/?room=${net.code}`;
   const modules = net.settings.modules ?? {};
   const difficulty = net.settings.difficulty ?? "normal";
+  // Таймер хода: у столов, созданных без ключа (старые/прямые пути), в лобби
+  // показываем умолчание — 1 мин (см. TURN_TIMER_DEFAULT_MS и сервер).
+  const turnTimer = net.settings.turnTimerMs ?? TURN_TIMER_DEFAULT_MS;
+  // Волна 2: модификаторы стола — общий лимит 3 слота на правила, мутаторы
+  // и «Дикий мир» (§0.10); сервер считает то же самое при create/settings/start.
+  const rules = net.settings.rules ?? {};
+  const mutators = net.settings.mutators ?? {};
+  const wildWorld = net.settings.wildWorld ?? false;
+  const slotsUsed = modifierSlotsUsed({ rules, mutators, wildWorld });
   // Полная колода для выбранных дополнений: если хост не менял размер — она.
   const deckFull = Math.max(deckSizeFor(1, modules), 20);
   const deckNow = Math.min(net.settings.deckSize ?? deckFull, deckFull);
   // Чего не хватает для старта: у хоста — полного стола, у остальных — прав.
   const freeSeats = Math.max(0, net.capacity - net.seats.length);
-  const startHint = !isHost
-    ? tt("lobby.startHint.host")
-    : freeSeats > 0
-      ? tt("lobby.startHint.free", { free: freeSeats, capacity: net.capacity })
-      : null;
+  // Несовместимые дополнения и модификаторы блокируют старт: сервер тоже
+  // отклонит, но кнопку лучше показать неактивной сразу (флаги при этом
+  // никто не снимает молча).
+  const incompatibility = isHost ? moduleCompatibilityError(modules, lang) : null;
+  const modIncompatibility = isHost
+    ? modifierCompatibilityError({ modules, rules, mutators, wildWorld }, lang)
+    : null;
+  const startHint = (incompatibility ?? modIncompatibility)
+    ?? (!isHost
+      ? tt("lobby.startHint.host")
+      : freeSeats > 0
+        ? tt("lobby.startHint.free", { free: freeSeats, capacity: net.capacity })
+        : humans.length < 1
+          ? tt("lobby.startFullTitle")
+          : null);
 
   /** Приглашение: ссылка с кодом; у приватного стола хост копирует и пароль. */
   const inviteText =
@@ -1232,11 +1322,51 @@ export function LobbyScreen() {
 
   function toggleModule(key: ModuleKey) {
     if (!isHost) return;
-    void netSetSettings({ modules: { ...modules, [key]: !modules[key] } });
+    // Включение несовместимого дополнения блокируется (с пояснением), но
+    // существующие флаги не трогаем: ничего не снимаем молча.
+    const candidate = { ...modules, [key]: !modules[key] };
+    if (moduleCompatibilityError(candidate, lang)) return;
+    void netSetSettings({ modules: candidate });
   }
 
   function pickDifficulty(id: Difficulty) {
     if (isHost) void netSetSettings({ difficulty: id });
+  }
+
+  /** Таймер хода: у столов без ключа показываем и ставим умолчание — 1 мин. */
+  function pickTurnTimer(ms: TurnTimerMs) {
+    if (!isHost) return;
+    void netSetSettings({ turnTimerMs: ms });
+  }
+
+  /** Волна 2: правила, мутаторы и «Дикий мир» — включение только в лимит слотов. */
+  function toggleRule(key: TableRuleId) {
+    if (!isHost) return;
+    const candidate = { ...rules, [key]: !rules[key] };
+    if (modifierCompatibilityError({ modules, rules: candidate, mutators, wildWorld }, lang)) return;
+    void netSetSettings({ rules: candidate });
+  }
+
+  function toggleMutator(key: MutatorId) {
+    if (!isHost) return;
+    const candidate = { ...mutators, [key]: !mutators[key] };
+    if (modifierCompatibilityError({ modules, rules, mutators: candidate, wildWorld }, lang)) return;
+    void netSetSettings({ mutators: candidate });
+  }
+
+  function toggleWildWorld() {
+    if (!isHost) return;
+    if (modifierCompatibilityError({ modules, rules, mutators, wildWorld: !wildWorld }, lang)) return;
+    void netSetSettings({ wildWorld: !wildWorld });
+  }
+
+  /** Стартовая рука: 0 — классика (правило снимается, слот освобождается). */
+  function pickStartHand(n: 0 | 7 | 8 | 9) {
+    if (!isHost) return;
+    const rest = (({ startHand: _hand, ...without }) => without)(rules);
+    const candidate = n === 0 ? rest : { ...rest, startHand: n };
+    if (modifierCompatibilityError({ modules, rules: candidate, mutators, wildWorld }, lang)) return;
+    void netSetSettings({ rules: candidate });
   }
 
   function pickDeck(size: number) {
@@ -1508,16 +1638,23 @@ export function LobbyScreen() {
 
           <div className="mb-3">
             <p className="mb-1.5 text-xs text-muted">{tt("lobby.modules")}</p>
+            {incompatibility ? (
+              <p id="module-compatibility-hint" className="mb-2 text-xs text-muted">
+                {incompatibility}
+              </p>
+            ) : null}
             <div className="grid grid-cols-2 gap-2">
               {MODULE_OPTIONS.map(([key, labelKey, hintKey]) => {
                 const on = Boolean(modules[key]);
+                const blocked = moduleCompatibilityError({ ...modules, [key]: !on }, lang);
                 return (
                   <button
                     key={key}
                     type="button"
-                    disabled={!isHost}
+                    disabled={!isHost || Boolean(blocked)}
                     aria-pressed={on}
-                    title={isHost ? tt(hintKey) : tt("lobby.hostOnly")}
+                    title={isHost ? blocked ?? tt(hintKey) : tt("lobby.hostOnly")}
+                    aria-describedby={blocked ? "module-compatibility-hint" : undefined}
                     onClick={() => toggleModule(key)}
                     className={cn(
                       "flex items-center justify-between gap-2 rounded-[var(--radius-md)] border px-3 py-2 text-left text-xs leading-tight disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:text-sm",
@@ -1538,6 +1675,120 @@ export function LobbyScreen() {
                   </button>
                 );
               })}
+            </div>
+          </div>
+
+          {/* Волна 2: модификаторы — правила, мутаторы и «Дикий мир», суммарно
+              не больше 3 слотов (§0.10). Бейджей и баннеров на столе пока нет
+              (волна анимаций): видимый след — журнал и данные состояния. */}
+          <div className="mb-3">
+            <div className="mb-1.5 flex items-baseline justify-between gap-2">
+              <p className="text-xs text-muted">{tt("lobby.modifiers")}</p>
+              <span
+                className={cn(
+                  "text-[10px] uppercase tracking-wide",
+                  slotsUsed >= 3 ? "text-accent" : "text-muted",
+                )}
+              >
+                {tt("lobby.slotsLeft", { used: slotsUsed })}
+              </span>
+            </div>
+            {modIncompatibility ? (
+              <p className="mb-2 text-xs text-muted">{modIncompatibility}</p>
+            ) : null}
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                ...RULE_OPTIONS.map(([key, labelKey, hintKey]) => ({
+                  key,
+                  labelKey,
+                  hintKey,
+                  on: Boolean(rules[key]),
+                })),
+                ...MUTATOR_OPTIONS.map(([key, labelKey, hintKey]) => ({
+                  key,
+                  labelKey,
+                  hintKey,
+                  on: Boolean(mutators[key]),
+                })),
+                {
+                  key: "wildWorld" as const,
+                  labelKey: "lobby.wildWorld" as TKey,
+                  hintKey: "lobby.wildWorld.hint" as TKey,
+                  on: wildWorld,
+                },
+              ].map((item) => {
+                const blocked = modifierCompatibilityError(
+                  item.key === "wildWorld"
+                    ? { modules, rules, mutators, wildWorld: !item.on }
+                    : item.key === "scavengers" || item.key === "rapidEvolution"
+                      ? { modules, rules, mutators: { ...mutators, [item.key]: !item.on }, wildWorld }
+                      : { modules, rules: { ...rules, [item.key]: !item.on }, mutators, wildWorld },
+                  lang,
+                );
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    disabled={!isHost || Boolean(blocked)}
+                    aria-pressed={item.on}
+                    title={isHost ? blocked ?? tt(item.hintKey) : tt("lobby.hostOnly")}
+                    onClick={() => {
+                      if (item.key === "wildWorld") toggleWildWorld();
+                      else if (item.key === "scavengers" || item.key === "rapidEvolution") toggleMutator(item.key);
+                      else toggleRule(item.key);
+                    }}
+                    className={cn(
+                      "flex items-center justify-between gap-2 rounded-[var(--radius-md)] border px-3 py-2 text-left text-xs leading-tight disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:text-sm",
+                      item.on ? "border-accent bg-accent/15 text-fg" : "border-border bg-bg text-fg hover:bg-surface-2",
+                    )}
+                  >
+                    <span className="min-w-0">{tt(item.labelKey)}</span>
+                    <span
+                      className={cn(
+                        "shrink-0 rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
+                        item.on ? "bg-accent text-accent-fg" : "bg-ink/20 text-muted",
+                      )}
+                    >
+                      {item.on ? tt("common.on") : tt("common.off")}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-2">
+              <p className="mb-1.5 text-xs text-muted">{tt("lobby.rule.startHand")}</p>
+              <div className="grid grid-cols-4 gap-2">
+                {([0, 7, 8, 9] as const).map((n) => {
+                  const on = (rules.startHand ?? 0) === n;
+                  const without = (({ startHand: _hand, ...restRules }) => restRules)(rules);
+                  const candidate = n === 0 ? without : { ...without, startHand: n };
+                  const blocked = modifierCompatibilityError(
+                    { modules, rules: candidate, mutators, wildWorld },
+                    lang,
+                  );
+                  return (
+                    <button
+                      key={n}
+                      type="button"
+                      disabled={!isHost || Boolean(blocked)}
+                      aria-pressed={on}
+                      title={
+                        isHost
+                          ? blocked ?? tt(n === 0 ? "lobby.hand.classic" : "lobby.rule.startHand.hint")
+                          : tt("lobby.hostOnly")
+                      }
+                      onClick={() => pickStartHand(n)}
+                      className={cn(
+                        TOGGLE_BASE,
+                        "rounded-[var(--radius-md)] border px-2 py-1.5 text-xs sm:text-sm",
+                        on ? "border-accent bg-accent/15 text-fg" : "border-border bg-bg text-fg hover:bg-surface-2",
+                      )}
+                    >
+                      {n === 0 ? tt("lobby.hand.classic") : n}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
@@ -1562,6 +1813,34 @@ export function LobbyScreen() {
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Таймер хода: сколько идёт ход человека (умолчание — 1 мин),
+              «Выкл» — сервер не завершает ход принудительно. Ботов не касается. */}
+          <div className="mb-3">
+            <p className="mb-1.5 text-xs text-muted">{tt("lobby.turnTimer")}</p>
+            <div className="grid grid-cols-5 gap-2" data-turn-timer-setting>
+              {TURN_TIMER_OPTIONS.map(([ms, labelKey]) => (
+                <button
+                  key={ms}
+                  type="button"
+                  disabled={!isHost}
+                  data-timer-option={ms}
+                  aria-pressed={turnTimer === ms}
+                  title={isHost ? tt("lobby.turnTimer.hint") : tt("lobby.hostOnly")}
+                  onClick={() => pickTurnTimer(ms)}
+                  className={cn(
+                    "h-11 rounded-[var(--radius-md)] border px-1 text-xs font-medium whitespace-nowrap disabled:cursor-not-allowed sm:h-10 sm:text-sm disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
+                    turnTimer === ms
+                      ? "border-accent bg-accent text-accent-fg"
+                      : "border-border bg-bg text-fg hover:bg-surface-2",
+                  )}
+                >
+                  {tt(labelKey)}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-xs text-subtle">{tt("lobby.turnTimer.note")}</p>
           </div>
 
           <div>
@@ -1665,8 +1944,11 @@ export function LobbyScreen() {
           <Button
             className="flex-1 max-lg:h-14 max-sm:flex-none"
             size="md"
-            disabled={!isHost || !full || humans.length < 1}
-            title={!isHost ? tt("lobby.startHostTitle") : !full ? tt("lobby.startFullTitle") : undefined}
+            disabled={!isHost || !full || humans.length < 1 || incompatibility !== null}
+            title={
+              incompatibility ?? (!isHost ? tt("lobby.startHostTitle") : !full ? tt("lobby.startFullTitle") : undefined)
+            }
+            aria-describedby={startHint ? "lobby-start-hint" : undefined}
             // data-start-game: стабильный селектор для QA (кнопка меняет
             // подпись при смене языка — «Начать год» / «Start year»).
             data-start-game=""
@@ -1686,7 +1968,7 @@ export function LobbyScreen() {
           </Button>
         </div>
         {startHint ? (
-          <p className="mt-2 text-center text-xs text-subtle" role="status">
+          <p id="lobby-start-hint" className="mt-2 text-center text-xs text-subtle" role="status">
             {startHint}
           </p>
         ) : null}
@@ -1714,7 +1996,10 @@ export function LobbyScreen() {
           pb-safe: на телефонах с жестовой полосой кнопка не прилипает к краю. */}
       <button
         type="button"
+        ref={chatButtonRef}
         onClick={() => setChatOpen(true)}
+        aria-haspopup="dialog"
+        aria-expanded={chatOpen}
         aria-label={tt("chat.open")}
         className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-30 flex h-12 items-center gap-2 rounded-full border border-border bg-surface px-4 text-sm font-medium text-fg shadow-[var(--shadow-card)] lg:hidden"
       >
@@ -1727,8 +2012,13 @@ export function LobbyScreen() {
         ) : null}
       </button>
       {chatOpen ? (
-        <div className="fixed inset-0 z-50 flex flex-col bg-bg/80 p-3 lg:hidden" onClick={() => setChatOpen(false)}>
-          <div className="flex min-h-0 flex-1 flex-col" onClick={(e) => e.stopPropagation()}>
+        <DialogShell
+          titleId={chatTitleId}
+          returnFocus={chatButtonRef}
+          overlayClassName="fixed inset-0 z-50 flex flex-col bg-bg/80 p-3 lg:hidden"
+          panelClassName="flex min-h-0 flex-1 flex-col"
+          onBackdropClick={() => setChatOpen(false)}
+        >
             <div className="mb-2 flex justify-end">
               <Button variant="secondary" size="md" onClick={() => setChatOpen(false)}>
                 <X className="size-4" />
@@ -1741,14 +2031,14 @@ export function LobbyScreen() {
               open
               onToggle={() => {}}
               title={tt("chat.title")}
+              titleId={chatTitleId}
               onSend={(text) => void sendChat(text)}
               quickPhrases={chatPhrases(tt)}
               onReact={(item, emoji) => reactToItem(sendReaction, item, emoji)}
               onTyping={sendTyping}
               typingNames={typingNames}
             />
-          </div>
-        </div>
+        </DialogShell>
       ) : null}
 
       {kick ? (

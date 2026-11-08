@@ -21,6 +21,7 @@ import {
   SHOTS,
   bodyOf,
   createRoomViaStore,
+  newRuContext,
   openMenu,
   roomCode,
   safeClick,
@@ -58,7 +59,7 @@ const seatColors = (page) =>
 
 const browser = await chromium.launch();
 try {
-  const hostCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const hostCtx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   const host = await hostCtx.newPage();
   trackPage(host, "хост");
   await openMenu(host);
@@ -79,7 +80,7 @@ try {
   );
 
   // ── Гость входит: цвета двух игроков должны быть разными ──────────────────
-  const guestCtx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const guestCtx = await newRuContext(browser, { viewport: { width: 1280, height: 900 } });
   const guest = await guestCtx.newPage();
   trackPage(guest, "гость");
   await openMenu(guest);

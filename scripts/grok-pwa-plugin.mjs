@@ -1,8 +1,9 @@
 /**
- * Dev/preview (Vite) half of the platform PWA chrome: serves the ?install=1
- * tutorial and the per-app manifest, and injects missing PWA head tags into
- * app documents. The deployed-app half lives in server/middleware/grok-pwa.ts;
- * both share scripts/grok-pwa-shared.mjs.
+ * Dev/preview (Vite) half of the platform PWA chrome: serves the `?install=1`
+ * tutorial (including the bare query), the branded manifest and compatibility
+ * favicon, and injects missing PWA head tags into app documents. The deployed-
+ * app half lives in server/middleware/grok-pwa.ts; both share
+ * scripts/grok-pwa-shared.mjs.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -13,6 +14,7 @@ import {
   injectGrokPwaHead,
   isDocumentPath,
   isInstallQuery,
+  langFromAcceptLanguage,
   renderInstallPageHtml,
   renderWebManifest,
   snapshotOgIdentity,
@@ -21,6 +23,7 @@ import {
 export const GROK_OG_IDENTITY_ID = "virtual:grok-og-identity";
 
 const INSTALL_PAGE_PATH = join(dirname(fileURLToPath(import.meta.url)), "install-page.html");
+const FAVICON_PATH = join(dirname(fileURLToPath(import.meta.url)), "../public/__grok/favicon.svg");
 
 function requestHost(req) {
   const forwarded = req.headers["x-forwarded-host"];
@@ -28,9 +31,9 @@ function requestHost(req) {
   return Array.isArray(host) ? host[0] : host;
 }
 
-export function renderInstallPage(hostHeader, url = "/") {
+export function renderInstallPage(hostHeader, url = "/", options = {}) {
   const template = readFileSync(INSTALL_PAGE_PATH, "utf8");
-  return renderInstallPageHtml(template, { host: hostHeader, url });
+  return renderInstallPageHtml(template, { host: hostHeader, url, ...options });
 }
 
 function sendHtml(res, html) {
@@ -52,8 +55,30 @@ function serveGrokPwa(middlewares) {
       return;
     }
 
+    // Некоторые браузеры всё ещё запрашивают favicon по историческому пути.
+    // Отдаём тот же брендированный SVG, не оставляя запись в 404.
+    if (pathOnly === "/favicon.ico") {
+      try {
+        const body = readFileSync(FAVICON_PATH);
+        res.statusCode = 200;
+        res.setHeader("content-type", "image/svg+xml; charset=utf-8");
+        res.setHeader("cache-control", "public, max-age=86400");
+        res.setHeader("content-length", String(body.byteLength));
+        res.end(body);
+      } catch (err) {
+        console.error("[app-builder] favicon missing:", err);
+        res.statusCode = 404;
+        res.end("favicon unavailable");
+      }
+      return;
+    }
+
     if (pathOnly === "/__grok/manifest.webmanifest" || pathOnly === "/__grok/manifest.json") {
-      const body = Buffer.from(renderWebManifest(requestHost(req)), "utf8");
+      // Язык манифеста — по Accept-Language браузера (ru по умолчанию),
+      // тот же контракт, что у Nitro-middleware в deployed-приложении.
+      const acceptLanguage = req.headers["accept-language"];
+      const lang = langFromAcceptLanguage(Array.isArray(acceptLanguage) ? acceptLanguage[0] : acceptLanguage);
+      const body = Buffer.from(renderWebManifest(requestHost(req), lang), "utf8");
       res.statusCode = 200;
       res.setHeader("content-type", "application/manifest+json; charset=utf-8");
       res.setHeader("cache-control", "no-cache");
@@ -64,7 +89,13 @@ function serveGrokPwa(middlewares) {
 
     if (isInstallQuery(rawUrl) && isDocumentPath(pathOnly) && acceptsHtml(req.headers.accept)) {
       try {
-        sendHtml(res, renderInstallPage(requestHost(req), rawUrl));
+        const acceptLanguage = req.headers["accept-language"];
+        sendHtml(
+          res,
+          renderInstallPage(requestHost(req), rawUrl, {
+            lang: langFromAcceptLanguage(Array.isArray(acceptLanguage) ? acceptLanguage[0] : acceptLanguage),
+          }),
+        );
       } catch (err) {
         console.error("[app-builder] install page missing:", err);
         res.statusCode = 500;

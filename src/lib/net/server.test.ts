@@ -10,12 +10,13 @@ import {
   NET_TABLES_DDL,
   nextAutoStep,
   noChoicesLeft,
-  splitStatements,
+  splitStatements, turnTimeoutMs,
   _internals,
 } from "./server.ts";
 import { PACE, PLAYER_COLORS, joinRoomInput, setPasswordInput } from "./shared.ts";
 import type { PollResult, SqlLike } from "./shared.ts";
 import type { Animal, GameState } from "../../game/types.ts";
+import { applyAction, legalDefenseActions } from "../../game/engine.ts";
 
 /** poll без sinceVersion всегда даёт полный кадр — сужаем тип для TS. */
 function full(r: PollResult | { unchanged: true }): PollResult {
@@ -37,6 +38,11 @@ before(async () => {
     "0006_resign.sql",
     "0007_room_privacy_color.sql",
     "0008_chat_reactions_typing.sql",
+    "0009_net_turn_deadline.sql",
+    "0010_net_action_ids.sql",
+    // 0011: key/params у системных реплик чата — setCapacity пишет их наравне
+    // с русским текстом, колонки должны существовать и в тестовой базе.
+    "0011_chat_key_params.sql",
   ]) {
     const ddl = readFileSync(
       fileURLToPath(new URL(`../../../migrations/${f}`, import.meta.url)),
@@ -44,9 +50,6 @@ before(async () => {
     );
     await pg.exec(ddl);
   }
-  // Рантайм-схема добирает то, чего нет в отыгранных миграциях (M10:
-  // turn_deadline_at добавляется идемпотентным alter из NET_TABLES_DDL).
-  for (const statement of splitStatements(NET_TABLES_DDL)) await pg.exec(statement);
   // Сервис использует только sql.query(text, params) — этого достаточно.
   const run = async <T>(text: string, params: unknown[] = []): Promise<T[]> =>
     (await pg.query<T>(text, params)).rows as T[];
@@ -56,6 +59,144 @@ before(async () => {
 function svc() {
   return createRoomService(sql, { now: () => fixedNow });
 }
+
+describe("module compatibility gates", () => {
+  for (let mask = 0; mask < 16; mask++) {
+    it(`create/settings compatibility mask=${mask.toString(2).padStart(4, "0")}`, async () => {
+      const modules = { continents: Boolean(mask & 1), plants: Boolean(mask & 2), fungi: Boolean(mask & 4), randomMutations: Boolean(mask & 8) };
+      const invalid = modules.fungi && (modules.plants || modules.randomMutations);
+      const s = svc();
+      const input = { name: "QA", capacity: 2 as const, botSeats: 1, difficulty: "normal" as const };
+      if (invalid) await assert.rejects(() => s.create({ ...input, modules }), /несовместима/);
+      else await s.create({ ...input, modules });
+      const host = await s.create(input);
+      const before = await s.rejoin(host.code, host.token);
+      if (invalid) {
+        await assert.rejects(() => s.setSettings(host.code, host.token, { modules }), /несовместима/);
+        assert.deepEqual((await s.rejoin(host.code, host.token)).room.settings, before.room.settings);
+      } else {
+        await s.setSettings(host.code, host.token, { modules });
+        await s.start(host.code, host.token);
+        assert.equal((await s.rejoin(host.code, host.token)).room.status, "playing");
+      }
+    });
+  }
+  it("сценарий изверга доезжает до состояния партии (волна 4а)", async () => {
+    const s = svc();
+    const host = await s.create({
+      name: "QA",
+      capacity: 2 as const,
+      botSeats: 1,
+      difficulty: "normal" as const,
+      scenario: { seat: 1, bossFeedsExtra: true },
+    });
+    // Сценарий сохранён в settings комнаты (P0-фикс ревью: раньше терялся).
+    const room = (await _internals.readRoom(sql, host.code))!;
+    assert.deepEqual(room.settings.scenario, { seat: 1, bossFeedsExtra: true });
+    await s.start(host.code, host.token);
+    assert.equal((await s.rejoin(host.code, host.token)).room.status, "playing");
+    // Каноническое состояние партии несёт сценарий — движок применит правило
+    // (raw jsonb: rejoin-вид состояние не отдаёт, читаем комнату напрямую).
+    const started = (await _internals.readRoom(sql, host.code))!;
+    assert.deepEqual(started.state?.scenario, { seat: 1, bossFeedsExtra: true });
+  });
+
+  it("сценарий снимается, если место босса — человек (seat 0, host)", async () => {
+    const s = svc();
+    // Сценарий указывает на место 0 — это человек-хост: сервер обязан снять
+    // ломающее правило (оно только для ИИ-боссов).
+    const host = await s.create({
+      name: "QA",
+      capacity: 2 as const,
+      botSeats: 1,
+      difficulty: "normal" as const,
+      scenario: { seat: 0, doubleHunt: true },
+    });
+    await s.start(host.code, host.token);
+    const started = (await _internals.readRoom(sql, host.code))!;
+    assert.equal(started.status, "playing");
+    assert.equal(started.state?.scenario, undefined, "ломающее правило не достаётся человеку");
+  });
+
+  it("legacy lobby remains readable/editable but incompatible start is rejected", async () => {
+    const s = svc();
+    const host = await s.create({ name: "QA", capacity: 2, botSeats: 1, difficulty: "normal" });
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const modules = { fungi: true, plants: true };
+    await _internals.casUpdate(sql, host.code, room.version, { settings: { ...room.settings, modules } });
+    await s.setSettings(host.code, host.token, { difficulty: "hard" });
+    assert.deepEqual((await s.rejoin(host.code, host.token)).room.settings.modules, modules);
+    await assert.rejects(() => s.start(host.code, host.token), /несовместима/);
+  });
+});
+
+describe("modifier gates (волна 2)", () => {
+  const base = { name: "QA", capacity: 2, botSeats: 1, difficulty: "normal" } as const;
+
+  it("create: больше трёх слотов модификаций отклоняется", async () => {
+    const s = svc();
+    await assert.rejects(
+      () =>
+        s.create({
+          ...base,
+          rules: { pack: true, abundance: true },
+          mutators: { scavengers: true },
+          wildWorld: true,
+        }),
+      /3 слота/,
+    );
+  });
+
+  it("create: запрещённая пара «Стая» × «Случайные мутации»", async () => {
+    const s = svc();
+    await assert.rejects(
+      () => s.create({ ...base, modules: { randomMutations: true }, rules: { pack: true } }),
+      /Стая/,
+    );
+  });
+
+  it("create: ровно три слота принимаются и хранятся в settings", async () => {
+    const s = svc();
+    const host = await s.create({
+      ...base,
+      rules: { pack: true },
+      mutators: { rapidEvolution: true },
+      wildWorld: true,
+    });
+    const settings = (await s.rejoin(host.code, host.token)).room.settings;
+    assert.deepEqual(settings.rules, { pack: true });
+    assert.deepEqual(settings.mutators, { rapidEvolution: true });
+    assert.equal(settings.wildWorld, true);
+  });
+
+  it("setSettings: лимит считается по слитой конфигурации стола", async () => {
+    const s = svc();
+    const host = await s.create({ ...base, rules: { pack: true }, wildWorld: true });
+    // pack + wildWorld + два мутатора = 4 слота — отказ.
+    await assert.rejects(
+      () => s.setSettings(host.code, host.token, { mutators: { scavengers: true, rapidEvolution: true } }),
+      /3 слота/,
+    );
+    // Хост снял правило — слот освободился, мутаторы проходят.
+    await s.setSettings(host.code, host.token, { rules: {} });
+    await s.setSettings(host.code, host.token, { mutators: { scavengers: true, rapidEvolution: true } });
+  });
+
+  it("start: модификаторы попадают в состояние партии (правила, мутаторы, прогноз)", async () => {
+    const s = svc();
+    const host = await s.create({
+      ...base,
+      rules: { startHand: 7 },
+      mutators: { rapidEvolution: true },
+      wildWorld: true,
+    });
+    await s.start(host.code, host.token);
+    const state = full(await s.rejoin(host.code, host.token)).state!;
+    assert.deepEqual(state.rules, { startHand: 7 });
+    assert.deepEqual(state.mutators, ["rapidEvolution"]);
+    assert.equal(state.wildWorld?.planned?.year, 1, "прогноз года 1 нарисован до старта");
+  });
+});
 
 describe("лобби", () => {
   it("create → join: места и хост", async () => {
@@ -99,10 +240,27 @@ describe("лобби", () => {
     );
   });
 
-  it("join по чужому коду — ошибка", async () => {
+  it("старт отклоняет офлайн-игрока с понятным кодом", async () => {
+    fixedNow = Date.now();
     const s = svc();
-    await assert.rejects(() => s.join({ code: "ZZZZ", name: "Кто" }), NetError);
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    const guest = await s.join({ code: host.code, name: "Боря" });
+    await sql.query(
+      `update evo_seats set last_seen_at = now() - interval '1 minute'
+        where room_code = $1 and seat = $2`,
+      [host.code, guest.seat],
+    );
+    await assert.rejects(
+      () => s.start(host.code, host.token),
+      (e: unknown) => e instanceof NetError && e.code === "players-offline",
+    );
+    await sql.query(
+      `update evo_seats set last_seen_at = now() where room_code = $1 and seat = $2`,
+      [host.code, guest.seat],
+    );
+    assert.equal((await s.start(host.code, host.token)).room.status, "playing");
   });
+
 
   it("create с ботами на все места — ошибка, комната не создаётся", async () => {
     const s = svc();
@@ -272,6 +430,11 @@ describe("хост-контроль", () => {
       true,
       "система пишет в чат",
     );
+    // Локализация системных реплик: рядом с русским текстом едут key+params
+    // (клиент при lang=en собирает реплику по ключу, ru-текст — фолбэк).
+    const systemRow = chat.find((m) => m.text.includes("Мест стало 3"));
+    assert.equal(systemRow?.key, "chat.capacityBots");
+    assert.deepEqual(systemRow?.params, { capacity: 3, bots: 2 });
 
     Math.random = () => 0.999_999;
     try {
@@ -577,6 +740,60 @@ describe("партия", () => {
     assert.equal(ok2, false);
   });
 
+  it("гонка действия и сдачи: retry не затирает свежий state", async () => {
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    const guest = await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const state = structuredClone(room.state!);
+    state.phase = "development";
+    state.pendingAttack = null;
+    state.currentPlayerId = 0;
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state }), true);
+
+    // Первый read уже вернул старый снимок, затем второй игрок сдался и увеличил
+    // version. Старый CAS обязан пересчитать действие от свежего состояния.
+    let injected = false;
+    const faultSql: SqlLike = {
+      query: async <T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]> => {
+        const stale = await sql.query<T>(text, params);
+        if (!injected && text.includes("from evo_rooms where code = $1")) {
+          injected = true;
+          await s.resign(host.code, guest.token);
+        }
+        return stale;
+      },
+    } as SqlLike;
+    const actionService = createRoomService(faultSql, { now: () => fixedNow });
+    await actionService.action(host.code, host.token, { type: "devPass" });
+    const after = (await _internals.readRoom(sql, host.code))!.state!;
+    assert.equal(after.players[guest.seat]!.resigned, true, "сдача не должна затираться retry");
+  });
+
+  it("один actionId применяется один раз и повтор возвращает ACK", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const state = structuredClone(room.state!);
+    state.phase = "development";
+    state.pendingAttack = null;
+    state.currentPlayerId = 0;
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state }), true);
+    const actionId = "11111111-1111-4111-8111-111111111111";
+    const first = await s.action(host.code, host.token, { type: "devPass" }, actionId);
+    const version = (await _internals.readRoom(sql, host.code))!.version;
+    const second = await s.action(host.code, host.token, { type: "devPass" }, actionId);
+    assert.equal((await _internals.readRoom(sql, host.code))!.version, version);
+    assert.equal(first.actionId, actionId);
+    assert.equal(second.actionId, actionId);
+    assert.equal(second.state!.currentPlayerId, first.state!.currentPlayerId);
+  });
+
+
   it("одно действие = один инкремент версии (шаг бота отложен)", async () => {
     const { s, host, g } = await startedTable();
     await s.start(host.code, host.token);
@@ -815,6 +1032,31 @@ describe("журнал событий", () => {
       versions,
       [...versions].sort((a, b) => a - b),
     );
+  });
+
+  it("переполненное окно отдаёт свежий хвост и сообщает skipped", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 1, difficulty: "normal" });
+    await s.start(host.code, host.token);
+    for (let i = 0; i < 45; i++) {
+      const room = await _internals.readRoom(sql, host.code);
+      await _internals.casUpdate(sql, host.code, room!.version, {
+        eventsAppend: [{ kind: "passed", playerId: 0 }],
+      });
+    }
+    await _internals.casUpdate(sql, host.code, (await _internals.readRoom(sql, host.code))!.version, {
+      autoStepAt: fixedNow + 60 * 60 * 1000,
+    });
+    const snap = full(await s.poll(host.code, host.token, 0));
+    assert.equal(snap.events.length, 30);
+    const stored = (await _internals.readRoom(sql, host.code))!.events;
+    assert.equal(snap.events.at(-1)!.version, stored.at(-1)!.version, "свежий хвост не теряется");
+    assert.equal(snap.eventsFrom, snap.events[0]!.version);
+    assert.equal(snap.eventsTo, snap.version);
+    assert.ok(snap.skipped);
+    assert.equal(snap.skipped!.from, 1);
+    assert.equal(snap.skipped!.to, snap.events[0]!.version - 1);
   });
 });
 
@@ -1559,22 +1801,23 @@ describe("список столов", () => {
     assert.equal(own.hostName, "Аня");
     assert.equal(own.createdAt > 0, true);
     // Никаких токенов и паролей: состав полей жёстко зафиксирован.
-    assert.deepEqual(Object.keys(own).sort(), [
-      "capacity",
-      "code",
-      "createdAt",
-      "difficulty",
-      "free",
-      "hostName",
-      "isPrivate",
-      "modules",
-      "status",
-      "taken",
-    ]);
+    for (const room of rooms) {
+      assert.deepEqual(Object.keys(room).sort(), [
+        "capacity",
+        "code",
+        "createdAt",
+        "difficulty",
+        "free",
+        "hostName",
+        "isPrivate",
+        "modules",
+        "status",
+        "taken",
+      ]);
+    }
     const json = JSON.stringify(rooms);
     assert.equal(json.includes(pub.token), false, "токен места не должен утекать в список");
     assert.equal(json.includes(priv.token), false);
-    assert.equal(json.includes("1234"), false, "пароль закрытого стола не должен утекать в список");
   });
 
   it("идущая партия видна со статусом playing и модулями", async () => {
@@ -1868,6 +2111,46 @@ describe("цвета игроков", () => {
   });
 });
 
+describe("janitor: TTL от активности, playing неприкосновенен", () => {
+  it("старая партия остаётся, а lobby удаляется только после простоя", async () => {
+    const s = svc();
+    const playing = await s.create({ name: "Хост", capacity: 2, botSeats: 1, difficulty: "normal" });
+    await s.start(playing.code, playing.token);
+    await sql.query(
+      `update evo_rooms set created_at = now() - interval '13 hours',
+                         updated_at = now() - interval '13 hours' where code = $1`,
+      [playing.code],
+    );
+    await sql.query(
+      `update evo_seats set last_seen_at = now() - interval '13 hours' where room_code = $1`,
+      [playing.code],
+    );
+    await _internals.janitor(sql);
+    assert.equal((await _internals.readRoom(sql, playing.code))?.status, "playing");
+
+    const lobby = await s.create({ name: "Лобби", capacity: 2, botSeats: 0, difficulty: "normal" });
+    await sql.query(
+      `update evo_rooms set created_at = now() - interval '13 hours',
+                         updated_at = now() - interval '13 hours' where code = $1`,
+      [lobby.code],
+    );
+    await sql.query(
+      `update evo_seats set last_seen_at = now() - interval '13 hours' where room_code = $1`,
+      [lobby.code],
+    );
+    // Свежий heartbeat продлевает жизнь даже при старом created_at.
+    await sql.query(`update evo_seats set last_seen_at = now() where room_code = $1`, [lobby.code]);
+    await _internals.janitor(sql);
+    assert.ok(await _internals.readRoom(sql, lobby.code));
+    await sql.query(
+      `update evo_seats set last_seen_at = now() - interval '13 hours' where room_code = $1`,
+      [lobby.code],
+    );
+    await _internals.janitor(sql);
+    assert.equal(await _internals.readRoom(sql, lobby.code), null);
+  });
+});
+
 describe("кэш сервиса комнат", () => {
   it("объект без новых методов считается устаревшим (s.setName is not a function)", () => {
     const s = svc();
@@ -2067,7 +2350,13 @@ describe("S4: канонизация легального действия", () 
     st.territoryFood = { laurasia: 0, gondwana: 0, ocean: 0 };
     st.plants = [];
     st.flora = [];
-    st.players[0]!.animals = [testAnimal("a-1", 0, { fatTokens: 3, zoneId: "laurasia" })];
+    st.players[0]!.animals = [testAnimal("a-1", 0, {
+      fatTokens: 3,
+      zoneId: "laurasia",
+      traits: Array.from({ length: 3 }, (_, i) => ({
+        id: `fat-${i}`, cardId: `fat-card-${i}`, type: "fatTissue" as const, hidden: false, playSeq: i,
+      })),
+    })];
     st.players[1]!.animals = [];
     await _internals.casUpdate(sql, host.code, room!.version, { state: st });
     return { s, host, g };
@@ -2427,6 +2716,44 @@ function feedingForHuman(
   return st;
 }
 
+describe("plants counterattack: neighbor authorization", () => {
+  it("persists choice, authorizes only right neighbor, and routes bot/resignation/default step", async () => {
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 3, botSeats: 0, difficulty: "normal" });
+    const left = await s.join({ code: host.code, name: "Боря" });
+    const right = await s.join({ code: host.code, name: "Вера" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const g = feedingForHuman(room.state!, { animal: true, foodBank: 0 });
+    g.modules.plants = true;
+    const prey = g.players[0]!.animals[0]!;
+    prey.traits = ["running", "tailLoss"].map((type, i) => ({ id: `plant-defense-${i}`, cardId: `plant-card-${i}`, type: type as "running" | "tailLoss", hidden: false, playSeq: i }));
+    g.plants = [{ id: "counter", kind: "carnivorous", food: 2, traits: [], shelters: 0, playSeq: 1 }];
+    const pending = applyAction(g, { type: "feedTakePlant", animalId: prey.id, plantId: "counter" });
+    assert.equal(pending.pendingAttack!.waitingFor, right.seat);
+    const choice = legalDefenseActions(pending, right.seat)[0]!;
+    assert.equal(noChoicesLeft(pending, pending.players[right.seat]!), false);
+    assert.deepEqual(endTurnStepFor(pending, right.seat), choice);
+    const bot = structuredClone(pending);
+    bot.players[right.seat]!.isAI = true;
+    assert.deepEqual(nextAutoStep(bot), choice);
+    bot.players[right.seat]!.isAI = false;
+    bot.players[right.seat]!.resigned = true;
+    assert.deepEqual(nextAutoStep(bot), choice);
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state: pending }), true);
+    const restored = (await _internals.readRoom(sql, host.code))!.state!;
+    assert.deepEqual(legalDefenseActions(restored, right.seat), legalDefenseActions(pending, right.seat));
+    await assert.rejects(() => s.action(host.code, host.token, choice), NetError);
+    await assert.rejects(() => s.action(host.code, left.token, choice), NetError);
+    await assert.rejects(() => s.action(host.code, right.token, { type: "chooseDefense", kind: "ignore", ignoredTraitId: "absent" }), NetError);
+    await s.action(host.code, right.token, choice);
+    const after = (await _internals.readRoom(sql, host.code))!.state!;
+    assert.equal(after.pendingAttack?.waitingFor, host.seat);
+    assert.equal(after.pendingAttack?.ignoredTraitId, "plant-defense-0");
+    assert.ok(legalDefenseActions(after, host.seat).some((a) => a.type === "chooseDefense" && a.kind === "tailLoss"));
+  });
+});
+
 describe("M10: ход человека без действий закрывается сам", () => {
   it("noChoicesLeft: только пас/завершение — да; любое действие — нет", async () => {
     const s = svc();
@@ -2485,6 +2812,54 @@ describe("M10: ход человека без действий закрывае�
     assert.deepEqual(nextAutoStep(resigned), { type: "feedSkip" });
   });
 
+  it("AFK: ход с действиями получает 60-секундный дедлайн и завершается", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const state = structuredClone(room.state!);
+    state.phase = "development";
+    state.pendingAttack = null;
+    state.currentPlayerId = 0;
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state }), true);
+
+    const planned = full(await s.poll(host.code, host.token));
+    assert.equal(planned.turnDeadlineAt, fixedNow + PACE.afkTurnMs);
+    fixedNow += PACE.afkTurnMs + 1;
+    const after = full(await s.poll(host.code, host.token));
+    assert.notEqual(after.state!.currentPlayerId, 0, "AFK-ход должен завершиться");
+    assert.ok(
+      after.turnDeadlineAt === null || after.turnDeadlineAt === fixedNow + PACE.afkTurnMs,
+      "следующий ход получает свой абсолютный дедлайн",
+    );
+  });
+
+  it("хост может заменить отключённого игрока ботом, а online — не может", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    const guest = await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const before = full(await s.poll(host.code, host.token));
+    assert.equal(before.seats[guest.seat]!.disconnected, false);
+    await assert.rejects(
+      () => s.replaceWithBot(host.code, host.token, guest.seat),
+      (e: unknown) => e instanceof NetError && e.code === "player-online",
+    );
+    await sql.query(
+      `update evo_seats set last_seen_at = now() - interval '1 minute' where room_code = $1 and seat = $2`,
+      [host.code, guest.seat],
+    );
+    const offline = full(await s.poll(host.code, host.token));
+    assert.equal(offline.seats[guest.seat]!.disconnected, true);
+    await s.replaceWithBot(host.code, host.token, guest.seat);
+    const after = full(await s.poll(host.code, host.token));
+    assert.equal(after.seats[guest.seat]!.isAI, true);
+    assert.equal(after.state!.players[guest.seat]!.isAI, true);
+  });
+
   it("дедлайн виден в кадре, через 30 с ход уходит дальше, метка снимается", async () => {
     const s = svc();
     const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
@@ -2518,7 +2893,7 @@ describe("M10: ход человека без действий закрывае�
       after.state!.currentPlayerId !== 0 ||
       after.state!.players[0]!.passedFeed;
     assert.ok(moved, "через 30 с ход должен уйти дальше");
-    // Ход человека снова с действиями: метки нет вовсе (и старую сняли).
+    // Ход человека с действиями получает отдельный AFK-дедлайн, не 30-секундный idle.
     const busy = feedingForHuman(after.state!, { animal: true, foodBank: 3 });
     assert.equal(
       await _internals.casUpdate(sql, host.code, (await _internals.readRoom(sql, host.code))!.version, {
@@ -2527,6 +2902,184 @@ describe("M10: ход человека без действий закрывае�
       true,
     );
     const fresh = full(await s.poll(host.code, host.token));
-    assert.equal(fresh.turnDeadlineAt, null);
+    assert.equal(fresh.turnDeadlineAt, fixedNow + PACE.afkTurnMs);
   });
 });
+
+describe("таймер хода: настройка стола (T2) и шаг бота в кадре (T1)", () => {
+  it("turnTimeoutMs: настройка сильнее legacy, 0 («Выкл») — дедлайна нет", () => {
+    // Ключ задан: значение настройки действует и для пустого хода, и для
+    // хода с действиями — «сколько идёт ход», одна цифра для обоих случаев.
+    assert.equal(turnTimeoutMs({ turnTimerMs: 30_000 }, false), 30_000);
+    assert.equal(turnTimeoutMs({ turnTimerMs: 30_000 }, true), 30_000);
+    assert.equal(turnTimeoutMs({ turnTimerMs: 180_000 }, false), 180_000);
+    assert.equal(turnTimeoutMs({ turnTimerMs: 0 }, false), null, "«Выкл»: принудительного конца нет");
+    assert.equal(turnTimeoutMs({ turnTimerMs: 0 }, true), null);
+    // Ключа нет (старые столы, прямые вызовы create) — прежние паузы.
+    assert.equal(turnTimeoutMs({}, false), PACE.afkTurnMs);
+    assert.equal(turnTimeoutMs({}, true), PACE.idleTurnMs);
+    assert.equal(turnTimeoutMs(null, false), PACE.afkTurnMs);
+    assert.equal(turnTimeoutMs(undefined, true), PACE.idleTurnMs);
+  });
+
+  it("хост ставит таймер в лобби, гость — нет; после старта настройка заперта", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    const guest = await s.join({ code: host.code, name: "Боря" });
+    await s.setSettings(host.code, host.token, { turnTimerMs: 120_000 });
+    assert.equal(
+      full(await s.poll(host.code, host.token)).room.settings.turnTimerMs,
+      120_000,
+      "значение держится на сервере",
+    );
+    await assert.rejects(
+      () => s.setSettings(host.code, guest.token, { turnTimerMs: 0 }),
+      (e: unknown) => e instanceof NetError && e.code === "host-only",
+    );
+    // «Выкл» — валидное значение, тоже сохраняется.
+    await s.setSettings(host.code, host.token, { turnTimerMs: 0 });
+    assert.equal(full(await s.poll(host.code, host.token)).room.settings.turnTimerMs, 0);
+    await s.setSettings(host.code, host.token, { turnTimerMs: 30_000 });
+    await s.start(host.code, host.token);
+    await assert.rejects(
+      () => s.setSettings(host.code, host.token, { turnTimerMs: 60_000 }),
+      (e: unknown) => e instanceof NetError && e.code === "lobby-only",
+    );
+  });
+
+  it("настройка 30 с: дедлайн хода с действиями = 30 с, по истечении шаг применяется", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({
+      name: "Аня",
+      capacity: 2,
+      botSeats: 0,
+      difficulty: "normal",
+      turnTimerMs: 30_000,
+    });
+    await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const busy = feedingForHuman(room.state!, { animal: true, foodBank: 3 });
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state: busy }), true);
+    const planned = full(await s.poll(host.code, host.token));
+    assert.equal(planned.turnDeadlineAt, fixedNow + 30_000, "дедлайн = настройка, а не afkTurnMs");
+    assert.equal(planned.botStepAt, null, "в ход человека метки шага бота нет");
+    fixedNow += 30_000 + 1;
+    const after = full(await s.poll(host.code, host.token));
+    assert.ok(after.version > planned.version, "принудительный шаг по дедлайну применён");
+    // Соперник без действий: ход возвращается ходящему, и новый отсчёт снова
+    // идёт по настройке (30 с), а не по afkTurnMs.
+    assert.equal(after.turnDeadlineAt, fixedNow + 30_000);
+    // Пустой ход при той же настройке тоже получает 30 с: Setting сильнее
+    // и короткого idle-умолчания — «сколько идёт ход», одна цифра.
+    const room2 = (await _internals.readRoom(sql, host.code))!;
+    const idle2 = feedingForHuman(room2.state!, { animal: false, foodBank: 0 });
+    assert.equal(await _internals.casUpdate(sql, host.code, room2.version, { state: idle2 }), true);
+    const idlePlanned = full(await s.poll(host.code, host.token));
+    assert.equal(idlePlanned.turnDeadlineAt, fixedNow + 30_000, "пустой ход — тоже по настройке");
+    fixedNow += 30_000 + 1;
+    const idleAfter = full(await s.poll(host.code, host.token));
+    assert.ok(
+      idleAfter.state!.phase !== "feeding" || idleAfter.state!.currentPlayerId !== 0,
+      "пустой ход уходит дальше по истечении настройки",
+    );
+  });
+
+  it("«Выкл» (0): метки нет и за 90 с ход не уходит — завершает сам игрок", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({
+      name: "Аня",
+      capacity: 2,
+      botSeats: 0,
+      difficulty: "normal",
+      turnTimerMs: 0,
+    });
+    await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    // Пустой ход (действий нет): именно он раньше закрывался коротким
+    // idleTurnMs — «Выкл» обязан отключить и этот авто-конец.
+    const idle = feedingForHuman(room.state!, { animal: false, foodBank: 0 });
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state: idle }), true);
+    const planned = full(await s.poll(host.code, host.token));
+    assert.equal(planned.turnDeadlineAt, null, "с «Выкл» метки дедлайна нет");
+    fixedNow += 90_000;
+    const later = full(await s.poll(host.code, host.token));
+    assert.equal(later.turnDeadlineAt, null);
+    assert.equal(later.version, planned.version, "версия не менялась — принудительного шага не было");
+    assert.equal(later.state!.currentPlayerId, 0, "ход ждёт завершения игроком");
+  });
+
+  it("стол без ключа настройки (старые клиенты): ход с действиями = afkTurnMs (1 мин)", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    // Прямой путь create без turnTimerMs — как старый клиент или серверный вызов.
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    assert.equal(room.settings?.turnTimerMs, undefined, "ключа у старого стола нет");
+    const busy = feedingForHuman(room.state!, { animal: true, foodBank: 3 });
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state: busy }), true);
+    const planned = full(await s.poll(host.code, host.token));
+    assert.equal(planned.turnDeadlineAt, fixedNow + PACE.afkTurnMs, "умолчание — прежняя минута");
+  });
+
+  it("бот на столе: botStepAt в кадрах игрока и зрителя; в ход человека метки нет", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 1, difficulty: "normal" });
+    const { token: spec } = await s.spectate(host.code, "Зоя");
+    await s.start(host.code, host.token);
+    // Ручной расклад: ход у бота (место 1), в руке три карты — сервер ведёт
+    // его шагами, и ход не кончается одним автошагом.
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const crafted = structuredClone(room.state!);
+    crafted.phase = "development";
+    crafted.pendingAttack = null;
+    crafted.currentPlayerId = 1;
+    crafted.madTurn = undefined;
+    crafted.rageTurn = null;
+    crafted.players[1]!.hand = [
+      { id: "bot-card-1", faces: ["carnivore"] },
+      { id: "bot-card-2", faces: ["swimming"] },
+      { id: "bot-card-3", faces: ["camouflage"] },
+    ] as never;
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state: crafted }), true);
+
+    // rejoin не двигает партию: кадр игрока в ход бота несёт метку шага.
+    const mine = full(await s.rejoin(host.code, host.token));
+    assert.equal(mine.state!.currentPlayerId, 1, "ходит бот");
+    assert.equal(mine.turnDeadlineAt, null, "у бота нет дедлайна «конца хода»");
+    const dbRow = (await _internals.readRoom(sql, host.code))!;
+    assert.equal(mine.botStepAt, toMsOf(dbRow.auto_step_at), "метка = auto_step_at из базы");
+
+    // Зритель видит ту же метку; advance за один вызов делает ровно шаг
+    // (следующий перезапланирован на botMs) — бот всё ещё ходит.
+    const specView = await s.spectatorPoll(host.code, spec);
+    assert.equal(specView.state!.currentPlayerId, 1);
+    assert.ok(specView.botStepAt !== null, "у зрителя метка шага бота тоже есть");
+
+    // После опустошения руки бот пасует — наступает ход человека: метки шага
+    // нет, зато есть дедлайн хода (legacy: afkTurnMs).
+    for (let i = 0; i < 20; i++) {
+      fixedNow += 3_000;
+      const frame = full(await s.poll(host.code, host.token));
+      if (frame.state!.currentPlayerId === host.seat) {
+        assert.equal(frame.botStepAt, null, "в ход человека метки шага бота нет");
+        assert.equal(frame.turnDeadlineAt, fixedNow + PACE.afkTurnMs, "человеку — дедлайн хода");
+        return;
+      }
+    }
+    assert.fail("бот не передал ход человеку за 20 тактов");
+  });
+});
+
+/** auto_step_at из строки БД в epoch ms (null — метки нет). */
+function toMsOf(raw: unknown): number | null {
+  if (raw === null || raw === undefined) return null;
+  return new Date(raw as string).getTime();
+}

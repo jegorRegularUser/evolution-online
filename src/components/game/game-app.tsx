@@ -16,12 +16,13 @@ import {
   type DragStartEvent,
   type Over,
 } from "@dnd-kit/core";
-import { BookOpen, Eye, LayoutGrid, List, Minimize2 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BookOpen, Eye, LayoutGrid, List, Minimize2, Trash2 } from "lucide-react";
+import { lazy, memo, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Toaster, toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { DialogShell } from "@/components/ui/dialog-shell";
 import { TRAITS } from "@/game/traits";
-import type { Animal, Card, FloraCard, GameAction, GameEvent, GameState, LogEntry, Plant, Player, TerritoryId, TraitId } from "@/game/types";
+import type { Animal, Card, FloraCard, GameAction, GameEvent, GameState, LogEntry, Plant, Player, TerritoryId, TraitId, WildEventId } from "@/game/types";
 import { TERRITORIES } from "@/game/types";
 import { currentActor, feedBlockReasonInfo, legalDefenseActions, legalDevActions, legalFeedActions } from "@/game/engine";
 import { canAttack, canPlantAttackTarget, canReceiveFood, canRageAttack, findAnimal, foodNeeded, hasTrait, isFed, liveScore, player } from "@/game/queries";
@@ -46,21 +47,32 @@ import { cn } from "@/lib/utils";
 import { sfx, type AmbientMood, type SfxId } from "@/lib/sfx";
 import { emptySession, recordGame, type SessionCounters } from "@/lib/stats";
 import { BG, MUTATION_ART, PHASE_ICON, TERRITORY_ART } from "@/lib/art";
-import { useGameStore, typingNamesOf, type NetUiState, type UiIntent } from "@/store/game-store";
+import { isSoloBotTable, useGameStore, typingNamesOf, type NetUiState, type UiIntent } from "@/store/game-store";
 import { AnimalCard, CardPreview, HandCard, PAIR_COLORS, PairPlate, type PairMark } from "./cards";
 import { FloraStrip } from "./cards-flora";
 import { PlantStrip } from "./cards-plants";
 import { ConfirmDialog } from "./confirm-dialog";
-import { Dice3D } from "./dice-3d";
 import { EventFeed, reactionsByChatId, type FeedItem } from "./event-feed";
-import { colorForSeat, PACE, REACTION_EMOJI } from "@/lib/net/shared";
+import { netKick, netReplaceWithBot, netSetBots } from "@/lib/net/api";
+import { colorForSeat, PACE, REACTION_EMOJI, type SeatInfo } from "@/lib/net/shared";
+import type { PendingNetItem } from "@/lib/net/session";
 import { HintNote } from "./hint-note";
 import { FoodCube } from "./icons";
 import { LobbyScreen } from "./net-screens";
-import { GameOverScreen, MenuScreen, RulesPanel } from "./screens";
+import { GameOverScreen, MenuScreen, RulesPanel, scoreRowName } from "./screens";
 import { EventSpotlight } from "./spotlight";
 import { SoundToggle } from "./sound-toggle";
 import { TopBar } from "./top-bar";
+import { TutorialHud } from "./tutorial-missions";
+import { CHALLENGES } from "@/game/challenges";
+import { challengesReport, profileGet } from "@/lib/profile/api";
+import { readStats } from "@/lib/stats";
+import { collectSpecimens, saveSpecimens } from "@/game/bestiarium";
+
+const LazyDice3D = lazy(async () => {
+  const module = await import("./dice-3d");
+  return { default: module.Dice3D };
+});
 
 /**
  * Вёрстка стола: «cozy» — компактное сукно по центру, «wide» — во всю ширину
@@ -157,6 +169,63 @@ interface Interaction {
 
 const NO_INTERACTION: Interaction = { highlight: false, dimmed: false, selected: false, danger: false, dropTarget: false };
 
+type RejectReason = "opponent" | "trait" | "target" | "drop" | "phase" | "hand" | "face";
+
+interface RejectHintState {
+  text: string;
+  x: number;
+  y: number;
+}
+
+const REJECT_COPY: Record<Lang, Record<RejectReason, string>> = {
+  ru: {
+    opponent: "Это животное соперника",
+    trait: "Для этого свойства нужен другой вид",
+    target: "Здесь это действие не применимо",
+    drop: "Бросок сюда не подходит",
+    phase: "Сейчас это действие недоступно",
+    hand: "В руке нет свободного слота",
+    face: "Тяните карту за нужную половину",
+  },
+  en: {
+    opponent: "This animal belongs to an opponent",
+    trait: "This trait needs a different species",
+    target: "This action cannot be used here",
+    drop: "This card cannot be dropped here",
+    phase: "This action is not available now",
+    hand: "There is no free slot in your hand",
+    face: "Drag the card by the face you want",
+  },
+};
+
+function RejectHint({ hint }: { hint: RejectHintState }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="pointer-events-none fixed z-[70]"
+      style={{ left: hint.x, top: hint.y, transform: "translateX(-50%)" }}
+    >
+      <HintNote
+        compact
+        tone="warning"
+        className="max-w-[min(22rem,calc(100vw-1.5rem))] shadow-[var(--shadow-card)]"
+      >
+        {hint.text}
+      </HintNote>
+    </div>
+  );
+}
+
+function readSeatToken(code: string): string | null {
+  if (!code || typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(`evo-seat-${code.toUpperCase()}`);
+  } catch {
+    return null;
+  }
+}
+
 // ── Перетаскивание (@dnd-kit): животные и карты руки ─────────────────────────
 
 /** Что за элемент едет: животное, карта руки, ряд, территория или стол растений. */
@@ -169,6 +238,11 @@ interface DndData {
   ownerId?: number;
   animalId?: string;
   cardId?: string;
+  /**
+   * Грань multi-карты, за которую её тянут (колонка арта под pointerdown).
+   * Нет — драг начат не с грани: грань подскажет выбор кликом или движок.
+   */
+  face?: number;
   playerId?: number;
   zoneId?: TerritoryId;
 }
@@ -238,6 +312,32 @@ function dndPointOf(e: PointerEvent | TouchEvent): { x: number; y: number } | nu
   return { x: e.clientX, y: e.clientY };
 }
 
+/**
+ * Бросок отпущен над рядом руки? Контейнер [data-hand-row] — цели броска там
+ * нет и быть не может: карта/зверь просто вернулись в руку. Возвращает false,
+ * если контейнера нет (фаза без руки) или точка не поймана.
+ */
+function pointInHand(point: { x: number; y: number } | null): boolean {
+  if (!point) return false;
+  const row = document.querySelector("[data-hand-row]");
+  if (!row) return false;
+  const r = row.getBoundingClientRect();
+  return point.x >= r.left && point.x <= r.right && point.y >= r.top && point.y <= r.bottom;
+}
+
+/**
+ * Жест был тапом, а не перетаскиванием: от исходного зажатия до броска палец
+ * почти не сместился. Порог больше допуска активации (tolerance 8) — тап с
+ * дрожанием пальца всё ещё тап. Мышь до порога 6px драг не включает вовсе,
+ поэтому ветка реально срабатывает только для «медленного тапа» пальцем.
+ */
+function isTapGesture(activatorEvent: Event | undefined, point: { x: number; y: number } | null): boolean {
+  if (!activatorEvent || !point) return false;
+  const start = dndPointOf(activatorEvent as PointerEvent | TouchEvent);
+  if (!start) return false;
+  return Math.hypot(point.x - start.x, point.y - start.y) < 10;
+}
+
 /** Куда встанет животное: до или после карточки-цели (по X пальца/курсора). */
 function dndSideOf(over: Over | null, point: { x: number; y: number } | null): "before" | "after" | null {
   const data = over?.data.current as DndData | undefined;
@@ -288,6 +388,31 @@ type DevCardAction = Extract<
   GameAction,
   { type: "devPlayTrait" | "devPlayPair" | "devPlayPlantTrait" | "devPlayPlantPair" }
 >;
+
+/** Подпись совпадает с номером на столе; кличка не скрывает номер животного. */
+function animalChoiceLabel(state: GameState, id: string, lang: Lang, withOwner = true): string {
+  const animal = findAnimal(state, id);
+  if (!animal) return translate(lang, "spot.animal");
+  const owner = state.players.find((p) => p.id === animal.ownerId);
+  const no = animal.no ?? (owner ? owner.animals.findIndex((a) => a.id === id) + 1 : 1);
+  const label = `${translate(lang, "game.pairNo", { n: no })}${animal.name ? ` «${animal.name}»` : ""}`;
+  return withOwner && owner ? `${owner.name}: ${label}` : label;
+}
+
+/** Роли пары направлены: первый участник должен иметь легальное действие в роли a. */
+function legalPairTargets(
+  actions: GameAction[],
+  intent: Extract<UiIntent, { kind: "playPair" | "playPlantPair" }>,
+): Set<string> {
+  const type = intent.kind === "playPair" ? "devPlayPair" : "devPlayPlantPair";
+  const targets = new Set<string>();
+  for (const action of actions) {
+    if (action.type !== type || action.cardId !== intent.cardId || action.face !== intent.face) continue;
+    if (!intent.first) targets.add(action.a);
+    else if (action.a === intent.first) targets.add(action.b);
+  }
+  return targets;
+}
 
 /** Набор id растений, на которые карта ляжет свойством (для подсветки при драге). */
 function legalPlantTargets(actions: GameAction[], cardId: string, face: number | null): Set<string> {
@@ -341,13 +466,137 @@ const FX_TONE: Record<FxBadge["tone"], string> = {
   info: "border-border-strong bg-surface text-fg",
 };
 
-function shakeEl(el: Element | null) {
+function shakeEl(el: Element | null, tier: 1 | 2 | 3 = 2) {
   if (!el) return;
-  el.classList.remove("anim-shake");
+  const cls = tier === 1 ? "anim-shake-1" : tier === 2 ? "anim-shake" : "anim-shake-3";
+  el.classList.remove("anim-shake-1", "anim-shake", "anim-shake-3");
   // Перезапуск анимации, если элемент уже трясся на этом кадре.
   void (el as HTMLElement).offsetWidth;
-  el.classList.add("anim-shake");
-  setTimeout(() => el.classList.remove("anim-shake"), 600);
+  el.classList.add(cls);
+  setTimeout(() => el.classList.remove(cls), 600);
+}
+
+// ── Волна 1: слои моментной библиотеки (дизайн-пакет §2) ──────────────────
+
+/** Последние известные габариты карточек животных и число их свойств: к
+ *  моменту эффекта гибели элемент уже снят со стола (состояние пост-фактум),
+ *  привидение и «крупная охота» работают по последнему известному кадру. */
+const lastAnimalRects = new Map<string, { x: number; y: number; w: number; h: number }>();
+const lastTraitCounts = new Map<string, number>();
+
+/** Одноразовые оверлеи (окаменение, иней, вспышка, огонь): живут вне React —
+ *  эффекты не требуют перерендера и сами убираются по таймеру. */
+function spawnOverlay(className: string, ms: number, style?: Partial<CSSStyleDeclaration>) {
+  if (document.documentElement.dataset.anim === "off") return;
+  const el = document.createElement("div");
+  el.className = className;
+  if (style) Object.assign(el.style, style);
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), ms);
+}
+
+/** Имя события «Дикий мир»: общий словарь для бейджей и спотлайта. */
+const WILD_NAME_KEYS: Record<WildEventId, TKey> = {
+  iceAge: "wild.name.iceAge",
+  goldenAge: "wild.name.goldenAge",
+  resettlement: "wild.name.resettlement",
+  cropFailure: "wild.name.cropFailure",
+  meteorite: "wild.name.meteorite",
+  wildfire: "wild.name.wildfire",
+};
+
+/** Полёт карты из руки к животному (§2.2, FLIP через WAAPI — тот же идиом,
+ *  что у food-fly, без новой зависимости motion): перед dispatch копируем
+ *  карточку и её габарит, на событии traitPlaced/animalPlaced доигрываем
+ *  полёт до цели. dnd-kit-овский DragOverlay не трогаем — конфликта нет. */
+let cardFlight: { cardId: string; node: HTMLElement; rect: DOMRect } | null = null;
+
+function animMult(): number {
+  return document.documentElement.dataset.anim === "fast" ? 0.45 : 1;
+}
+
+function captureCardFlight(cardId: string) {
+  if (document.documentElement.dataset.anim === "off") {
+    cardFlight = null;
+    return;
+  }
+  const el = document.querySelector<HTMLElement>(`[data-card-id="${CSS.escape(cardId)}"]`);
+  if (!el) {
+    cardFlight = null;
+    return;
+  }
+  const rect = el.getBoundingClientRect();
+  cardFlight = { cardId, node: el.cloneNode(true) as HTMLElement, rect };
+}
+
+function playCardFlight(animalId: string) {
+  const flight = cardFlight;
+  cardFlight = null;
+  if (!flight) return;
+  const target = document.querySelector(`[data-animal-id="${animalId}"]`);
+  if (!target) return;
+  const t = target.getBoundingClientRect();
+  const node = flight.node;
+  node.removeAttribute("data-card-id");
+  Object.assign(node.style, {
+    position: "fixed",
+    left: "0",
+    top: "0",
+    margin: "0",
+    zIndex: "61",
+    pointerEvents: "none",
+    width: `${flight.rect.width}px`,
+    height: `${flight.rect.height}px`,
+    willChange: "transform",
+  });
+  document.body.appendChild(node);
+  const dx = t.left + t.width / 2 - (flight.rect.left + flight.rect.width / 2);
+  const dy = t.top + t.height / 2 - (flight.rect.top + flight.rect.height / 2);
+  const scale = Math.min(1, (t.width * 0.45) / flight.rect.width);
+  // Дуга: подъём над серединой пути — anticipation/дуга из Disney-12 (§2.2).
+  const anim = node.animate(
+    [
+      { transform: `translate(${flight.rect.left}px, ${flight.rect.top}px) scale(1)`, opacity: 1 },
+      {
+        transform: `translate(${flight.rect.left + dx * 0.4}px, ${flight.rect.top + dy * 0.4 - 34}px) scale(${(1 + scale) / 2})`,
+        opacity: 1,
+      },
+      { transform: `translate(${flight.rect.left + dx}px, ${flight.rect.top + dy}px) scale(${scale})`, opacity: 0.2 },
+    ],
+    { duration: Math.round(380 * animMult()), easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" },
+  );
+  const cleanup = () => node.remove();
+  anim.onfinish = cleanup;
+  anim.oncancel = cleanup;
+}
+
+/** Хит-стоп: короткая заморозка сукна в момент удара — 50-100 мс (§2.1). */
+function hitStop(ms: number) {
+  if (document.documentElement.dataset.anim === "off") return;
+  const felt = document.querySelector(".felt");
+  if (!felt) return;
+  felt.classList.add("hit-stop");
+  setTimeout(() => felt.classList.remove("hit-stop"), ms);
+}
+
+/** Рывок хищника к жертве (§2.2 lunge): вектор между карточками в CSS-переменные,
+ *  transform-only; рыскает только хищник — жертву встряхивает тир шейка. */
+function lungeToward(carnEl: Element | null, preyEl: Element | null) {
+  if (!carnEl || !preyEl || document.documentElement.dataset.anim === "off") return;
+  const a = carnEl.getBoundingClientRect();
+  const b = preyEl.getBoundingClientRect();
+  const dx = b.left + b.width / 2 - (a.left + a.width / 2);
+  const dy = b.top + b.height / 2 - (a.top + a.height / 2);
+  // Дальние цели не тянут карточку через весь стол — короткий выпад по направлению.
+  const len = Math.hypot(dx, dy) || 1;
+  const reach = Math.min(len * 0.3, 90);
+  const el = carnEl as HTMLElement;
+  el.style.setProperty("--lunge-x", `${Math.round((dx / len) * reach)}px`);
+  el.style.setProperty("--lunge-y", `${Math.round((dy / len) * reach)}px`);
+  el.classList.remove("anim-lunge");
+  void el.offsetWidth;
+  el.classList.add("anim-lunge");
+  setTimeout(() => el.classList.remove("anim-lunge"), 500);
 }
 
 /**
@@ -374,6 +623,15 @@ function useActionFx(state: GameState | null): FxBadge[] {
     const floraEl = (id: string) => document.querySelector(`[data-flora-id="${id}"]`);
     const sectionEl = (id: number) => document.querySelector(`[data-player-section="${id}"]`);
 
+    // Кэш габаритов/свойств живых животных: после действия элемент уже снят,
+    // эффекты гибели работают по последнему известному кадру (см. ниже).
+    for (const el of document.querySelectorAll<HTMLElement>("[data-animal-id]")) {
+      const id = el.dataset.animalId!;
+      const r = el.getBoundingClientRect();
+      if (r.width > 0) lastAnimalRects.set(id, { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) });
+    }
+    for (const p of state.players) for (const a of p.animals) lastTraitCounts.set(a.id, a.traits.length);
+
     const created: FxBadge[] = [];
     const push = (point: { x: number; y: number }, text: string, tone: FxBadge["tone"], image?: string) => {
       idRef.current += 1;
@@ -383,14 +641,29 @@ function useActionFx(state: GameState | null): FxBadge[] {
     for (const e of state.lastEvents) {
       switch (e.kind) {
         case "huntDeclared": {
-          shakeEl(animalEl(e.carnivoreId));
-          shakeEl(animalEl(e.preyId));
-          push(anchorOf(animalEl(e.preyId) ?? animalEl(e.carnivoreId)), liveT("fx.attack"), "attack");
+          // Слоёная атака (§2.2): рывок хищника к жертве, жертву встряхивает
+          // тир 2. Раньше тряслись оба — теперь хищник движется.
+          const carnEl = animalEl(e.carnivoreId);
+          const preyEl = animalEl(e.preyId);
+          lungeToward(carnEl, preyEl);
+          shakeEl(preyEl, 2);
+          push(anchorOf(preyEl ?? carnEl), liveT("fx.attack"), "attack");
           break;
         }
-        case "preyKilled":
+        case "preyKilled": {
+          // Крупная добыча (3+ свойства) — эпик-слой: хит-стоп 100 мс и шейк
+          // тира 3; обычная — 60 мс и прежний удар (§2.1). Эпик сам себя
+          // дозирует: три свойства на жертве — редкость.
+          const big = (lastTraitCounts.get(e.preyId) ?? 0) >= 3;
+          if (big) {
+            hitStop(100);
+            shakeEl(document.querySelector(".felt"), 3);
+          } else {
+            hitStop(60);
+          }
           push(anchorOf(animalEl(e.carnivoreId)), liveT("fx.preyEaten"), "attack");
           break;
+        }
         case "defenseUsed": {
           const prey = animalEl(e.preyId);
           if (e.defense === "tailLoss") {
@@ -505,6 +778,69 @@ function useActionFx(state: GameState | null): FxBadge[] {
           push(anchorOf(sectionEl(e.playerId)), caption, tone, MUTATION_ART.flip);
           break;
         }
+        // ── Волна 2: «Падальщики» и «Дикий мир» (эффекты — волна 1, §2.2) ──
+        case "scavenged":
+          push(anchorOf(sectionEl(e.playerId)), liveT("fx.scavenge"), "good");
+          break;
+        case "traitPlaced":
+          // Полёт карты из руки (кэш заполнен только при СВОЁМ дропе:
+          // чужие traitPlaced проходят без полёта — снапшот чужой руки невидим).
+          playCardFlight(e.animalId);
+          break;
+        case "animalPlaced":
+          playCardFlight(e.animalId);
+          break;
+        case "wildEventPlanned":
+          // Прогноз виден всем и заранее (input randomness, §1.3): бейдж по
+          // центру верхней кромки, где его найдёт каждый.
+          push({ x: Math.round(window.innerWidth / 2), y: 88 }, liveT("fx.wildPlanned", { year: e.year, event: liveT(WILD_NAME_KEYS[e.event]) }), "info");
+          break;
+        case "wildEventStarted": {
+          const felt = document.querySelector(".felt");
+          if (e.event === "iceAge") {
+            spawnOverlay("frost-veil", 1700);
+            shakeEl(felt, 1);
+          } else if (e.event === "goldenAge") {
+            if (felt) {
+              felt.classList.remove("anim-felt-gold");
+              void (felt as HTMLElement).offsetWidth;
+              felt.classList.add("anim-felt-gold");
+              setTimeout(() => felt.classList.remove("anim-felt-gold"), 1000);
+            }
+          }
+          push({ x: Math.round(window.innerWidth / 2), y: 88 }, liveT("fx.wildStart", { year: e.year, event: liveT(WILD_NAME_KEYS[e.event]) }), e.event === "goldenAge" ? "good" : "info");
+          break;
+        }
+        case "wildMeteorite": {
+          spawnOverlay("meteor-flash", 1150);
+          shakeEl(document.querySelector(".felt"), 3);
+          const feltAnchor = anchorOf(document.querySelector(".felt"));
+          // Число потерь — канал данных: масштаб потери читается до текста (§2.1).
+          const dmg = document.createElement("div");
+          dmg.className = "fx-damage";
+          dmg.textContent = liveT("fx.meteoriteLoss", { n: e.affected });
+          dmg.style.left = `${feltAnchor.x}px`;
+          dmg.style.top = `${feltAnchor.y}px`;
+          if (document.documentElement.dataset.anim !== "off") {
+            document.body.appendChild(dmg);
+            setTimeout(() => dmg.remove(), 950);
+          }
+          break;
+        }
+        case "wildResettlement": {
+          const moved = new Set<number>();
+          for (const m of e.moves) {
+            moved.add(m.fromPlayerId);
+            moved.add(m.toPlayerId);
+          }
+          for (const id of moved) shakeEl(sectionEl(id), 1);
+          push({ x: Math.round(window.innerWidth / 2), y: 88 }, liveT("fx.resettle", { n: e.moves.length }), "info");
+          break;
+        }
+        case "wildWildfire":
+          spawnOverlay("fire-edge", 1450);
+          push({ x: Math.round(window.innerWidth / 2), y: 88 }, liveT("fx.wildfire", { n: e.burned }), "bad");
+          break;
         default:
           break;
       }
@@ -519,6 +855,13 @@ function useActionFx(state: GameState | null): FxBadge[] {
         void (felt as HTMLElement).offsetWidth;
         felt.classList.add("anim-felt-flash");
         setTimeout(() => felt.classList.remove("anim-felt-flash"), 1000);
+      }
+      // Привидение-окаменелость на месте каждой карточки (§2.2: смерть честная,
+      // не насмешливая) — по последнему известному габариту карточки.
+      for (const e of state.lastEvents) {
+        if (e.kind !== "animalDied") continue;
+        const r = lastAnimalRects.get(e.animalId);
+        if (r) spawnOverlay("fossil-ghost", 980, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
       }
     }
 
@@ -581,7 +924,9 @@ function eventSfx(state: GameState, e: GameEvent): SfxId | null {
     case "plantAttack":
       return "hunt";
     case "preyKilled":
-      return "kill";
+      // Крупная добыча (3+ свойства) — эпик-звук (§2.2, «5% моментов»);
+      // счётчик свойств добычи — последний известный живой кадр.
+      return (lastTraitCounts.get(e.preyId) ?? 0) >= 3 ? "bigKill" : "kill";
     case "defenseUsed":
       return e.defense === "running" ? "defense" : e.defense === "none" ? null : "dodge";
     case "foodFromBank":
@@ -636,6 +981,27 @@ function eventSfx(state: GameState, e: GameEvent): SfxId | null {
       return "leave";
     case "paralyzed":
       return "dodge";
+    // ── Волна 2 + волна 1 (дизайн-пакет §2.2): звук — слой моментной
+    // библиотеки. Прогноз тихий: его говорят бейдж и карточка спотлайта;
+    // «Переселение» звучит стартом события (relocate) — дубль не нужен.
+    case "scavenged":
+      return "scavenge";
+    case "wildEventPlanned":
+      return null;
+    case "wildEventStarted":
+      return e.event === "iceAge"
+        ? "frost"
+        : e.event === "goldenAge"
+          ? "golden"
+          : e.event === "resettlement"
+            ? "relocate"
+            : null;
+    case "wildResettlement":
+      return null;
+    case "wildMeteorite":
+      return "meteor";
+    case "wildWildfire":
+      return "wildfire";
     case "gameFinished":
       return null;
   }
@@ -794,7 +1160,7 @@ function useFoodFly(state: GameState | null): { flies: FlyingFood[]; remove: (id
           push(felt(), centerOf(animalEl(e.animalId)), "blue");
           break;
         case "foodToFat":
-          push(felt(), centerOf(animalEl(e.animalId)), "yellow");
+          push(centerOf(animalEl(e.animalId)), centerOf(animalEl(e.animalId)), "yellow");
           break;
         default:
           break;
@@ -959,6 +1325,183 @@ function TableBanners({ state }: { state: GameState }) {
   );
 }
 
+/** Понятный текст для сетевого отказа замены игрока ботом. */
+function replaceBotErrorText(lang: Lang, error: string, code?: string): string {
+  if (code === "player-online") {
+    return translate(lang, "netBot.playerOnline");
+  }
+  if (code === "host-only") {
+    return translate(lang, "netBot.hostOnly");
+  }
+  if (code === "game-finished") {
+    return translate(lang, "netBot.gameFinished");
+  }
+  if (code === "player-online" || code === "kick-self" || code === "kick-bot") return error;
+  // Текст ошибки транспорта у браузера машинный («Failed to fetch»), не локализованный.
+  if (/failed to fetch|network|load failed/i.test(error)) {
+    return translate(lang, "netBot.noConnection");
+  }
+  return error;
+}
+
+/** Вызов реального server-метода замены; токен места лежит в localStorage. */
+async function requestOfflineBotReplacement(
+  net: NetUiState,
+  seat: SeatInfo,
+  lang: Lang,
+): Promise<string | null> {
+  const token = readSeatToken(net.code);
+  if (!token) {
+    return translate(lang, "netBot.noHostToken");
+  }
+  try {
+    // В лобби replaceWithBot намеренно отвергает статус playing. Поэтому
+    // там используем поддержанную сервером пару «убрать человека + добавить
+    // бота»; в партии вызываем точный специализированный метод.
+    if (net.status === "lobby") {
+      const kicked = await netKick({ data: { code: net.code, token, seat: seat.seat } });
+      if (!kicked.ok) {
+        const failed = kicked as { error: string; code?: string };
+        return replaceBotErrorText(lang, failed.error, failed.code);
+      }
+      const botCount = net.seats.filter((item) => item.isAI).length + 1;
+      const bots = await netSetBots({ data: { code: net.code, token, count: botCount } });
+      if (!bots.ok) {
+        const failed = bots as { error: string; code?: string };
+        return replaceBotErrorText(lang, failed.error, failed.code);
+      }
+      return null;
+    }
+    const response = await netReplaceWithBot({ data: { code: net.code, token, seat: seat.seat } });
+    if (response.ok) return null;
+    const failed = response as { error: string; code?: string };
+    return replaceBotErrorText(lang, failed.error, failed.code);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return replaceBotErrorText(lang, message);
+  }
+}
+
+/** Общий обработчик кнопок «Заменить ботом» в лобби и партии. */
+function useOfflineBotReplacement(net: NetUiState | null) {
+  const lang = useLang();
+  const [busySeat, setBusySeat] = useState<number | null>(null);
+  const replace = useCallback(
+    async (seat: SeatInfo) => {
+      if (!net || busySeat !== null) return;
+      setBusySeat(seat.seat);
+      try {
+        const error = await requestOfflineBotReplacement(net, seat, lang);
+        if (error) {
+          toast.error(error);
+        } else {
+          toast.success(translate(lang, "netBot.replaced", { name: seat.name }));
+          // Старый текст отказа старта относился к уже исправленному составу.
+          useGameStore.getState().clearNetError();
+        }
+      } finally {
+        setBusySeat(null);
+      }
+    },
+    [busySeat, lang, net],
+  );
+  return { replace, busySeat };
+}
+
+/** Предстартовое объяснение без технического кода ошибки сервера. */
+function OfflineStartNotice({
+  net,
+  busySeat,
+  onReplace,
+}: {
+  net: NetUiState;
+  busySeat: number | null;
+  onReplace: (seat: SeatInfo) => void;
+}) {
+  const t = useT();
+  const offline = net.seats.filter((seat) => !seat.isAI && !seat.resigned && !seat.online);
+  // Причина «кто-то не в сети» приходит машинным кодом ошибки (стор хранит его
+  // рядом с текстом): players-offline — старт с офлайн-игроками, player-online —
+  // отказ замены ещё онлайн-игрока. По локализованному тексту не ветвимся.
+  const hasOfflineError = net.errorCode === "players-offline" || net.errorCode === "player-online";
+  if (!offline.length && !hasOfflineError) return null;
+  const replaceable = offline.filter((seat) => seat.disconnected);
+  return (
+    <div
+      data-offline-start-notice
+      role="region"
+      aria-label={t("netBot.offlineAria")}
+      className="fixed inset-x-3 top-20 z-50 mx-auto flex max-w-xl flex-col gap-2 rounded-[var(--radius-lg)] border border-clay/40 bg-surface/95 p-3 text-sm shadow-[var(--shadow-card)] backdrop-blur-sm"
+    >
+      <p className="text-muted">{t("netBot.offlineNotice")}</p>
+      <div className="flex flex-wrap gap-2">
+        {offline.map((seat) => (
+          <Button
+            key={seat.seat}
+            type="button"
+            size="sm"
+            className="max-sm:min-h-11"
+            data-replace-bot-lobby={seat.seat}
+            disabled={!seat.disconnected || busySeat !== null}
+            title={seat.disconnected ? undefined : t("netBot.replaceWaitTitle")}
+            onClick={() => onReplace(seat)}
+          >
+            {t("netBot.replaceSeat", { name: seat.name })}
+          </Button>
+        ))}
+      </div>
+      {replaceable.length === 0 ? (
+        <p className="text-xs text-subtle">{t("netBot.replaceThresholdHint")}</p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Тихая плашка ожидания ходящего игрока без намёка на его вину.
+ *  Живёт в одной строке с панелью реакций (см. ReactionsLayer), чтобы две
+ *  тонкие строки не съедали высоту стола. На телефоне — короткий текст
+ *  («Ждём: имя · N с») с обрезкой: строка не переносится и не наращивает
+ *  вторую линию, обратный отсчёт тикает как и раньше. */
+function WaitingPlayerNotice({ actor, net }: { actor: Player | null; net: NetUiState | null }) {
+  const t = useT();
+  const lang = useLang();
+  const [, setTick] = useState(0);
+  const seat = actor && net ? net.seats.find((item) => item.seat === actor.id) : undefined;
+  const waiting = Boolean(actor && !actor.isAI && seat && !seat.resigned && !seat.online);
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = window.setInterval(() => setTick((value) => value + 1), 250);
+    return () => window.clearInterval(timer);
+  }, [waiting]);
+  if (!waiting || !actor || !seat || !net) return null;
+  const remaining = net.turnDeadlineAt
+    ? Math.max(0, Math.ceil((net.turnDeadlineAt - (Date.now() + net.serverOffsetMs)) / 1000))
+    : null;
+  const name = scientistName(actor.name, lang);
+  const short = remaining !== null ? t("netBot.waitingShort", { name, n: remaining }) : t("netBot.waitingShortIdle", { name });
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-waiting-player={actor.id}
+      className="pointer-events-none mr-auto flex min-w-0 flex-1 items-center gap-2 rounded-full border border-border bg-surface/90 px-3 py-1.5 text-xs text-muted shadow-[var(--shadow-card)] sm:flex-none sm:w-fit"
+    >
+      <span className="size-1.5 shrink-0 rounded-full bg-muted/70" aria-hidden />
+      {/* Полный текст — с sm; на телефоне короткий, чтобы строка реакций
+          оставалась одной компактной полосой. aria/live читают полный. */}
+      <span className="min-w-0 truncate sm:hidden" aria-hidden>
+        {short}
+      </span>
+      <span className="hidden min-w-0 sm:inline">
+        {t("netBot.waitingPlayer", { name })}
+        {remaining !== null
+          ? t("netBot.waitingTurnEnds", { n: remaining })
+          : t("netBot.waitingReconnecting")}
+      </span>
+    </div>
+  );
+}
+
 export function GameApp() {
   const state = useGameStore((s) => s.state);
   const rulesOpen = useGameStore((s) => s.rulesOpen);
@@ -966,9 +1509,93 @@ export function GameApp() {
   const net = useGameStore((s) => s.net);
   const netAgain = useGameStore((s) => s.netAgain);
   const leaveNet = useGameStore((s) => s.leaveNet);
+  const animMode = useGameStore((s) => s.animMode);
+  const setEquippedCosmetics = useGameStore((s) => s.setEquippedCosmetics);
+  const equippedCosmetics = useGameStore((s) => s.equippedCosmetics);
   const t = useT();
+  const [confirmAgain, setConfirmAgain] = useState(false);
+  const [lobbyReplaceTarget, setLobbyReplaceTarget] = useState<SeatInfo | null>(null);
+  const { replace: replaceLobbyBot, busySeat: lobbyBusySeat } = useOfflineBotReplacement(net);
+  const spectator = Boolean(net && (net.spectating || net.seat === -2));
+  const isHost = Boolean(net && !spectator && net.seat === net.hostSeat);
+  useEffect(() => {
+    if (state?.phase !== "gameOver") setConfirmAgain(false);
+  }, [state?.phase]);
+  useEffect(() => {
+    // Режим живых эффектов (волна 1): CSS читает [data-anim] на <html>,
+    // хит-стоп/оверлеи в useActionFx — dataset напрямую.
+    document.documentElement.dataset.anim = animMode;
+  }, [animMode]);
+  // Экипированная косметика (волна 3б): один запрос на сессию; сукно и кубик
+  // применяются по item id из каталога. Тихо при оффлайне — косметика не критична.
+  useEffect(() => {
+    profileGet()
+      .then((res) => {
+        if (!res.ok) return;
+        const map: Partial<Record<string, string>> = {};
+        for (const e of res.equipped) map[e.slot] = e.itemId;
+        setEquippedCosmetics(map);
+      })
+      .catch(() => {});
+  }, [setEquippedCosmetics]);
+  // Отчёт «Вызовов» — один раз на финал (волна 3а): метрики из движка
+  // (сервер-авторитарные, пережили F5) + подвиги + разовая миграция старых
+  // достижений. Тиры оплачивает сервер идемпотентно, кап в день — на нём.
+  const challengesReportedRef = useRef(false);
+  // Отчёт — раз на ПАРТИЮ: смена стола сбрасывает флаг, иначе вторая партия
+  // в этой сессии ушла бы без отчёта (нашло ревью волны 4).
+  const reportedForRoomRef = useRef<string>("");
+  const roomCodeNow = net?.code ?? "";
+  if (roomCodeNow && reportedForRoomRef.current !== roomCodeNow) {
+    reportedForRoomRef.current = roomCodeNow;
+    challengesReportedRef.current = false;
+  }
+  useEffect(() => {
+    if (state?.phase !== "gameOver" || challengesReportedRef.current) return;
+    challengesReportedRef.current = true;
+    const stats = state.stats;
+    if (!stats) return; // старые сейвы без накопителя — вызовы не теряют ничего
+    const feats = CHALLENGES.filter((c) => c.feat && c.feat(stats)).map((c) => c.id);
+    let retro: string[] | undefined;
+    try {
+      if (!localStorage.getItem("evo-retro-challenges")) {
+        retro = Object.keys(readStats().achievements);
+        localStorage.setItem("evo-retro-challenges", "1");
+      }
+    } catch {
+      retro = undefined;
+    }
+    // Бестиарий (волна 4б): именованные животные попадают в альбом.
+    try {
+      const mode = "net" as const;
+      const specimens = collectSpecimens(state, mode);
+      if (specimens.length) saveSpecimens(specimens);
+    } catch {
+      // альбом — не критичный путь
+    }
+    challengesReport({ data: { stats, feats, retro } })
+      .then((res) => {
+        if (!res.ok) return;
+        const coins = res.claimed.reduce((sum, c) => sum + c.coins, 0);
+        if (coins > 0) {
+          sfx.play("cheer");
+          toast(res.capped ? t("challenges.dailyCap") : t("challenges.reward", { n: coins }));
+        }
+      })
+      .catch(() => {
+        // Оффлайн/ошибка сети: метрики не теряются (в состоянии комнаты),
+        // отчёт уйдёт с следующей завершённой партией.
+      });
+  }, [state?.phase, state?.stats, t]);
+  useEffect(() => {
+    // Модалки не должны переезжать вместе с новым столом после ухода/возврата.
+    setLobbyReplaceTarget(null);
+  }, [net?.code]);
+  const againBody = t("final.againBody");
+  const againConfirm = t("final.againConfirm");
+  const waitingForHost = t("final.waitingHost");
 
-  // Модалки (правила, статистика, обучение) звучат тихим свушем на вход и выход.
+  // Модалки (правила, статистика) звучат тихим свушем на вход и выход.
   const openRules = useCallback(() => {
     sfx.play("modal");
     setRulesOpen(true);
@@ -1009,6 +1636,28 @@ export function GameApp() {
     return (
       <>
         <LobbyScreen />
+        {isHost ? (
+          <OfflineStartNotice
+            net={net}
+            busySeat={lobbyBusySeat}
+            onReplace={(seat) => setLobbyReplaceTarget(seat)}
+          />
+        ) : null}
+        {lobbyReplaceTarget ? (
+          <ConfirmDialog
+            title={t("netBot.confirmTitle")}
+            body={t("netBot.confirmBody", { name: lobbyReplaceTarget.name })}
+            confirmLabel={t("netBot.confirm")}
+            cancelLabel={t("common.cancel")}
+            tone="danger"
+            onConfirm={() => {
+              const target = lobbyReplaceTarget;
+              setLobbyReplaceTarget(null);
+              if (target) void replaceLobbyBot(target);
+            }}
+            onClose={() => setLobbyReplaceTarget(null)}
+          />
+        ) : null}
         {rulesOpen ? <RulesPanel onClose={closeRules} /> : null}
         <Toaster {...TOASTER_OPTS} />
       </>
@@ -1044,17 +1693,84 @@ export function GameApp() {
       ) : null}
       <Table />
       {state.phase === "gameOver" && state.scores ? (
-        <GameOverScreen
-          scores={state.scores}
-          winnerIds={state.winnerIds ?? []}
-          humanId={state.humanId}
-          // Зрителю повтор недоступен: у него нет места, сервер отклонит.
-          {...(net.spectating ? {} : { onAgain: () => void netAgain() })}
-          onMenu={leaveNet}
+        spectator ? (
+          <SpectatorGameOver state={state} onMenu={leaveNet} />
+        ) : (
+          <GameOverScreen
+            scores={state.scores}
+            winnerIds={state.winnerIds ?? []}
+            humanId={state.humanId}
+            // Повтор доступен только хосту: сервер сбрасывает финал для всех.
+            {...(isHost ? { onAgain: () => setConfirmAgain(true) } : {})}
+            onMenu={leaveNet}
+          />
+        )
+      ) : null}
+      {!spectator && state.phase === "gameOver" && state.scores && !isHost ? (
+        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-50 flex justify-center px-4">
+          <HintNote compact className="max-w-sm shadow-[var(--shadow-card)]">
+            {waitingForHost}
+          </HintNote>
+        </div>
+      ) : null}
+      {confirmAgain ? (
+        <ConfirmDialog
+          title={t("final.again")}
+          body={againBody}
+          confirmLabel={againConfirm}
+          cancelLabel={t("common.cancel")}
+          tone="danger"
+          onConfirm={() => {
+            setConfirmAgain(false);
+            void netAgain();
+          }}
+          onClose={() => setConfirmAgain(false)}
         />
       ) : null}
       {rulesOpen ? <RulesPanel onClose={closeRules} /> : null}
       <Toaster {...TOASTER_OPTS} />
+    </div>
+  );
+}
+
+/**
+ * Финал для зрителя: в сетевом снимке его humanId служебный, поэтому обычный
+ * экран нельзя отдавать с персональной победой/поражением и местом №1.
+ * Показываем только нейтральный заголовок и общий счёт стола.
+ */
+function SpectatorGameOver({ state, onMenu }: { state: GameState; onMenu: () => void }) {
+  const t = useT();
+  const lang = useLang();
+  const rows = [...(state.scores ?? [])].sort((a, b) => b.total - a.total || b.discard - a.discard);
+  const winners = new Set(state.winnerIds ?? []);
+  const title = t("final.spectatorTitle");
+  const subtitle = t("final.spectatorSubtitle");
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-3 sm:p-4">
+      <div className="relative flex max-h-[94dvh] w-full max-w-lg flex-col overflow-hidden rounded-[var(--radius-xl)] border border-border bg-surface shadow-[var(--shadow-card)]">
+        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-7">
+          <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-muted">{t("final.kicker")}</p>
+          <h2 className="mt-2 text-3xl">{title}</h2>
+          <p className="mt-2 text-sm text-muted">{subtitle}</p>
+          <ul aria-label={t("final.scoreAria")} className="mt-5 space-y-2">
+            {rows.map((row, index) => (
+              <li key={row.playerId} className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-border bg-surface-2/50 px-3 py-2 text-sm">
+                <span className="font-medium text-fg">
+                  {index + 1}. {scoreRowName(row, lang)}
+                  {winners.has(row.playerId) ? <span className="ml-2 text-xs text-accent">★</span> : null}
+                </span>
+                <span className="font-display tabular-nums text-fg">{row.total}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="border-t border-border bg-surface p-4 sm:px-7">
+          <Button variant="secondary" className="w-full" size="md" onClick={onMenu}>
+            {t("final.menu")}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1135,13 +1851,18 @@ function useFeedItems(state: GameState, net: NetUiState | null): FeedItem[] {
       // нет, но ник должен читаться — тот же нейтральный тон, что в лобби.
       const color = colorOfSeat.get(m.seat) ?? colorOfName(m.name) ?? NEUTRAL_AUTHOR_COLOR;
       const rs = byChat.get(m.id);
+      // Системная реплика «Стола» (key+params от сервера): текст собирается
+      // по ключу на языке рендера, русский text — фолбэк для старых строк;
+      // ник системной реплики — по ключу, обычные ники — как есть.
+      const text = m.key ? translate(lang, m.key as TKey, m.params ?? undefined) : m.text;
+      const playerName = m.key ? translate(lang, "chat.table") : scientistName(m.name, lang);
       rows.push({
         sortAt: m.at,
         item: {
           id: `chat-${m.id}`,
           kind: "chat",
-          text: m.text,
-          playerName: m.name,
+          text,
+          playerName,
           at: m.at,
           // Место автора: 0..7 — игроки, -1 — ожидающие, -2 — зрители.
           // Нужно вкладке «Зрители» в журнале.
@@ -1166,21 +1887,135 @@ function useFeedItems(state: GameState, net: NetUiState | null): FeedItem[] {
   }, [state.log, state.players, chat, system, seats, reactions, myName, lang]);
 }
 
+/**
+ * UI-обёртка над сетевым dispatch: стор уже защищает повторную отправку, а
+ * здесь держим короткое состояние «отправляется» до ACK/смены кадра. Так
+ * индикатор работает и при fetch-отказе, который session оставляет pending.
+ */
+function usePendingAction(
+  state: GameState,
+  net: NetUiState | null,
+  storeDispatch: (action: GameAction) => void,
+): { dispatch: (action: GameAction) => void; pending: PendingNetItem | null } {
+  const [pending, setPending] = useState<PendingNetItem | null>(null);
+  const pendingRef = useRef<PendingNetItem | null>(null);
+  const stateAtSubmitRef = useRef<GameState | null>(null);
+  const timerRef = useRef<number | null>(null);
+
+  const clear = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    pendingRef.current = null;
+    stateAtSubmitRef.current = null;
+    setPending(null);
+  }, []);
+
+  const fail = useCallback(() => {
+    if (!pendingRef.current) return;
+    clear();
+    // Тост собирается в момент события (не рендера) — живой язык честный.
+    toast.error(liveT("net.actionFailed"));
+  }, [clear]);
+
+  useEffect(() => {
+    if (!pending) return;
+    // Свежий state означает ACK/следующий кадр: действие больше не pending.
+    if (stateAtSubmitRef.current && stateAtSubmitRef.current !== state) {
+      clear();
+      return;
+    }
+    timerRef.current = window.setTimeout(fail, 8000);
+    return () => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [clear, fail, pending, state]);
+
+  useEffect(() => {
+    if (!pending || !net?.error) return;
+    // Серверный отказ уже превратится в тост существующим эффектом Table.
+    clear();
+  }, [clear, net?.error, pending]);
+
+  useEffect(() => {
+    if (!pending) return;
+    const onUnhandled = (event: PromiseRejectionEvent) => {
+      const reason = String(event.reason ?? "");
+      if (!/failed to fetch|network|load failed|fetch/i.test(reason)) return;
+      event.preventDefault();
+      fail();
+    };
+    window.addEventListener("unhandledrejection", onUnhandled);
+    return () => window.removeEventListener("unhandledrejection", onUnhandled);
+  }, [fail, pending]);
+
+  const dispatch = useCallback(
+    (action: GameAction) => {
+      if (!net || net.spectating || pendingRef.current) {
+        storeDispatch(action);
+        return;
+      }
+      const item: PendingNetItem = {
+        kind: "action",
+        id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
+        action,
+      };
+      pendingRef.current = item;
+      stateAtSubmitRef.current = state;
+      setPending(item);
+      storeDispatch(action);
+    },
+    [net, state, storeDispatch],
+  );
+
+  return { dispatch, pending };
+}
+
+function PendingActionHint({ pending }: { pending: PendingNetItem | null }) {
+  const t = useT();
+  if (!pending) return null;
+  return (
+    <span
+      data-pending-action={pending.id}
+      role="status"
+      aria-live="polite"
+      className="mr-auto inline-flex items-center gap-1.5 text-xs text-muted"
+    >
+      <span className="size-2 animate-pulse rounded-full bg-accent" aria-hidden />
+      {t("net.sending")}
+    </span>
+  );
+}
+
 function Table() {
   const state = useGameStore((s) => s.state)!;
+  const equippedCosmetics = useGameStore((s) => s.equippedCosmetics);
   const intent = useGameStore((s) => s.intent);
   const logOpen = useGameStore((s) => s.logOpen);
   const logUnread = useGameStore((s) => s.logUnread);
-  const dispatch = useGameStore((s) => s.dispatch);
+  const storeDispatch = useGameStore((s) => s.dispatch);
   const setIntent = useGameStore((s) => s.setIntent);
   const setLogOpen = useGameStore((s) => s.setLogOpen);
   const setRulesOpen = useGameStore((s) => s.setRulesOpen);
   const net = useGameStore((s) => s.net);
+  const { dispatch, pending: pendingAction } = usePendingAction(state, net, storeDispatch);
   const sendChat = useGameStore((s) => s.sendChat);
   const sendReaction = useGameStore((s) => s.sendReaction);
   const sendTyping = useGameStore((s) => s.sendTyping);
   const leaveNet = useGameStore((s) => s.leaveNet);
   const netResign = useGameStore((s) => s.netResign);
+  const netCloseTable = useGameStore((s) => s.netCloseTable);
+  const [replaceTarget, setReplaceTarget] = useState<SeatInfo | null>(null);
+  const { replace: replaceOfflineBot, busySeat: replaceBusySeat } = useOfflineBotReplacement(net);
+  // #4: за столом, где кроме нас одни боты, доступно «Закрыть стол» — полное
+  // удаление комнаты (а не только выход с неё). Тот же предикат, что гасит
+  // «мягкий» выход в сторе: возвращаться за столом из одних ботов некуда.
+  const soloBotsOnly = isSoloBotTable(net);
+  const [confirmClose, setConfirmClose] = useState(false);
   const netError = useGameStore((s) => s.net?.error);
   const clearNetError = useGameStore((s) => s.clearNetError);
   const t = useT();
@@ -1189,11 +2024,34 @@ function Table() {
   const [confirmLeave, setConfirmLeave] = useState(false);
   const confirmRef = useRef(false);
   const askLeave = useCallback((v: boolean) => {
-    // Диалог подтверждения — модалка: открытие и закрытие звучат тихим свушем.
+    // Диалог подтверждения — модалка: открытие и закрытие звучат тихим шушем.
     sfx.play("modal");
     confirmRef.current = v;
     setConfirmLeave(v);
   }, []);
+
+  // Мягкий выход сохраняет токен места: `leaveNet` сейчас очищает его для
+  // добровольного ухода, поэтому временно возвращаем токен сразу после выхода.
+  // Постоянное исправление места — game-store.ts (вне пакета).
+  const softResumeCode = net?.code ?? "";
+  const [softResumeToken, setSoftResumeToken] = useState<string | null>(null);
+  useEffect(() => {
+    setSoftResumeToken(readSeatToken(softResumeCode));
+  }, [softResumeCode]);
+  const canResumeSoftExit = Boolean(
+    !net?.spectating && net?.seat !== -2 && !net?.waiting && softResumeToken && !soloBotsOnly,
+  );
+  const leaveForResume = useCallback(() => {
+    const code = softResumeCode;
+    const token = readSeatToken(code);
+    leaveNet();
+    if (!code || !token) return;
+    try {
+      window.localStorage.setItem(`evo-seat-${code.toUpperCase()}`, token);
+    } catch {
+      // Если localStorage недоступен, мягкий выход не обещает возврата.
+    }
+  }, [leaveNet, softResumeCode]);
 
   // Журнал и чат одной лентой (в соло чата нет — только записи движка).
   const feed = useFeedItems(state, net);
@@ -1209,6 +2067,68 @@ function Table() {
 
   const human = player(state, state.humanId);
   const actor = currentActor(state);
+  const isHost = Boolean(net && !net.spectating && net.seat === net.hostSeat);
+  const playerManagement = {
+    canManage: isHost && net?.status === "playing",
+    onReplaceSeat: setReplaceTarget,
+    replaceBusySeat,
+    onDispatch: dispatch,
+  };
+
+  // Отказ всегда объясняем рядом с тем местом, где игрок попытался
+  // сделать ход. Повтор одной и той же причины в пределах полусекунды
+  // не превращается в спам новых плашек и звуков.
+  const [rejectHint, setRejectHint] = useState<RejectHintState | null>(null);
+  const rejectTimerRef = useRef<number | null>(null);
+  const lastRejectRef = useRef<{ text: string; at: number } | null>(null);
+  const showRejectHint = useCallback(
+    (text: string, anchor?: Element | { x: number; y: number } | null) => {
+      const now = Date.now();
+      const last = lastRejectRef.current;
+      if (last && last.text === text && now - last.at < 500) return;
+      lastRejectRef.current = { text, at: now };
+      sfx.play("crack");
+
+      let x = window.innerWidth / 2;
+      let y = window.innerHeight / 2;
+      if (anchor instanceof Element) {
+        const rect = anchor.getBoundingClientRect();
+        x = rect.left + rect.width / 2;
+        y = rect.top + 6;
+      } else if (anchor) {
+        x = anchor.x;
+        y = anchor.y;
+      }
+      const halfWidth = Math.min(176, Math.max(12, (window.innerWidth - 24) / 2));
+      setRejectHint({
+        text,
+        x: Math.min(Math.max(halfWidth, x), Math.max(halfWidth, window.innerWidth - halfWidth)),
+        y: Math.min(Math.max(12, y), Math.max(12, window.innerHeight - 72)),
+      });
+      if (rejectTimerRef.current) window.clearTimeout(rejectTimerRef.current);
+      rejectTimerRef.current = window.setTimeout(() => setRejectHint(null), 2800);
+    },
+    [],
+  );
+  useEffect(
+    () => () => {
+      if (rejectTimerRef.current) window.clearTimeout(rejectTimerRef.current);
+    },
+    [],
+  );
+  const rejectAnimal = useCallback(
+    (animal: Animal, reason: RejectReason) => {
+      const text = animal.ownerId !== human.id
+        ? REJECT_COPY[lang].opponent
+        : reason === "trait"
+          ? t("dock.dev.faceBlocked")
+          : REJECT_COPY[lang][reason];
+      const anchor = document.querySelector<HTMLElement>(`[data-animal-id="${animal.id}"]`);
+      showRejectHint(text, anchor);
+    },
+    [human.id, lang, showRejectHint, t],
+  );
+
   // «Трава и грибы»: раунд безумца проводит сосед справа — стол человека
   // в этот раунд не интерактивен. Зритель смотрит стол как чужой ход:
   // сервер ставит ему humanId-якорь, поэтому одним флагом гасим и «Ваш ход»,
@@ -1359,6 +2279,7 @@ function Table() {
   const [dndActive, setDndActive] = useState<DndData | null>(null);
   const [dndOver, setDndOver] = useState<{ id: string; data: DndData; side: "before" | "after" | null } | null>(null);
   const dndPointRef = useRef<{ x: number; y: number } | null>(null);
+  const [defensePreviewId, setDefensePreviewId] = useState<string | null>(null);
 
   // Точка пальца/курсора во время броска: по ней считаем сторону вставки
   // и находим растение под картой (карточки растений — чужой компонент).
@@ -1391,19 +2312,21 @@ function Table() {
    */
   const cardDragTargets = useMemo(() => {
     if (dndActive?.kind !== "card" || !dndActive.cardId) return null;
-    const face = selectedFaceOf(dndActive.cardId);
+    // Грань, за которую тянут (колонка арта), важнее выбора кликом: цели
+    // подсвечиваются и гаснут под конкретную половину карты.
+    const face = dndActive.face ?? selectedFaceOf(dndActive.cardId);
+    if (intent.kind === "playPair" && intent.cardId === dndActive.cardId) {
+      return legalPairTargets(devActs, intent);
+    }
     const set = new Set<string>();
     for (const a of devActs) {
       if (a.type !== "devPlayTrait" && a.type !== "devPlayPair") continue;
       if (a.cardId !== dndActive.cardId || (face != null && a.face !== face)) continue;
       if (a.type === "devPlayTrait") set.add(a.animalId);
-      else {
-        set.add(a.a);
-        set.add(a.b);
-      }
+      else set.add(a.a);
     }
     return set;
-  }, [dndActive, devActs, selectedFaceOf]);
+  }, [dndActive, devActs, selectedFaceOf, intent]);
 
   /**
    * Растения-цели для тащи́мой карты. Пустой набор PlantStrip не приглушает,
@@ -1412,7 +2335,7 @@ function Table() {
    */
   const cardDragPlants = useMemo(() => {
     if (dndActive?.kind !== "card" || !dndActive.cardId) return null;
-    const set = legalPlantTargets(devActs, dndActive.cardId, selectedFaceOf(dndActive.cardId));
+    const set = legalPlantTargets(devActs, dndActive.cardId, dndActive.face ?? selectedFaceOf(dndActive.cardId));
     return set.size ? set : new Set([NO_PLANT_TARGET]);
   }, [dndActive, devActs, selectedFaceOf]);
 
@@ -1425,29 +2348,34 @@ function Table() {
         const hl = animalHighlight(state, a, intent, isHumanTurn, feedActs, devActs, mutateGuess);
         const cardTarget = cardDragTargets?.has(a.id) ?? false;
         const underPointer = dndOver?.data.animalId === a.id;
+        const defenseOpen = Boolean(state.pendingAttack && state.pendingAttack.waitingFor === human.id);
+        const defensePrey = defenseOpen && state.pendingAttack?.preyId === a.id;
+        const defenseTarget = defenseOpen && defensePreviewId === a.id;
         map.set(a.id, {
-          highlight: hl || cardTarget,
-          dimmed: (intent.kind !== "none" && !hl) || (cardDrag && !cardTarget),
+          highlight: hl || cardTarget || defensePrey || defenseTarget,
+          dimmed: !defensePrey && !defenseTarget && ((intent.kind !== "none" && !hl) || (cardDrag && !cardTarget)),
           selected:
             (intent.kind === "playPair" && intent.first === a.id) ||
             (intent.kind === "hunt" && intent.carnivoreId === a.id) ||
             (intent.kind === "pirate" && intent.pirateId === a.id),
           // Цель под прицелом: охота с выбранным хищником, пиратство с пиратом,
           // атака хищного растения, паразитизм — красная «треснувшая» метка.
+          // Во время защиты отдельно отмечаем именно атакованное животное.
           danger:
-            hl &&
-            ((intent.kind === "hunt" && intent.carnivoreId !== undefined) ||
-              (intent.kind === "pirate" && intent.pirateId !== undefined) ||
-              (intent.kind === "plantAttack" && intent.plantId !== undefined) ||
-              intent.kind === "parasitize"),
+            defensePrey ||
+            (hl &&
+              ((intent.kind === "hunt" && intent.carnivoreId !== undefined) ||
+                (intent.kind === "pirate" && intent.pirateId !== undefined) ||
+                (intent.kind === "plantAttack" && intent.plantId !== undefined) ||
+                intent.kind === "parasitize")),
           // Подсвечиваем кольцом только допустимую цель под указателем.
           dropTarget:
-            underPointer && (cardDrag ? cardTarget : dndActive?.kind === "animal" && a.id !== dndActive.animalId),
+            defensePrey || defenseTarget || (underPointer && (cardDrag ? cardTarget : dndActive?.kind === "animal" && a.id !== dndActive.animalId)),
         });
       }
     }
     return map;
-  }, [state, intent, isHumanTurn, feedActs, devActs, mutateGuess, cardDragTargets, dndOver, dndActive]);
+  }, [state, intent, isHumanTurn, feedActs, devActs, mutateGuess, cardDragTargets, dndOver, dndActive, defensePreviewId]);
   const getInteraction = useCallback((a: Animal) => interactions.get(a.id) ?? NO_INTERACTION, [interactions]);
   // Новые цели под прицелом звучат очень тихим треском «слома» — почти порог слышимости.
   const dangerKey = useMemo(
@@ -1478,10 +2406,7 @@ function Table() {
           if (a.type === "devPlayPlantTrait" && a.cardId === intent.cardId && a.face === intent.face) set.add(a.plantId);
         }
       } else if (intent.kind === "playPlantPair") {
-        for (const a of devActs) {
-          if (a.type !== "devPlayPlantPair" || a.cardId !== intent.cardId || a.face !== intent.face) continue;
-          if (intent.first ? a.a === intent.first : true) set.add(intent.first ? a.b : a.a);
-        }
+        for (const id of legalPairTargets(devActs, intent)) set.add(id);
       } else if (intent.kind === "mutatePlant") {
         // «Случайные мутации»: карта может лечь свойством на любое растение.
         for (const a of devActs) {
@@ -1545,14 +2470,12 @@ function Table() {
         return;
       }
       if (intent.kind === "playPlantPair") {
+        if (!legalPairTargets(devActs, intent).has(plant.id)) return;
         if (!intent.first) {
           setIntent({ ...intent, first: plant.id });
           return;
         }
-        const ok = devActs.some(
-          (a) => a.type === "devPlayPlantPair" && a.cardId === intent.cardId && a.face === intent.face && a.a === intent.first && a.b === plant.id,
-        );
-        if (ok) dispatchAct({ type: "devPlayPlantPair", cardId: intent.cardId!, face: intent.face!, a: intent.first, b: plant.id });
+        dispatchAct({ type: "devPlayPlantPair", cardId: intent.cardId!, face: intent.face!, a: intent.first, b: plant.id });
         return;
       }
       // «Случайные мутации»: объявлено свойство растения — карта вскроется на нём.
@@ -1621,7 +2544,18 @@ function Table() {
     if (!isHumanTurn || state.pendingAttack) return;
     const animal = findAnimal(state, target.getAttribute("data-animal-id")!);
     if (!animal) return;
-    handleAnimalClick(animal, { state, intent, isHumanTurn, human, feedActs, devActs, mutateGuess, dispatch, setIntent });
+    handleAnimalClick(animal, {
+      state,
+      intent,
+      isHumanTurn,
+      human,
+      feedActs,
+      devActs,
+      mutateGuess,
+      dispatch,
+      setIntent,
+      onReject: rejectAnimal,
+    });
   }
 
   // ── Броски @dnd-kit: цель и сторона вставки ───────────────────────────────
@@ -1633,27 +2567,66 @@ function Table() {
     return { id: String(over.id), data, side: dndSideOf(over, dndPointRef.current) };
   };
 
-  /** Короткий звук отказа: бросок на недопустимую цель ничего не делает. */
-  const rejectDrop = () => sfx.play("crack");
+  /** Короткий отказ с видимой причиной: бросок не должен выглядеть как зависший жест. */
+  const rejectDrop = (reason: RejectReason = "drop", point: { x: number; y: number } | null = null) => {
+    showRejectHint(REJECT_COPY[lang][reason], point);
+  };
+  const dropReasonForTarget = (target: DndData | undefined): RejectReason => {
+    if (target?.kind === "animal" && target.animalId) {
+      const animal = findAnimal(state, target.animalId);
+      if (animal && animal.ownerId !== human.id) return "opponent";
+    }
+    return "target";
+  };
+
+  /**
+   * Выбор грани карты: свойство растения кладётся на растение (микориза — на
+   * два), парное — начинает пару, обычное — разыгрывается на зверя. Общая для
+   * клика по половине карты (док развития) и для «медленного тапа» пальцем,
+   * который днд-кит превращает в драг (см. handleDndEnd).
+   */
+  const selectCardFace = useCallback(
+    (cardId: string, face: number) => {
+      const card = human.hand.find((c) => c.id === cardId);
+      const trait = card?.faces[face] as TraitId | undefined;
+      if (!trait) return;
+      const def = TRAITS[trait];
+      if (def.plantTrait) {
+        if (trait === "micorrhiza") setIntent({ kind: "playPlantPair", cardId, face });
+        else setIntent({ kind: "playPlantTrait", cardId, face });
+        return;
+      }
+      if (def.isPair) setIntent({ kind: "playPair", cardId, face });
+      else setIntent({ kind: "playTrait", cardId, face });
+    },
+    [human.hand, setIntent],
+  );
 
   /**
    * Что делать при броске. Легальность не дублируем: сверяемся с devActs
    * движка (devPlayAnimal / devPlayTrait / devPlayPair / devPlayPlantTrait /
    * devPlayPlantPair), а свои правила только выбираем подходящее действие.
    */
-  function performDndDrop(active: DndData, target: DndData, side: "before" | "after" | null) {
+  function performDndDrop(
+    active: DndData,
+    target: DndData,
+    side: "before" | "after" | null,
+    point: { x: number; y: number } | null,
+  ) {
     // ── Животное: перестановка в ряду или перенос между территориями ──
     if (active.kind === "animal") {
       const moved = active.animalId ? human.animals.find((a) => a.id === active.animalId) : undefined;
-      if (!moved) return;
+      if (!moved) return rejectDrop("drop", point);
       if (target.kind === "animal") {
         const dest = target.animalId ? findAnimal(state, target.animalId) : undefined;
-        if (!dest || dest.id === moved.id || dest.ownerId !== human.id) return;
+        if (!dest || dest.id === moved.id || dest.ownerId !== human.id) {
+          return rejectDrop(dest && dest.ownerId !== human.id ? "opponent" : "drop", point);
+        }
         const group = pairGroupIds(human.animals, moved.id);
         // Внутри своей же пары порядок не меняем: связка едет целиком.
         if (group.has(dest.id)) return;
         if (state.modules.continents && zoneOfAnimal(moved) !== zoneOfAnimal(dest)) {
-          if (state.phase !== "development") return rejectDrop();
+          if (state.phase !== "development") return rejectDrop("phase", point);
           dispatch({ type: "reorderAnimal", animalId: moved.id, toZoneId: zoneOfAnimal(dest) });
           return;
         }
@@ -1668,9 +2641,9 @@ function Table() {
         return;
       }
       if (target.kind === "zone") {
-        if (target.playerId !== human.id || !target.zoneId) return;
-        if (target.zoneId === "ocean") return rejectDrop(); // океан — только через свойство
-        if (state.phase !== "development") return rejectDrop();
+        if (target.playerId !== human.id || !target.zoneId) return rejectDrop("opponent", point);
+        if (target.zoneId === "ocean") return rejectDrop("drop", point); // океан — только через свойство
+        if (state.phase !== "development") return rejectDrop("phase", point);
         if (zoneOfAnimal(moved) === target.zoneId) return; // уже здесь
         dispatch({ type: "reorderAnimal", animalId: moved.id, toZoneId: target.zoneId });
         return;
@@ -1679,10 +2652,12 @@ function Table() {
     }
 
     // ── Карта из руки: новое животное или свойство ──
-    if (active.kind !== "card" || !active.cardId) return;
+    if (active.kind !== "card" || !active.cardId) return rejectDrop("drop", point);
     const cardId = active.cardId;
-    if (!human.hand.some((c) => c.id === cardId)) return;
-    const face = selectedFaceOf(cardId);
+    if (!human.hand.some((c) => c.id === cardId)) return rejectDrop("hand", point);
+    // Грань броска: колонка арта, за которую карту тянули, приоритетнее выбора
+    // кликом (жест свежее намерения) — а без неё остаётся прежняя логика.
+    const face = active.face ?? selectedFaceOf(cardId);
     const acts = devActs.filter((a): a is DevCardAction => {
       if (a.type !== "devPlayTrait" && a.type !== "devPlayPair" && a.type !== "devPlayPlantTrait" && a.type !== "devPlayPlantPair") {
         return false;
@@ -1692,56 +2667,81 @@ function Table() {
 
     if (target.kind === "animal") {
       const animalId = target.animalId;
-      if (!animalId) return;
+      if (!animalId) return rejectDrop("drop", point);
       // Пара: первый зверь уже выбран — этот бросок кладёт свойство на второго.
       if (intent.kind === "playPair" && intent.cardId === cardId && intent.first && intent.first !== animalId) {
         const act = acts.find((a) => a.type === "devPlayPair" && a.a === intent.first && a.b === animalId);
-        if (act) return dispatch(act);
-        return rejectDrop();
+        if (act) {
+          captureCardFlight(cardId);
+          return dispatch(act);
+        }
+        return rejectDrop(dropReasonForTarget(target), point);
       }
       const simple = acts.find((a) => a.type === "devPlayTrait" && a.animalId === animalId);
-      if (simple) return dispatch(simple);
+      if (simple) {
+        // Драг не с грани, а зверь принимает несколько свойств карты: грань
+        // неопределима — отказ вместо молчаливой первой попавшейся.
+        if (face == null && acts.some((a) => a.type === "devPlayTrait" && a.animalId === animalId && a.face !== simple.face)) {
+          return rejectDrop("face", point);
+        }
+        captureCardFlight(cardId);
+        return dispatch(simple);
+      }
       // Парная грань без первого зверя: бросок выбирает первого, второй — дальше.
-      const pair = acts.find((a) => a.type === "devPlayPair" && (a.a === animalId || a.b === animalId));
+      const pair = acts.find((a) => a.type === "devPlayPair" && a.a === animalId);
       if (pair) {
+        if (face == null && acts.some((a) => a.type === "devPlayPair" && a.a === animalId && a.face !== pair.face)) {
+          return rejectDrop("face", point);
+        }
         setIntent({ kind: "playPair", cardId, face: pair.face, first: animalId });
         sfx.play("click");
         return;
       }
-      return rejectDrop();
+      return rejectDrop(dropReasonForTarget(target), point);
     }
 
     if (target.kind === "zone" || target.kind === "row") {
-      if (target.kind === "zone" && (!target.zoneId || target.zoneId === "ocean")) return rejectDrop();
+      if (target.kind === "zone" && (!target.zoneId || target.zoneId === "ocean")) return rejectDrop("drop", point);
       const act = devActs.find(
         (a) =>
           a.type === "devPlayAnimal" &&
           a.cardId === cardId &&
           (target.kind === "zone" ? a.zoneId === target.zoneId : a.zoneId === undefined),
       );
-      if (act) return dispatch(act);
-      return rejectDrop();
+      if (act) {
+        captureCardFlight(cardId);
+        return dispatch(act);
+      }
+      return rejectDrop("drop", point);
     }
 
     if (target.kind === "plants") {
       // Карточки растений рисует чужой компонент, поэтому ищем растение под
       // точкой броска по DOM (data-plant-id).
-      const plantId = plantIdAtPoint(dndPointRef.current);
-      if (!plantId) return rejectDrop();
+      const plantId = plantIdAtPoint(point);
+      if (!plantId) return rejectDrop("drop", point);
       if (intent.kind === "playPlantPair" && intent.cardId === cardId && intent.first && intent.first !== plantId) {
         const act = acts.find((a) => a.type === "devPlayPlantPair" && a.a === intent.first && a.b === plantId);
         if (act) return dispatch(act);
-        return rejectDrop();
+        return rejectDrop("target", point);
       }
       const simple = acts.find((a) => a.type === "devPlayPlantTrait" && a.plantId === plantId);
-      if (simple) return dispatch(simple);
+      if (simple) {
+        if (face == null && acts.some((a) => a.type === "devPlayPlantTrait" && a.plantId === plantId && a.face !== simple.face)) {
+          return rejectDrop("face", point);
+        }
+        return dispatch(simple);
+      }
       const pair = acts.find((a) => a.type === "devPlayPlantPair" && (a.a === plantId || a.b === plantId));
       if (pair) {
+        if (face == null && acts.some((a) => a.type === "devPlayPlantPair" && (a.a === plantId || a.b === plantId) && a.face !== pair.face)) {
+          return rejectDrop("face", point);
+        }
         setIntent({ kind: "playPlantPair", cardId, face: pair.face, first: plantId });
         sfx.play("click");
         return;
       }
-      return rejectDrop();
+      return rejectDrop("target", point);
     }
   }
 
@@ -1773,9 +2773,42 @@ function Table() {
     const info = dndOverInfo(e.over);
     setDndActive(null);
     setDndOver(null);
+    // Точка указателя нужна в performDndDrop (растение под броском), поэтому
+    // захватываем её до сброса — сам ref обнуляем сразу, как раньше. Трекинг
+    // включается только с активацией драга, и «медленный тап» без движения ни
+    // одного move не дал: тогда точка броска — точка исходного зажатия.
+    const tracked = dndPointRef.current;
     dndPointRef.current = null;
-    if (!active || !info || !dndTargetAllowed(active, info.data)) return;
-    performDndDrop(active, info.data, info.side);
+    const point = tracked ?? dndPointOf(e.activatorEvent as PointerEvent | TouchEvent);
+    if (!active) return;
+    // ── Медленный тап по грани ── Датчик пальца включает драг после 220 мс
+    // удержания даже без движения: пользователь «кликает» половину карты
+    // (целится дольше порога), драг стартует, бросок без смещения падает в
+    // руку — и клик не выбирает грань. Тап без смещения выбирает зажатую
+    // грань, как обычный клик; заблокированной грани молча не выбираем —
+    // настоящий клик в этом случае сам покажет подсказку отказа.
+    if (isTapGesture(e.activatorEvent, point)) {
+      if (
+        active.kind === "card" &&
+        active.cardId &&
+        active.face != null &&
+        faceAvailable(active.cardId, active.face)
+      ) {
+        selectCardFace(active.cardId, active.face);
+        sfx.play("click");
+      }
+      return;
+    }
+    // ── Бросок над рукой ── цели под указателем нет и быть не может: тащимое
+    // вернулось в руку. Отменяем молча — ни подсказки «не туда», ни хода:
+    // пересечение «призрака» с карточками стола над доком не считается
+    // намеренным броском. (Двигали заметно — значит, промахнулись в руку.)
+    if (pointInHand(point)) return;
+    if (!info || !dndTargetAllowed(active, info.data)) {
+      rejectDrop(info ? dropReasonForTarget(info.data) : "drop", point);
+      return;
+    }
+    performDndDrop(active, info.data, info.side, point);
   }
 
   function handleDndCancel() {
@@ -1884,10 +2917,14 @@ function Table() {
     }
     if (dndActive.kind === "card" && dndActive.cardId) {
       const card = human.hand.find((c) => c.id === dndActive.cardId);
-      return card ? <CardPreview card={card} /> : null;
+      if (!card) return null;
+      // В призраке подсвечена та половина, за которую карту тянут; без грани —
+      // выбранная кликом, чтобы и при драге от выбора кольцо не исчезало.
+      const activeFace = dndActive.face ?? selectedFaceOf(dndActive.cardId);
+      return <CardPreview card={card} activeFace={activeFace} />;
     }
     return null;
-  }, [dndActive, state, human.hand]);
+  }, [dndActive, state, human.hand, selectedFaceOf]);
   useSfx(state);
   const fly = useFoodFly(state);
   // Сеть: пропущенные шаги (спотлайт + звук), вход/выход игроков и новые реплики.
@@ -2011,7 +3048,9 @@ function Table() {
       recordedRef.current = false;
       return;
     }
-    if (recordedRef.current) return;
+    // Зритель не участвовал в партии: его финальный снимок не должен
+    // попасть в локальную историю и achievement-счётчики.
+    if (net?.spectating || net?.seat === -2 || recordedRef.current) return;
     recordedRef.current = true;
     // Партия всегда сетевая: в историю статистики она идёт как «net».
     const unlocked = recordGame(state, sessionRef.current, "net");
@@ -2020,7 +3059,7 @@ function Table() {
         description: achievementDesc(a.id),
       });
     }
-  }, [state]);
+  }, [net?.spectating, state]);
 
   return (
     // Один DndContext на стол: в нём и карточки рук/животных (draggable),
@@ -2057,7 +3096,7 @@ function Table() {
             <Button
               variant="ghost"
               size="icon"
-              className="hidden lg:inline-flex"
+              className="hidden size-9 lg:inline-flex sm:size-11"
               aria-label={tableLayout === "cozy" ? t("game.layoutWide") : t("game.layoutCozy")}
               aria-pressed={tableLayout === "wide"}
               title={tableLayout === "cozy" ? t("game.layoutWide") : t("game.layoutCozy")}
@@ -2125,23 +3164,40 @@ function Table() {
             >
               <Minimize2 className="size-4" />
             </Button>
+            {soloBotsOnly ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-9 sm:size-11"
+                aria-label={t("table.closeButton")}
+                title={t("table.closeButton")}
+                onClick={() => {
+                  sfx.play("click");
+                  setConfirmClose(true);
+                }}
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            ) : null}
           </div>
         </div>
       </TopBar>
 
       <TableBanners state={state} />
 
-      {/* Режим зрителя: read-only бейдж и панель реакций (доступна и игрокам). */}
+      {/* Режим зрителя: на sm+ бейдж висит по центру под шапкой; на телефоне
+          он переехал в строку реакций (см. ReactionsLayer) — раньше на узком
+          экране он был отдельной строкой поверх строки реакций и ожидания,
+          и это нагромождение съедало высоту стола. */}
       {net?.spectating ? (
         <div
           role="status"
-          className="z-30 ml-3 mr-auto mt-2 flex w-fit max-w-[calc(100vw-24px)] items-center gap-1.5 rounded-full border border-border bg-surface/95 px-3 py-1 text-xs text-muted shadow-[var(--shadow-card)] backdrop-blur-sm sm:fixed sm:left-1/2 sm:top-14 sm:ml-0 sm:mt-0 sm:-translate-x-1/2"
+          className="z-30 hidden w-fit max-w-[calc(100vw-24px)] items-center gap-1.5 rounded-full border border-border bg-surface/95 px-3 py-1 text-xs text-muted shadow-[var(--shadow-card)] backdrop-blur-sm sm:fixed sm:left-1/2 sm:top-14 sm:flex sm:-translate-x-1/2"
         >
           <Eye className="size-3.5 shrink-0" />
           {t("game.spectBadge")}
         </div>
       ) : null}
-      {net ? <ReactionsLayer net={net} phase={state.phase} /> : null}
 
       {turnCard ? (
         // Клик в любое место экрана (включая саму карточку и фон) убирает её сразу;
@@ -2167,6 +3223,8 @@ function Table() {
         </div>
       ) : null}
 
+      {net ? <ReactionsLayer net={net} phase={state.phase} actor={actor} /> : null}
+
       {/* Стол: узкое центральное поле-сукно, соперники по бокам без прокрутки, игрок снизу. */}
       {/* Журнал-док на xl+ живёт рядом с полем и сдвигает его раскрытием. */}
       <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
@@ -2185,6 +3243,14 @@ function Table() {
           state.phase === "extinction" ? "extinction-glow" : "",
         )}
       >
+        {/* Обучение (волна 1.5): цели миссии первым блоком в потоке стола.
+            Раньше HUD висел fixed в левом верхнем углу и накрывал плашку
+            соперника с медальонами животных; в потоке ничто никого не
+            перекрывает ни на десктопе, ни на телефоне, а свернутый вид —
+            компактная пилюля в том же слоте. Порядок (order-first на самом
+            блоке, как у сукна) выводит цели на телефоне сразу под строкой
+            реакций. */}
+        <TutorialHud />
         {/* «Растения»/«Трава и грибы»: общий стол растений и флоры; с «Континентами» — по континентам. */}
         {plantsOn || fungiOn ? (
           // Полоса растений — цель броска для свойств растений (найти само
@@ -2240,6 +3306,7 @@ function Table() {
                 dying={dying}
                 freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
                 continents={Boolean(state.modules.continents)}
+                {...playerManagement}
               />
             ))}
           </div>
@@ -2255,6 +3322,7 @@ function Table() {
               dying={dying}
               freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
               continents={Boolean(state.modules.continents)}
+              {...playerManagement}
             />
           ))}
         </div>
@@ -2262,6 +3330,7 @@ function Table() {
         <CenterField
           style={wideSeats ? { gridArea: "felt" } : undefined}
           wide={wideSeats}
+          feltSkin={FELT_SKINS[equippedCosmetics.felt ?? ""]}
           year={state.year}
           lastYear={state.lastYear}
           phase={state.phase}
@@ -2303,6 +3372,7 @@ function Table() {
               dying={dying}
               freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
               continents={Boolean(state.modules.continents)}
+              {...playerManagement}
             />
           ))}
         </div>
@@ -2323,6 +3393,7 @@ function Table() {
                 dying={dying}
                 freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
                 continents={Boolean(state.modules.continents)}
+                {...playerManagement}
               />
             ))}
           </div>
@@ -2340,6 +3411,7 @@ function Table() {
           dying={dying}
           freshSince={state.phase === "development" ? state.devStartPlaySeq : undefined}
           continents={Boolean(state.modules.continents)}
+          {...playerManagement}
           style={wideSeats ? { gridArea: "human" } : undefined}
         />
       </main>
@@ -2364,6 +3436,7 @@ function Table() {
 
       {/* pb-safe: на телефонах с жестовой полосой кнопки дока не прилипают к краю. */}
       <footer className="sticky bottom-0 z-20 border-t border-border bg-bg/95 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur-sm sm:px-5">
+        <PendingActionHint pending={pendingAction} />
         {net?.spectating ? (
           // Зрителю вместо доков хода — явная плашка: кнопки действий ему недоступны.
           <div className="flex h-14 items-center justify-center gap-2 text-sm text-muted">
@@ -2390,6 +3463,8 @@ function Table() {
             />
           ) : (
             <DevDock
+              state={state}
+              devActs={devActs}
               human={human}
               intent={intent}
               disabled={!isHumanTurn || Boolean(state.pendingAttack)}
@@ -2398,20 +3473,8 @@ function Table() {
               faceAvailable={faceAvailable}
               onPlayAnimal={(cardId, zoneId) => dispatch({ type: "devPlayAnimal", cardId, zoneId })}
               onPlaceAnimal={(cardId) => setIntent({ kind: "placeAnimal", cardId })}
-              onPickTrait={(cardId, face) => {
-                const card = human.hand.find((c) => c.id === cardId);
-                const trait = card?.faces[face] as TraitId | undefined;
-                if (!trait) return;
-                const def = TRAITS[trait];
-                if (def.plantTrait) {
-                  // Свойство растения кладётся на растение стола (микориза — на два).
-                  if (trait === "micorrhiza") setIntent({ kind: "playPlantPair", cardId, face });
-                  else setIntent({ kind: "playPlantTrait", cardId, face });
-                  return;
-                }
-                if (def.isPair) setIntent({ kind: "playPair", cardId, face });
-                else setIntent({ kind: "playTrait", cardId, face });
-              }}
+              // Выбор грани — общий с «медленным тапом» в handleDndEnd.
+              onPickTrait={selectCardFace}
               onPass={() => {
                 sfx.play("endTurn");
                 dispatch({ type: "devPass" });
@@ -2442,6 +3505,7 @@ function Table() {
               sfx.play("pass");
               dispatch({ type: "feedSkip" });
             }}
+            onDispatch={dispatch}
           />
         ) : (
           <div className="flex h-14 items-center justify-center text-sm text-muted">
@@ -2477,10 +3541,28 @@ function Table() {
         <FlyingCube key={f.id} item={f} onDone={fly.remove} />
       ))}
 
+      {rejectHint ? <RejectHint hint={rejectHint} /> : null}
+
       <EventSpotlight replayEvents={netReplay} onActiveChange={setSpotlightActive} />
 
       {state.pendingAttack && state.pendingAttack.waitingFor === human.id ? (
-        <DefenseDock acts={defActs} onPick={(a) => dispatch(a)} />
+        <DefenseDock acts={defActs} onPick={(a) => dispatch(a)} onPreview={setDefensePreviewId} />
+      ) : null}
+
+      {replaceTarget ? (
+        <ConfirmDialog
+          title={t("netBot.confirmTitle")}
+          body={t("netBot.confirmBody", { name: replaceTarget.name })}
+          confirmLabel={t("netBot.confirm")}
+          cancelLabel={t("common.cancel")}
+          tone="danger"
+          onConfirm={() => {
+            const target = replaceTarget;
+            setReplaceTarget(null);
+            if (target) void replaceOfflineBot(target);
+          }}
+          onClose={() => setReplaceTarget(null)}
+        />
       ) : null}
 
       {confirmLeave ? (
@@ -2489,28 +3571,68 @@ function Table() {
           body={
             net?.spectating
               ? t("leave.bodySpectator")
-              : t("leave.bodyPlayer")
+              : soloBotsOnly
+                ? t("leave.bodySolo")
+                : canResumeSoftExit
+                  ? t("leave.bodyPlayer")
+                  : t("leave.bodyNoResume")
           }
-          confirmLabel={net?.spectating ? t("leave.confirmSpectator") : t("leave.confirmPlayer")}
+          confirmLabel={
+            net?.spectating
+              ? t("leave.confirmSpectator")
+              : soloBotsOnly
+                ? t("leave.confirmSolo")
+                : t("leave.confirmPlayer")
+          }
           cancelLabel={t("leave.stay")}
-          tone={net?.spectating ? "default" : "danger"}
-          extraLabel={net?.spectating ? undefined : t("leave.justLeave")}
-          onExtra={net?.spectating ? undefined : () => leaveNet()}
+          // Выход (для зрителя — просто уход, для игрока — сдача) всегда
+          // красный: это главный разрушительный выбор диалога, а «Остаться»
+          // остаётся спокойной вторичной кнопкой.
+          tone="danger"
+          extraLabel={net?.spectating || !canResumeSoftExit ? undefined : t("leave.justLeave")}
+          onExtra={net?.spectating || !canResumeSoftExit ? undefined : leaveForResume}
           onConfirm={() => {
             askLeave(false);
-            // Зрителю сдаваться нечем: просто выходит. Игрок отправляет сдачу
-            // на сервер (место остаётся до финального счёта) и уходит в меню.
-            if (net?.spectating) leaveNet();
+            // Зрителю сдаваться нечем: просто выходит. За столом из одних ботов
+            // сдача не нужна — leaveNet сам закроет стол целиком (#3). Игрок
+            // отправляет сдачу на сервер (место остаётся до финального счёта)
+            // и уходит в меню.
+            if (net?.spectating || soloBotsOnly) leaveNet();
             else void netResign().finally(() => leaveNet());
           }}
           onClose={() => askLeave(false)}
         />
       ) : null}
 
+      {confirmClose ? (
+        <ConfirmDialog
+          title={t("table.closeTitle")}
+          body={t("table.closeBody")}
+          confirmLabel={t("table.closeConfirm")}
+          cancelLabel={t("common.cancel")}
+          tone="danger"
+          onConfirm={() => {
+            setConfirmClose(false);
+            // Сервер удаляет комнату (closeTable идемпотентен, повтор из
+            // leaveNet не страшен); затем — обычный выход в меню, который
+            // дочистит токен и адрес.
+            void netCloseTable().finally(() => leaveNet());
+          }}
+          onClose={() => setConfirmClose(false)}
+        />
+      ) : null}
+
       {/* «Призрак» тащимого: карточка животного или карта руки едет под
           курсором. Источник остаётся на месте приглушённым, а индикатор
           показывает, куда именно встанет животное. */}
-      <DragOverlay zIndex={80} dropAnimation={{ duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" }}>
+      <DragOverlay
+        zIndex={80}
+        dropAnimation={
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            ? null
+            : { duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" }
+        }
+      >
         {dragGhost ? (
           <div data-dnd-ghost className="rotate-2 opacity-95 drop-shadow-[0_10px_18px_rgba(0,0,0,0.35)]">
             {dragGhost}
@@ -2534,9 +3656,10 @@ function handleAnimalClick(
     mutateGuess: (kind: "trait" | "population" | "plant", target: { animalId?: string; plantId?: string }) => boolean;
     dispatch: (a: GameAction) => void;
     setIntent: (i: UiIntent) => void;
+    onReject: (animal: Animal, reason: RejectReason) => void;
   },
 ) {
-  const { state, intent, human, feedActs, devActs, mutateGuess, dispatch, setIntent } = ctx;
+  const { state, intent, human, feedActs, devActs, mutateGuess, dispatch, setIntent, onReject } = ctx;
   if (state.pendingAttack) return;
 
   if (state.phase === "development") {
@@ -2546,6 +3669,7 @@ function handleAnimalClick(
         devActs.some((a) => a.type === "devMutate" && a.intent === "trait" && a.animalId === animal.id) ||
         mutateGuess("trait", { animalId: animal.id });
       if (ok) dispatch({ type: "devMutate", intent: "trait", animalId: animal.id });
+      else onReject(animal, "target");
       return;
     }
     if (intent.kind === "mutatePop") {
@@ -2553,6 +3677,7 @@ function handleAnimalClick(
         devActs.some((a) => a.type === "devMutate" && a.intent === "population" && a.animalId === animal.id) ||
         mutateGuess("population", { animalId: animal.id });
       if (ok) dispatch({ type: "devMutate", intent: "population", animalId: animal.id });
+      else onReject(animal, "target");
       return;
     }
     if (intent.kind === "playTrait") {
@@ -2560,18 +3685,19 @@ function handleAnimalClick(
         (a) => a.type === "devPlayTrait" && a.cardId === intent.cardId && a.face === intent.face && a.animalId === animal.id,
       );
       if (ok) dispatch({ type: "devPlayTrait", cardId: intent.cardId!, face: intent.face!, animalId: animal.id });
+      else onReject(animal, "trait");
       return;
     }
     if (intent.kind === "playPair") {
+      if (!legalPairTargets(devActs, intent).has(animal.id)) {
+        onReject(animal, "trait");
+        return;
+      }
       if (!intent.first) {
-        if (animal.ownerId !== human.id) return;
         setIntent({ ...intent, first: animal.id });
         return;
       }
-      const ok = devActs.some(
-        (a) => a.type === "devPlayPair" && a.cardId === intent.cardId && a.a === intent.first && a.b === animal.id,
-      );
-      if (ok) dispatch({ type: "devPlayPair", cardId: intent.cardId!, face: intent.face!, a: intent.first, b: animal.id });
+      dispatch({ type: "devPlayPair", cardId: intent.cardId!, face: intent.face!, a: intent.first, b: animal.id });
       return;
     }
     return;
@@ -2581,7 +3707,10 @@ function handleAnimalClick(
 
   // ── «Растения»/«Трава и грибы»: еда со стола — животное, затем растение или флора ──
   if (intent.kind === "takePlant" || intent.kind === "takeFlora") {
-    if (intent.animalId) return;
+    if (intent.animalId) {
+      onReject(animal, "target");
+      return;
+    }
     const acts = feedActs.filter(
       (a) =>
         (a.type === "feedTakePlant" || a.type === "feedTakeFlora" || a.type === "feedTake") &&
@@ -2591,17 +3720,24 @@ function handleAnimalClick(
       dispatch(acts[0]!);
     } else if (acts.length > 1) {
       setIntent({ kind: state.modules.fungi ? "takeFlora" : "takePlant", animalId: animal.id });
+    } else {
+      onReject(animal, "target");
     }
     return;
   }
   // ── «Растения»: убежище — животное, затем растение ──
   if (intent.kind === "shelter") {
-    if (intent.animalId) return;
+    if (intent.animalId) {
+      onReject(animal, "target");
+      return;
+    }
     const acts = feedActs.filter((a) => a.type === "feedShelter" && a.animalId === animal.id);
     if (acts.length === 1) {
       dispatch(acts[0]!);
     } else if (acts.length > 1) {
       setIntent({ kind: "shelter", animalId: animal.id });
+    } else {
+      onReject(animal, "target");
     }
     return;
   }
@@ -2609,16 +3745,22 @@ function handleAnimalClick(
   if (intent.kind === "plantAttack" && intent.plantId) {
     const ok = feedActs.some((a) => a.type === "feedPlantAttack" && a.plantId === intent.plantId && a.preyId === animal.id);
     if (ok) dispatch({ type: "feedPlantAttack", plantId: intent.plantId, preyId: animal.id });
+    else onReject(animal, "target");
     return;
   }
   if (intent.kind === "graze") {
     // С растениями топтун топчет растение: сначала животное, потом растение.
-    if (intent.animalId) return;
+    if (intent.animalId) {
+      onReject(animal, "target");
+      return;
+    }
     const acts = feedActs.filter((a) => a.type === "feedGraze" && a.animalId === animal.id);
     if (acts.length === 1) {
       dispatch(acts[0]!);
     } else if (acts.length > 1) {
       setIntent({ ...intent, animalId: animal.id });
+    } else {
+      onReject(animal, "target");
     }
     return;
   }
@@ -2628,35 +3770,42 @@ function handleAnimalClick(
       // охотник, а в ход бешенства охотится только бешеное животное.
       const ok = feedActs.some((a) => a.type === "feedHunt" && a.carnivoreId === animal.id);
       if (ok) setIntent({ kind: "hunt", carnivoreId: animal.id });
+      else onReject(animal, "target");
       return;
     }
     const ok = feedActs.some((a) => a.type === "feedHunt" && a.carnivoreId === intent.carnivoreId && a.preyId === animal.id);
     if (ok) dispatch({ type: "feedHunt", carnivoreId: intent.carnivoreId, preyId: animal.id });
+    else onReject(animal, "target");
     return;
   }
   if (intent.kind === "pirate") {
     if (!intent.pirateId) {
       const ok = feedActs.some((a) => a.type === "feedPirate" && a.pirateId === animal.id);
       if (ok) setIntent({ kind: "pirate", pirateId: animal.id });
+      else onReject(animal, "target");
       return;
     }
     const ok = feedActs.some((a) => a.type === "feedPirate" && a.pirateId === intent.pirateId && a.targetId === animal.id);
     if (ok) dispatch({ type: "feedPirate", pirateId: intent.pirateId, targetId: animal.id });
+    else onReject(animal, "target");
     return;
   }
   if (intent.kind === "hibernate") {
     const ok = feedActs.some((a) => a.type === "feedHibernate" && a.animalId === animal.id);
     if (ok) dispatch({ type: "feedHibernate", animalId: animal.id });
+    else onReject(animal, "target");
     return;
   }
   if (intent.kind === "fat") {
     const act = feedActs.find((a) => a.type === "feedConvertFat" && a.animalId === animal.id);
     if (act && act.type === "feedConvertFat") dispatch(act);
+    else onReject(animal, "target");
     return;
   }
   if (intent.kind === "take" || intent.kind === "none") {
     const ok = feedActs.some((a) => a.type === "feedTake" && a.animalId === animal.id);
     if (ok) dispatch({ type: "feedTake", animalId: animal.id });
+    else onReject(animal, "target");
   }
 }
 
@@ -2690,8 +3839,10 @@ function animalHighlight(
     );
   }
   if (intent.kind === "playPair") {
-    if (!intent.first) return animal.ownerId === state.humanId;
-    return devActs.some((a) => a.type === "devPlayPair" && a.a === intent.first && a.b === animal.id);
+    // Роли пары направлены: первый шаг — только свои первые участники
+    // легальных действий, второй шаг — только допустимые партнёры.
+    const legal = legalPairTargets(devActs, intent);
+    return intent.first ? legal.has(animal.id) : legal.has(animal.id) && animal.ownerId === state.humanId;
   }
   if (state.phase !== "feeding") return false;
   if (intent.kind === "hunt" && intent.carnivoreId) {
@@ -2814,12 +3965,19 @@ function pairChains(animals: Animal[]): Animal[][] {
  * времени, чтобы сбитые часы устройства не врали. Слот фиксированного размера
  * зарезервирован всегда — табло не «прыгает», когда индикатора нет.
  * При `prefers-reduced-motion` остаётся только число (дуга скрыта).
+ *
+ * T1: тем же бейджем тикает и ход БОТА на его табло — метка там следующего
+ * шага сервера (botStepAt): у ботов нет дедлайна конца хода, есть темп шагов.
+ * У шага бота нет «аварийного» состояния (это не таймаут), у хода человека
+ * последние 5 секунд подсвечиваются красным с лёгкой пульсацией дуги.
  */
 const TurnTimer = memo(function TurnTimer({
   deadlineAt,
   offsetMs,
   who,
   isHuman,
+  isBotStep = false,
+  totalMs = PACE.idleTurnMs,
 }: {
   /** Абсолютный дедлайн (мс эпохи, серверные часы); null — таймера нет. */
   deadlineAt: number | null;
@@ -2828,6 +3986,10 @@ const TurnTimer = memo(function TurnTimer({
   /** Имя игрока — для подписи на чужом табло. */
   who: string;
   isHuman: boolean;
+  /** Метка — следующий шаг бота, а не дедлайн хода человека. */
+  isBotStep?: boolean;
+  /** Полная длительность отсчёта для дуги (мс): настройка стола или темп бота. */
+  totalMs?: number;
 }) {
   const t = useT();
   const leftOf = (deadline: number) => Math.max(0, deadline - (Date.now() + offsetMs));
@@ -2842,7 +4004,7 @@ const TurnTimer = memo(function TurnTimer({
     let lastAt = 0;
     const tick = (t: number) => {
       // ~4 обновления в секунду: дуга убывает плавно, React не частит.
-      if (t - lastAt >= 200) {
+      if (t - lastAt >= 250) {
         lastAt = t;
         setLeft(leftOf(deadlineAt));
       }
@@ -2856,21 +4018,30 @@ const TurnTimer = memo(function TurnTimer({
 
   if (deadlineAt === null) return <span aria-hidden className="inline-block size-6 shrink-0" />;
   const secs = Math.max(0, Math.ceil(left / 1000));
-  const frac = Math.max(0, Math.min(1, left / PACE.idleTurnMs));
+  const frac = Math.max(0, Math.min(1, left / Math.max(1, totalMs)));
+  // Аварийные пять секунд — только у дедлайна хода человека: шаг бота не
+  // таймаут, краснеть ему нечего.
+  const urgent = !isBotStep && secs <= 5;
   const R = 8.5;
   const C = 2 * Math.PI * R;
-  const hint = isHuman
-    ? t("game.timerHuman", { n: secs })
-    : t("game.timerOther", { name: who, n: secs });
+  const hint = isBotStep
+    ? t("game.timerBot", { name: who, n: secs })
+    : isHuman
+      ? t("game.timerHuman", { n: secs })
+      : t("game.timerOther", { name: who, n: secs });
   return (
     <span
       role="timer"
       aria-label={hint}
       title={hint}
       data-turn-timer
+      data-turn-timer-urgent={urgent || undefined}
       // Тёмная «монета» под кольцом: на цветной подложке места дуга акцента
       // иначе сливалась бы с фоном, а число теряло контраст.
-      className="relative inline-grid size-6 shrink-0 place-items-center rounded-full bg-bg/70"
+      className={cn(
+        "relative inline-grid size-6 shrink-0 place-items-center rounded-full bg-bg/70",
+        urgent && "ring-1 ring-[color:var(--color-danger)]",
+      )}
     >
       {/* Медленное вращение (18 с) оживляет дугу: при reduced-motion оно снято. */}
       <svg
@@ -2886,7 +4057,8 @@ const TurnTimer = memo(function TurnTimer({
           strokeWidth="2"
           style={{ stroke: "var(--color-border-strong)" }}
         />
-        {/* Движущаяся дуга: при reduced-motion остаётся только число. */}
+        {/* Движущаяся дуга: при reduced-motion остаётся только число.
+            На последних пяти секундах дуга краснеет и мягко пульсирует. */}
         <circle
           cx="10"
           cy="10"
@@ -2896,14 +4068,21 @@ const TurnTimer = memo(function TurnTimer({
           strokeLinecap="round"
           strokeDasharray={C}
           strokeDashoffset={C * (1 - frac)}
-          className="motion-reduce:hidden"
+          className={cn("motion-reduce:hidden", urgent && "animate-pulse motion-reduce:animate-none")}
           style={{
-            stroke: "var(--color-accent)",
+            stroke: urgent ? "var(--color-danger)" : "var(--color-accent)",
             transition: "stroke-dashoffset 200ms linear",
           }}
         />
       </svg>
-      <span className="text-[10px] font-semibold tabular-nums text-fg">{secs}</span>
+      <span
+        className={cn(
+          "text-[10px] font-semibold tabular-nums",
+          urgent ? "text-[color:var(--color-danger)]" : "text-fg",
+        )}
+      >
+        {secs}
+      </span>
     </span>
   );
 });
@@ -2920,6 +4099,10 @@ const PlayerSection = memo(function PlayerSection({
   freshSince,
   continents,
   style,
+  canManage,
+  onReplaceSeat,
+  replaceBusySeat,
+  onDispatch,
 }: {
   p: Player;
   isHuman?: boolean;
@@ -2934,8 +4117,14 @@ const PlayerSection = memo(function PlayerSection({
   /** «Континенты»: животные группируются по территориям. */
   continents?: boolean;
   style?: React.CSSProperties;
+  /** Хост может предложить ботом продолжить офлайн-место. */
+  canManage?: boolean;
+  onReplaceSeat?: (seat: SeatInfo) => void;
+  replaceBusySeat?: number | null;
+  onDispatch?: (action: GameAction) => void;
 }) {
-  const dispatch = useGameStore((s) => s.dispatch);
+  const storeDispatch = useGameStore((s) => s.dispatch);
+  const dispatch = onDispatch ?? storeDispatch;
   const intent = useGameStore((s) => s.intent);
   const t = useT();
   const lang = useLang();
@@ -2954,6 +4143,7 @@ const PlayerSection = memo(function PlayerSection({
   // Цвет места игрока: в сети — из net.seats (место совпадает с id игрока),
   // в соло — из палитры. Подложка секции и точка у имени.
   const netSeats = useGameStore((s) => s.net?.seats);
+  const seatInfo = useMemo(() => netSeats?.find((s) => s.seat === p.id), [netSeats, p.id]);
   const seatTintColor = useMemo(
     () => netSeats?.find((s) => s.seat === p.id)?.color ?? colorForSeat(p.id),
     [netSeats, p.id],
@@ -2962,10 +4152,21 @@ const PlayerSection = memo(function PlayerSection({
   const gameState = useGameStore((s) => s.state);
   const score = gameState && gameState.phase !== "gameOver" ? liveScore(gameState, p.id) : null;
   const active = actorId === p.id;
-  // M10: отсчёт авто-конца хода — только у того, чей сейчас ход (сервер
-  // ставит метку лишь человеку, у которого не осталось действий).
+  const currentTurn = gameState?.phase !== "gameOver" && gameState?.currentPlayerId === p.id;
+  // M10: отсчёт авто-конца хода — у того, чей сейчас ход; у бота своей метки
+  // «конца хода» нет (сервер ведёт его шагами), поэтому T1 тикает по метке
+  // следующего шага (botStepAt) — тоже только у активного табло.
   const turnDeadlineAt = useGameStore((s) => s.net?.turnDeadlineAt ?? null);
+  const botStepAt = useGameStore((s) => s.net?.botStepAt ?? null);
   const serverOffsetMs = useGameStore((s) => s.net?.serverOffsetMs ?? 0);
+  // Полная длина отсчёта для дуги: настройка стола «Таймер хода» (если хост
+  // её выбрал), иначе прежние 30 с idle-дедлайна; у бота — темп его шагов.
+  const turnTimerMs = useGameStore((s) => s.net?.settings.turnTimerMs ?? null);
+  const timerTotalMs = p.isAI
+    ? PACE.botMs + PACE.jitterMs
+    : turnTimerMs && turnTimerMs > 0
+      ? turnTimerMs
+      : PACE.idleTurnMs;
   /** Карта, ожидающая выбора континента (интент «выставить животное»). */
   const placingAnimal =
     isHuman && active && intent.kind === "placeAnimal" ? (intent.cardId as string) : undefined;
@@ -3051,7 +4252,7 @@ const PlayerSection = memo(function PlayerSection({
   const rows: React.ReactNode[] = [];
   if (p.animals.length === 0) {
     rows.push(
-      <p key="empty" className="text-xs text-subtle">
+      <p key="empty" className="w-fit rounded-[var(--radius-xs)] bg-surface-2 px-2 py-1 text-xs font-medium text-fg">
         {isHuman ? t("game.placeFromHand") : t("game.noAnimals")}
       </p>,
     );
@@ -3110,8 +4311,9 @@ const PlayerSection = memo(function PlayerSection({
       className={cn(
         // Компактнее на широком столе: табло с «Континентами» держит три полосы
         // территорий, и лишние отступы складываются в сотни пикселей высоты.
-        "paper-sheet mb-3 rounded-[var(--radius-lg)] border bg-surface p-3 transition-[border-color,box-shadow] duration-[var(--motion-quick)] lg:mb-0 lg:p-2",
+        "player-section paper-sheet mb-3 rounded-[var(--radius-lg)] border bg-surface p-3 transition-[border-color,box-shadow] duration-[var(--motion-quick)] lg:mb-0 lg:p-2",
         active ? "border-accent/70 shadow-[0_0_0_1px_var(--color-accent),var(--shadow-card)]" : "border-border",
+        currentTurn && "outline outline-1 outline-accent",
       )}
     >
       <div className="mb-2 flex items-center justify-between text-sm lg:mb-1">
@@ -3123,20 +4325,48 @@ const PlayerSection = memo(function PlayerSection({
             style={{ background: seatTintColor }}
           />
           {isHuman ? t("game.yourPopulation") : scientistName(p.name, lang)}
+          {currentTurn ? <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-accent" /> : null}
           <TurnTimer
-            deadlineAt={active ? turnDeadlineAt : null}
+            deadlineAt={active ? (p.isAI ? botStepAt : turnDeadlineAt) : null}
             offsetMs={serverOffsetMs}
             who={scientistName(p.name, lang)}
             isHuman={Boolean(isHuman)}
+            isBotStep={Boolean(p.isAI)}
+            totalMs={timerTotalMs}
           />
+          {seatInfo && !p.isAI && !seatInfo.online ? (
+            <span
+              data-player-offline={p.id}
+              className="rounded-full bg-ink/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
+            >
+              {t("game.offline")}
+            </span>
+          ) : null}
+          {canManage && seatInfo?.disconnected && !isHuman ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="min-h-9 px-2 text-xs"
+              data-replace-bot-party={p.id}
+              disabled={replaceBusySeat !== null}
+              aria-label={t("netBot.replaceSeat", { name: p.name })}
+              title={t("netBot.confirm")}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (seatInfo) onReplaceSeat?.(seatInfo);
+              }}
+            >
+              {replaceBusySeat === p.id ? "…" : t("netBot.confirm")}
+            </Button>
+          ) : null}
           {active ? (
-            <span className="flex items-center gap-1 text-xs text-accent">
-              <span className="size-1.5 rounded-full bg-accent" />
+            <span className="flex items-center gap-1 text-xs text-fg">
               {t("game.acting")}
             </span>
           ) : null}
         </span>
-        <span className="flex items-center gap-1.5 text-xs text-muted">
+        <span className="flex items-center gap-1.5 rounded-[var(--radius-xs)] bg-surface-2 px-1.5 py-0.5 text-xs text-fg">
           {randomMutations ? (
             <img
               src={MUTATION_ART.deckBack}
@@ -3201,7 +4431,7 @@ const PlayerSection = memo(function PlayerSection({
                 playerId={p.id}
               >
                 {animals.length === 0 ? (
-                  <span className="px-1 text-[11px] text-subtle">
+                  <span className="rounded-[var(--radius-xs)] bg-surface-2 px-1.5 py-0.5 text-[11px] text-muted">
                     {terr.id === "ocean" ? t("game.territoryEmptyOcean") : t("game.territoryEmpty")}
                   </span>
                 ) : null}
@@ -3350,20 +4580,30 @@ function TerritoryRow({
     <div
       ref={setNodeRef}
       data-zone={zone}
-      role={pickable ? "button" : undefined}
-      aria-label={pickable ? t("game.placeOn", { name }) : undefined}
+      data-zone-target={pickable ? "true" : undefined}
+      // В обычном состоянии зона — группа, а во время выбора — кнопка-цель.
+      // Один tab-stop на каждую доступную цель не засоряет обход пустыми зонами.
+      role={pickable ? "button" : "group"}
+      tabIndex={pickable ? 0 : -1}
+      aria-label={
+        pickable
+          ? `${t("game.placeOn", { name })} · ${count}`
+          : `${name} · ${count}`
+      }
+      aria-pressed={pickable ? false : undefined}
+      aria-keyshortcuts={pickable ? "Enter Space" : undefined}
       onClick={pickable ? onPickZone : undefined}
       onKeyDown={
         pickable
-          ? (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onPickZone?.();
+          ? (event) => {
+              if (event.target !== event.currentTarget) return;
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                event.currentTarget.click();
               }
             }
           : undefined
       }
-      tabIndex={pickable ? 0 : undefined}
       className={cn(
         "relative flex flex-wrap items-stretch gap-2 rounded-[var(--radius-md)] border border-dashed px-2 transition-all duration-[var(--motion-quick)]",
         zone === "ocean" && "water-strip",
@@ -3413,6 +4653,7 @@ function CenterField({
   floraInfo,
   style,
   wide,
+  feltSkin,
 }: {
   year: number;
   lastYear: boolean;
@@ -3432,6 +4673,8 @@ function CenterField({
   style?: React.CSSProperties;
   /** Широкая раскладка: колонка 1fr, но само сукно не растягивается бесконечно. */
   wide?: boolean;
+  /** Экипированное сукно (волна 3б): CSS-класс предмета каталога. */
+  feltSkin?: string;
 }) {
   const t = useT();
   const plantsSolo = Boolean(plantsInfo) && !territoryFood;
@@ -3452,6 +4695,7 @@ function CenterField({
         // Сукно тянется по колонке 1fr, но не шире читаемой панели: тайлы банка
         // и ряды фишек должны оставаться крупными, а не растягиваться на весь экран.
         wide && "lg:w-full lg:max-w-[680px] lg:justify-self-center",
+        feltSkin,
       )}
     >
       <img
@@ -3552,7 +4796,7 @@ function TerritoryBanks({
               // min-w-0 и перенос ряда фишек: тайл не вылезает за сукно ни при
               // каком количестве еды (0…30) и любой ширине панели.
               "flex min-w-0 flex-col items-center gap-1 overflow-hidden rounded-[var(--radius-md)] border px-1.5 py-1.5 sm:px-2",
-              terr.id === "ocean" ? "border-water/50 bg-water/15" : "border-border bg-bg/45",
+              terr.id === "ocean" ? "border-water/50 bg-surface" : "border-border bg-surface",
             )}
           >
             {/* Квадратная миниатюра тайла территории: квадраты/вертикаль кадрируются по центру. */}
@@ -3582,7 +4826,10 @@ function TerritoryBanks({
 function BankPile({ count, active, oceanOnly }: { count: number; active: boolean; oceanOnly?: boolean }) {
   const t = useT();
   return (
-    <div className="relative flex flex-col items-center gap-1.5" title={active ? (oceanOnly ? t("game.oceanBankHint") : t("game.bankHint")) : t("game.bankHintIdle")}>
+    <div
+      className="relative flex flex-col items-center gap-1.5 rounded-[var(--radius-md)] border border-border bg-surface px-3 py-2 shadow-[var(--shadow-card)]"
+      title={active ? (oceanOnly ? t("game.oceanBankHint") : t("game.bankHint")) : t("game.bankHintIdle")}
+    >
       <div className="flex max-w-[260px] flex-wrap items-center justify-center gap-1">
         {count === 0 ? (
           <span className="text-xs text-subtle">{active ? (oceanOnly ? t("game.oceanEmpty") : t("game.bankEmpty")) : "—"}</span>
@@ -3607,25 +4854,72 @@ function BankPile({ count, active, oceanOnly }: { count: number; active: boolean
  * (~0.45 с). Итог появляется, когда кучка улеглась. Компонент перемонтируется
  * только со новым броском (ключ — значения кубиков).
  */
+/** Живой флаг системной настройки движения для задержки показа броска. */
+function usePrefersReducedMotionForTable(): boolean {
+  const [reduced, setReduced] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = () => setReduced(query.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+  return reduced;
+}
+
+/** Тон граней кубика по экипированному скину (волна 3б, каталог cosmetics). */
+const DICE_TINTS: Record<string, string | undefined> = {
+  "dice.bone": undefined, // классика — дефолтный красный кормовой базы
+  "dice.amber": "#c9861f",
+  "dice.obsidian": "#4a4452",
+};
+/** Класс сукна по экипированному предмету (styles.css, волна 3б). */
+const FELT_SKINS: Record<string, string | undefined> = {
+  "felt.classic": undefined,
+  "felt.tundra": "felt-skin-tundra",
+  "felt.savanna": "felt-skin-savanna",
+  "felt.glacial": "felt-skin-glacial",
+};
+
 function DiceTray({ roll, bank }: { roll: number[] | null; bank: number }) {
   const t = useT();
-  const [rolling, setRolling] = useState(Boolean(roll));
+  const equippedDice = useGameStore((s) => s.equippedCosmetics.dice);
+  const reducedMotion = usePrefersReducedMotionForTable();
+  const [rolling, setRolling] = useState(Boolean(roll) && !reducedMotion);
   const rollId = roll?.join(",") ?? "";
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!rollId) return;
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (!rollId) {
+      setRolling(false);
+      return;
+    }
+    // Сервер уже отдал бросок к этому моменту. Дополнительные 1300 мс нужны
+    // только для физики; при reduced-motion результат доступен сразу.
+    if (reducedMotion) {
+      setRolling(false);
+      return;
+    }
     setRolling(true);
     timer.current = setTimeout(() => setRolling(false), 1300);
     return () => {
       if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
     };
-  }, [rollId]);
+  }, [reducedMotion, rollId]);
 
   if (!roll) {
     return (
-      <div className="relative flex items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-bg/50 px-4 py-2">
-        <Dice3D values={[null, null]} rolling dieSize={44} />
+      <div className="relative flex items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-surface px-4 py-2">
+        <div aria-hidden className="flex h-[70px] w-[102px] shrink-0 items-center justify-center gap-[14px]">
+          <span className="size-11 shrink-0 rounded-[var(--radius-md)] border border-border bg-muted/20" />
+          <span className="size-11 shrink-0 rounded-[var(--radius-md)] border border-border bg-muted/20" />
+        </div>
         <span className="text-xs uppercase tracking-[0.18em] text-muted">{t("game.diceRolling")}</span>
       </div>
     );
@@ -3640,7 +4934,24 @@ function DiceTray({ roll, bank }: { roll: number[] | null; bank: number }) {
   const extra = bonus > 0 ? t("game.diceBonus", { n: bonus }) : bonus < 0 ? t("game.diceTerritory") : null;
   return (
     <div className="relative flex items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-bg/50 px-4 py-2">
-      <Dice3D values={roll} rolling={rolling} dieSize={44} ariaLabel={t("game.diceAria", { dice: roll.join(", ") })} />
+      <Suspense
+        fallback={
+          <span
+            className="grid h-[70px] min-w-[102px] place-items-center rounded-[var(--radius-md)] border border-border bg-muted/10 text-lg font-semibold tabular-nums text-fg"
+            aria-label={t("game.diceAria", { dice: roll.join(", ") })}
+          >
+            {roll.join(" · ")}
+          </span>
+        }
+      >
+        <LazyDice3D
+          values={roll}
+          rolling={rolling}
+          dieSize={44}
+          tint={DICE_TINTS[equippedDice ?? ""]}
+          ariaLabel={t("game.diceAria", { dice: roll.join(", ") })}
+        />
+      </Suspense>
       <div className="flex flex-col">
         <span className={cn("font-display text-2xl leading-none tabular-nums", !rolling && "pop-in")}>
           {rolling ? "…" : total}
@@ -3709,17 +5020,24 @@ function useActionBarOffset(phase: string): number {
   return offset;
 }
 
-function ReactionsLayer({ net, phase }: { net: NetUiState; phase: string }) {
+function ReactionsLayer({
+  net,
+  phase,
+  actor,
+}: {
+  net: NetUiState;
+  phase: string;
+  actor: Player | null;
+}) {
   const sendReaction = useGameStore((s) => s.sendReaction);
-  const logOpen = useGameStore((s) => s.logOpen);
   const t = useT();
   const [bubbles, setBubbles] = useState<Array<{ key: number; emoji: string; name: string; cheer: boolean }>>([]);
   const seenRef = useRef(new Set<number>());
   const counter = useRef(0);
-  // Панель — 42px в высоту; пузыри поднимаются над ней с зазором.
+  // Пузыри остаются временным уведомлением над доком; сама панель реакций
+  // теперь живёт в потоке футера и не может закрыть табло.
   const barOffset = useActionBarOffset(phase);
-  const panelStyle = barOffset ? { bottom: barOffset + 8 } : undefined;
-  const bubblesStyle = barOffset ? { bottom: barOffset + 60 } : undefined;
+  const bubblesStyle = barOffset ? { bottom: barOffset + 8 } : undefined;
 
   useEffect(() => {
     const fresh = net.reactions.filter((r) => !seenRef.current.has(r.id));
@@ -3740,16 +5058,12 @@ function ReactionsLayer({ net, phase }: { net: NetUiState; phase: string }) {
 
   return (
     <>
-      {/* Пузыри: поднимаются над доком реакции и растворяются. z-50 — выше
-          карточки «Ваш ход» (z-40), иначе реакции прячутся за ней. */}
+      {/* Пузыри: поднимаются над доком и растворяются. z-50 — выше карточки
+          «Ваш ход» (z-40), иначе реакции прячутся за ней. */}
       <div
         aria-hidden
         style={bubblesStyle}
-        className={cn(
-          "pointer-events-none fixed bottom-[132px] right-3 z-50 flex w-44 flex-col items-end gap-1 sm:right-4",
-          // Раскрытый журнал занимает правый край: уводим пузыри левее него.
-          logOpen && "reactions-shift",
-        )}
+        className="pointer-events-none fixed bottom-3 right-3 z-50 flex w-44 flex-col items-end gap-1 sm:right-4"
       >
         {bubbles.map((b) => (
           <span
@@ -3765,37 +5079,47 @@ function ReactionsLayer({ net, phase }: { net: NetUiState; phase: string }) {
         ))}
       </div>
 
-      {/* Панель реакций: на телефоне — компактная горизонтальная полоса над
-          нижним доком (вертикальная колонка закрывала «Вашу популяцию»).
-          bottom — инлайн от фактической высоты футера: док выше одной строки
-          на телефоне, и фиксированные 84px накрыли бы кнопки. */}
-      <div
-        role="group"
-        aria-label={t("game.reactions")}
-        style={panelStyle}
-        className={cn(
-          "fixed bottom-[84px] right-3 z-40 flex flex-row gap-0.5 rounded-full border border-border bg-surface/95 p-1 shadow-[var(--shadow-card)] backdrop-blur-sm sm:right-4 sm:gap-1",
-          // Раскрытый журнал занимает правый край: панель встаёт левее
-          // колонки (xl) или панели sm…xl, а не поверх композера чата.
-          logOpen && "reactions-shift",
-        )}
-      >
-        {REACTION_EMOJI.map((emoji) => (
-          <button
-            key={emoji}
-            type="button"
-            aria-label={t("game.reactionOf", { emoji })}
-            title={emoji === "👏" ? t("game.cheerTitle") : t("game.reactionOf", { emoji })}
-            // Палец (до xl): 44px; на широком экране с мышью — компактные 32px.
-            className="grid size-11 place-items-center rounded-full text-lg leading-none transition-transform duration-[var(--motion-fast)] hover:scale-110 hover:bg-surface-2 xl:size-8"
-            onClick={(e) => {
-              e.currentTarget.blur();
-              void sendReaction(emoji, emoji === "👏" ? "cheer" : "reaction");
-            }}
+      {/* Панель реакций — одна компактная полоса на любой ширине. Плашка
+          «Ждём игрока…» и бейдж зрителя (только телефон) стоят в этой же
+          строке слева, панель — справа; строка не переносится, тесный текст
+          обрезается. Так на телефоне это одна полоска вместо нагромождения
+          из двух-трёх строк, а на десктопе прежняя однострочная схема. */}
+      <div className="flex flex-nowrap items-center justify-end gap-1.5 px-2 py-1 sm:gap-2 sm:px-5">
+        {net.spectating ? (
+          <div
+            role="status"
+            aria-label={t("game.spectBadge")}
+            className="mr-auto flex min-w-0 shrink items-center gap-1 rounded-full border border-border bg-surface/95 px-2.5 py-1 text-xs text-muted shadow-[var(--shadow-card)] sm:hidden"
           >
-            {emoji}
-          </button>
-        ))}
+            <Eye className="size-3.5 shrink-0" aria-hidden />
+            <span className="truncate">{t("game.spectBadgeShort")}</span>
+          </div>
+        ) : null}
+        <WaitingPlayerNotice actor={actor} net={net} />
+        <div
+          data-reactions
+          role="group"
+          aria-label={t("game.reactions")}
+          className="flex w-fit shrink-0 flex-row gap-0.5 rounded-full border border-border bg-surface p-1 shadow-[var(--shadow-card)] sm:gap-1"
+        >
+          {REACTION_EMOJI.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              aria-label={t("game.reactionOf", { emoji })}
+              title={emoji === "👏" ? t("game.cheerTitle") : t("game.reactionOf", { emoji })}
+              // Палец (до sm): 36px как у иконок шапки; с sm до xl — 44px,
+              // на широком экране с мышью — компактные 32px.
+              className="grid size-9 place-items-center rounded-full text-lg leading-none transition-transform duration-[var(--motion-fast)] hover:scale-110 hover:bg-surface-2 sm:size-11 xl:size-8"
+              onClick={(e) => {
+                e.currentTarget.blur();
+                void sendReaction(emoji, emoji === "👏" ? "cheer" : "reaction");
+              }}
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
       </div>
     </>
   );
@@ -3974,6 +5298,12 @@ function MutateDock({
  * Карта руки с драгом: тянется целиком и мышью, и пальцем. Кнопки и клики
  * остаются как были — в HandCard уезжают только ref и слушатели датчиков,
  * а те включаются лишь после порога движения/удержания.
+ *
+ * Грань броска выбирается ЗАНЯТИЕМ: pointerdown на колонке арта (до порога
+ * активации датчика) читает data-face-drag и пишет грань в payload драга —
+ * движок кладёт именно её. Обёртка onPointerDown вызывает слушатель датчика
+ * после записи грани; pointerup/cancel сбрасывают лишь подсветку нажатия
+ * (грань, выбранную кликом, помечает сам выбор — intent).
  */
 const DndHandCard = memo(function DndHandCard({
   card,
@@ -3997,11 +5327,38 @@ const DndHandCard = memo(function DndHandCard({
   selectedFace?: number | null;
   onSelect: (face: number | "animal") => void;
 }) {
+  // Payload драга — стабильный объект: dnd-kit держит его в ref и читает
+  // .face в момент броска, поэтому грань мутируем при зажатии, а не через
+  // состояние (состояние сбрасывается на pointerup раньше, чем датчик
+  // обработает бросок — React успевает закоммитить сброс внутри pointerup).
+  const dragDataRef = useRef<DndData>({ kind: "card", cardId: card.id, ownerId });
+  const [pressedFace, setPressedFace] = useState<number | null>(null);
   const { setNodeRef, listeners, isDragging } = useDraggable({
     id: `card:${card.id}`,
-    data: { kind: "card", cardId: card.id, ownerId },
+    data: dragDataRef.current,
     disabled: Boolean(disabled),
   });
+  const handlePress = (event: ReactPointerEvent) => {
+    const el = (event.target as Element | null)?.closest?.("[data-face-drag]");
+    const face = el ? Number(el.getAttribute("data-face-drag")) : null;
+    dragDataRef.current.face = face ?? undefined;
+    setPressedFace(face);
+    listeners?.onPointerDown?.(event);
+  };
+  // Отпускание ловим на окне: в конце драга указатель уже над целью броска,
+  // а не над картой, поэтому pointerup на корне карты не сработает. Сбрасываем
+  // только подсветку — грань в payload переживёт обработку броска, а её
+  // перезапишет следующий pointerdown (любой драг начинается с зажатия).
+  useEffect(() => {
+    if (pressedFace == null) return;
+    const release = () => setPressedFace(null);
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    return () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+    };
+  }, [pressedFace]);
   return (
     <HandCard
       card={card}
@@ -4011,15 +5368,18 @@ const DndHandCard = memo(function DndHandCard({
       onBlockedFace={onBlockedFace}
       selected={selected}
       selectedFace={selectedFace}
+      pressedFace={pressedFace}
       onSelect={onSelect}
       dragRef={setNodeRef}
-      dragListeners={listeners}
+      dragListeners={listeners ? { ...listeners, onPointerDown: handlePress } : listeners}
       dragging={isDragging}
     />
   );
 });
 
 function DevDock({
+  state,
+  devActs,
   human,
   intent,
   disabled,
@@ -4032,6 +5392,8 @@ function DevDock({
   onPass,
   onCancel,
 }: {
+  state: GameState;
+  devActs: GameAction[];
   human: Player;
   intent: UiIntent;
   disabled?: boolean;
@@ -4053,6 +5415,7 @@ function DevDock({
   const [blockedHint, setBlockedHint] = useState<{ text: string; seq: number } | null>(null);
   const seqRef = useRef(0);
   const t = useT();
+  const lang = useLang();
   const rejectFace = useCallback(() => {
     sfx.play("crack");
     seqRef.current += 1;
@@ -4073,6 +5436,13 @@ function DevDock({
   useEffect(() => {
     setBlockedHint(null);
   }, [intent]);
+  const pairStatus = useMemo(() => {
+    if (intent.kind !== "playPair" || !intent.first) return null;
+    return {
+      count: legalPairTargets(devActs, intent).size,
+      label: animalChoiceLabel(state, intent.first, lang, false),
+    };
+  }, [intent, devActs, state, lang]);
   return (
     <div className="space-y-2" onClick={dockClickSfx}>
       <div className="flex items-center justify-between gap-2">
@@ -4124,6 +5494,11 @@ function DevDock({
           </Button>
         </div>
       </div>
+      {pairStatus && pairStatus.label ? (
+        <p className="text-xs text-muted">
+          {t("dock.dev.pairProgress", { no: pairStatus.label, n: pairStatus.count })}
+        </p>
+      ) : null}
       <div data-hand-row className="flex gap-2 overflow-x-auto pb-1">
         {human.hand.map((card, i) => {
           const fresh = freshIds?.has(card.id);
@@ -4171,10 +5546,11 @@ function DevDock({
  */
 function BlockedButton({ label, reason, cracked }: { label: string; reason: string; cracked?: boolean }) {
   return (
-    <span title={reason} className="inline-flex">
+    <span title={reason} className="inline-flex max-w-60 flex-col items-start gap-1">
       <Button variant="secondary" size="default" disabled className={cracked ? "dock-cracked" : undefined} aria-label={`${label}: ${reason}`}>
         {label}
       </Button>
+      <span className="text-xs leading-snug text-muted">{reason}</span>
     </span>
   );
 }
@@ -4216,6 +5592,7 @@ function FeedDock({
   onIntent,
   onEndTurn,
   onSkip,
+  onDispatch,
 }: {
   /** Животные человека: по ним считаем голодных перед завершением питания. */
   human: Player;
@@ -4233,8 +5610,10 @@ function FeedDock({
   onIntent: (i: { kind: "take" | "takePlant" | "takeFlora" | "hunt" | "pirate" | "shelter" | "plantAttack" | "parasitize" | "hibernate" | "fat" | "graze" | "none" }) => void;
   onEndTurn: () => void;
   onSkip: () => void;
+  onDispatch: (action: GameAction) => void;
 }) {
-  const dispatch = useGameStore((s) => s.dispatch);
+  const dispatch = onDispatch;
+  const state = useGameStore((s) => s.state)!;
   const t = useT();
   const lang = useLang();
   // «Закончить питание» всегда спрашивает подтверждение: при голодных — об их
@@ -4265,6 +5644,9 @@ function FeedDock({
   const fats = acts.filter((a): a is Extract<GameAction, { type: "feedConvertFat" }> => a.type === "feedConvertFat");
   const grazes = acts.filter((a): a is Extract<GameAction, { type: "feedGraze" }> => a.type === "feedGraze");
   const migrations = acts.filter((a): a is Extract<GameAction, { type: "feedMigrate" }> => a.type === "feedMigrate");
+  const recombinations = acts.filter((a): a is Extract<GameAction, { type: "feedRecombine" }> => a.type === "feedRecombine");
+  const [exchangeChoice, setExchangeChoice] = useState("");
+  const chosenExchange = recombinations.find(a => JSON.stringify(a) === exchangeChoice);
   const canSkip = acts.some((a) => a.type === "feedSkip");
   const canSkipHint = !canSkip && (shelters.length > 0 || plantTakes.length > 0 || floraTakes.length > 0);
   // Взаимоисключающие группы по правилам (движок: used.foodTaken/combatUsed):
@@ -4293,6 +5675,24 @@ function FeedDock({
             ? t(INTENT_HINT[intentKind])
             : null
         : (INTENT_HINT[intentKind] ? t(INTENT_HINT[intentKind]) : null);
+  if (acts.some(a => a.type === "feedFinishMigration")) {
+    return <div className="flex flex-wrap items-center gap-2">
+      {acts.filter((a): a is Extract<GameAction, { type: "feedRemora" }> => a.type === "feedRemora").map(action => {
+        const route = state.pendingMigration?.routes.find((r) => r.animalId === action.migrantId);
+        return <Button key={`${action.animalId}-${action.migrantId}`} variant="secondary" className="h-auto flex-col items-start whitespace-normal text-left" onClick={() => dispatch(action)}>
+          <span>{t("dock.feed.follow", {
+            follower: animalChoiceLabel(state, action.animalId, lang, false),
+            migrant: animalChoiceLabel(state, action.migrantId, lang),
+          })}</span>
+          {route && <span className="text-xs font-normal text-muted">
+            {territoryName(route.from ?? "laurasia", lang)} → {territoryName(route.to, lang)}
+          </span>}
+        </Button>;
+      })}
+      <Button variant="secondary" onClick={() => dispatch({ type: "feedFinishMigration" })}>{t("dock.feed.finishMigration")}</Button>
+      <p className="w-full text-xs text-muted">{t("dock.feed.finishMigrationHint")}</p>
+    </div>;
+  }
   if (rageTurn) {
     return (
       <div className="flex flex-wrap items-center gap-2" onClick={dockClickSfx}>
@@ -4328,6 +5728,33 @@ function FeedDock({
           {continents ? t("dock.feed.oceanChip") : t("phase.foodBank")}:{" "}
           <span className="font-display text-sm text-fg">{bank}</span>
         </span>
+      ) : null}
+      {recombinations.length > 0 ? (
+        <div className="flex max-w-full flex-wrap items-center gap-2">
+          <select
+            aria-label={t("dock.feed.recombine")}
+            className="max-w-full rounded border border-border bg-surface p-2 text-sm text-fg"
+            value={chosenExchange ? exchangeChoice : ""}
+            onChange={e => setExchangeChoice(e.target.value)}
+          >
+            <option value="">{t("dock.feed.recombine")}</option>
+            {recombinations.map(action => {
+              const giver = human.animals.find(a => a.id === action.giverId)!;
+              const taker = human.animals.find(a => a.id === action.takerId)!;
+              const sent = giver.traits.find(t => t.id === action.traitId)!;
+              const received = taker.traits.find(t => t.id === action.otherTraitId)!;
+              const label = (a: Animal) => a.name || `#${a.no ?? human.animals.indexOf(a) + 1}`;
+              return <option key={JSON.stringify(action)} value={JSON.stringify(action)}>
+                {label(giver)}: {traitName(sent.type, lang)} ↔ {label(taker)}: {traitName(received.type, lang)}
+                {action.to ? ` → ${territoryName(action.to, lang)}` : ""}
+              </option>;
+            })}
+          </select>
+          <Button variant="secondary" disabled={!chosenExchange} onClick={() => {
+            if (chosenExchange) dispatch(chosenExchange);
+            setExchangeChoice("");
+          }}>{traitName("recombination", lang)}</Button>
+        </div>
       ) : null}
       {foodActs.length ? (
         <Button
@@ -4478,47 +5905,55 @@ function FeedDock({
           {intentHint}
         </HintNote>
       ) : null}
-      <Button
-        variant="secondary"
-        size="md"
-        onClick={(e) => {
-          // Снимаем фокус: иначе Enter «дожимает» кнопку и пасует за следующего игрока.
-          e.currentTarget.blur();
-          onEndTurn();
-        }}
-      >
-        {t("dock.feed.endTurn")}
-      </Button>
-      {intentKind !== "none" ? (
-        <Button variant="ghost" size="default" onClick={() => onIntent({ kind: "none" })} title={t("dock.cancelTitle")}>
-          {t("common.cancel")}
-        </Button>
-      ) : null}
-      {canSkip ? (
+      <div className="ml-auto flex flex-wrap items-center gap-2">
         <Button
-          variant="secondary"
+          variant="parchment"
           size="md"
+          className="h-auto min-h-12 flex-col items-start gap-0.5 whitespace-normal px-3 py-2 text-left"
           onClick={(e) => {
+            // Снимаем фокус: иначе Enter «дожимает» кнопку и пасует за следующего игрока.
             e.currentTarget.blur();
-            // Подтверждение — всегда: голодные погибнут в вымирание, а при
-            // сытых игрок просто завершает фазу питания досрочно.
-            sfx.play("modal");
-            setConfirmSkip(true);
+            onEndTurn();
           }}
-          title={
-            hungry > 0
-              ? t("dock.feed.skipHungryTitle", { n: hungry })
-              : t("dock.feed.skipFedTitle")
-          }
-          aria-label={t("dock.feed.skip")}
         >
-          {t("dock.feed.skip")}
+          <span>{t("dock.feed.endTurn")}</span>
+          <span className="text-[10px] font-normal text-ink/70">{t("dock.turnOpponentCards")}</span>
         </Button>
-      ) : canSkipHint ? (
-        <span className="text-xs text-subtle" title={t("dock.feed.skipHintTitle")}>
-          {t("dock.feed.skipHint")}
-        </span>
-      ) : null}
+        {intentKind !== "none" ? (
+          <Button variant="ghost" size="default" onClick={() => onIntent({ kind: "none" })} title={t("dock.cancelTitle")}>
+            {t("common.cancel")}
+          </Button>
+        ) : null}
+        {canSkip ? (
+          <Button
+            variant="danger"
+            size="md"
+            className="h-auto min-h-12 flex-col items-start gap-0.5 whitespace-normal px-3 py-2 text-left"
+            onClick={(e) => {
+              e.currentTarget.blur();
+              // Подтверждение — всегда: голодные погибнут в вымирание, а при
+              // сытых игрок просто завершает фазу питания досрочно.
+              sfx.play("modal");
+              setConfirmSkip(true);
+            }}
+            title={
+              hungry > 0
+                ? t("dock.feed.skipHungryTitle", { n: hungry })
+                : t("dock.feed.skipFedTitle")
+            }
+            aria-label={`${t("dock.feed.skip")}: ${hungry > 0 ? t("dock.feed.skipHungryTitle", { n: hungry }) : t("dock.feed.skipFedTitle")}`}
+          >
+            <span>{t("dock.feed.skip")}</span>
+            <span className="text-[10px] font-normal text-parchment/80">
+              {hungry > 0 ? t("dock.feed.skipHungryTitle", { n: hungry }) : t("dock.feed.skipFedTitle")}
+            </span>
+          </Button>
+        ) : canSkipHint ? (
+          <span className="text-xs text-subtle" title={t("dock.feed.skipHintTitle")}>
+            {t("dock.feed.skipHint")}
+          </span>
+        ) : null}
+      </div>
       {confirmSkip ? (
         <ConfirmDialog
           title={t("dock.feed.skipConfirmTitle")}
@@ -4545,17 +5980,42 @@ function FeedDock({
   );
 }
 
+function defenseOutcome(lang: Lang, kind: "running" | "tail" | "none"): string {
+  if (kind === "running") return translate(lang, "defense.outcomeRunning");
+  if (kind === "tail") return translate(lang, "defense.outcomeTail");
+  return translate(lang, "defense.outcomeNone");
+}
+
 function DefenseDock({
   acts,
   onPick,
+  onPreview,
 }: {
   acts: GameAction[];
   onPick: (a: GameAction) => void;
+  onPreview: (id: string | null) => void;
 }) {
   const state = useGameStore((s) => s.state)!;
   const t = useT();
+  const lang = useLang();
+  const titleId = useId();
   const atk = state.pendingAttack!;
   const prey = findAnimal(state, atk.preyId);
+  const plant = state.plants?.find((p) => p.id === atk.plantId);
+  const attackerLabel = plant
+    ? `${plantName(plant.kind, lang)} · ${t("game.pairNo", { n: (state.plants?.indexOf(plant) ?? 0) + 1 })}`
+    : animalChoiceLabel(state, atk.carnivoreId, lang);
+  useEffect(() => () => onPreview(null), [onPreview, atk.preyId]);
+  const [waitSeconds, setWaitSeconds] = useState(0);
+  useEffect(() => {
+    const started = Date.now();
+    setWaitSeconds(0);
+    const timer = window.setInterval(() => {
+      setWaitSeconds(Math.floor((Date.now() - started) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [atk.carnivoreId, atk.preyId, atk.plantId]);
+  const waitLabel = t("defense.waitDecision", { n: waitSeconds });
   const running = acts.find((a) => a.type === "chooseDefense" && a.kind === "running");
   const none = acts.find((a) => a.type === "chooseDefense" && a.kind === "none");
   const mimics = acts.filter((a) => a.type === "chooseDefense" && a.kind === "mimicry");
@@ -4564,35 +6024,87 @@ function DefenseDock({
   );
 
   return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center bg-bg/70 p-3 sm:items-center">
-      <div className="w-full max-w-md rounded-[var(--radius-xl)] border border-border bg-surface p-5">
-        <h2 className="text-xl">{t("defense.title")}</h2>
-        <p className="mt-1 text-sm text-muted">
+    <DialogShell
+      titleId={titleId}
+      overlayClassName="fixed inset-0 z-[60] flex items-end justify-center bg-bg/70 p-3 sm:items-center"
+      panelClassName="w-full max-w-lg rounded-[var(--radius-xl)] border border-border bg-surface p-5"
+      onEscape={(event) => {
+        // Обязательный выбор: Escape не закрывает диалог и не сбрасывает фоновые намерения.
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+    >
+        <h2 id={titleId} tabIndex={-1} className="text-xl">
+          {t("defense.title", { attacker: attackerLabel, prey: animalChoiceLabel(state, atk.preyId, lang) })}
+        </h2>
+        {atk.choosingPlantDefense && <p className="mt-1 text-sm text-muted">{t("defense.plantIgnore")}</p>}
+        {!atk.choosingPlantDefense && <p className="mt-1 text-sm text-muted">
           {t("defense.need", { need: prey ? foodNeeded(prey) : "—", food: prey?.food ?? 0 })}
-        </p>
+        </p>}
+        <p className="mt-2 text-xs font-medium text-clay" role="status">{waitLabel}</p>
+        {prey ? (
+          <div className="mt-3 rounded-[var(--radius-md)] border border-danger/35 bg-danger/5 p-3">
+            <div className="flex items-baseline justify-between gap-3 text-sm">
+              <span className="font-medium text-fg">{animalChoiceLabel(state, prey.id, lang)}</span>
+              {!prey.traits.length ? <span className="text-xs text-muted">{t("card.noTraits")}</span> : null}
+            </div>
+            {prey.traits.length ? (
+              <div className="mt-2 flex flex-wrap gap-1.5" aria-label={t("defense.targetTraitsAria")}>
+                {prey.traits.map((trait) => (
+                  <span key={trait.id} className="rounded-full border border-border bg-surface px-2 py-0.5 text-[11px] text-muted">
+                    {traitName(trait.type, lang)}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <div className="mt-4 flex flex-col gap-2">
+          {acts.map((action) => {
+            if (action.type !== "chooseDefense" || action.kind !== "ignore") return null;
+            const trait = prey?.traits.find((x) => x.id === action.ignoredTraitId);
+            return trait ? <Button key={trait.id} className="h-auto flex-col items-start whitespace-normal text-left" onClick={() => onPick(action)}>
+              <span>{t("defense.ignore", { trait: traitName(trait.type, lang) })}</span>
+              <span className="text-xs font-normal text-muted">{t("defense.plantIgnore")}</span>
+            </Button> : null;
+          })}
           {running ? (
-            <Button onClick={() => onPick(running)}>{t("defense.running")}</Button>
+            <Button className="h-auto flex-col items-start whitespace-normal text-left" onClick={() => onPick(running)}>
+              <span>{t("defense.running")}</span>
+              <span className="text-xs font-normal text-muted">{defenseOutcome(lang, "running")}</span>
+            </Button>
           ) : null}
-          {mimics.map((a) =>
-            a.type === "chooseDefense" ? (
-              <Button key={a.mimicryTargetId} variant="secondary" onClick={() => onPick(a)}>
-                {t("defense.mimicry")}
+          {mimics.map((action) => {
+            if (action.type !== "chooseDefense" || !action.mimicryTargetId) return null;
+            return (
+              <Button
+                key={action.mimicryTargetId}
+                variant="secondary"
+                className="h-auto flex-col items-start whitespace-normal text-left"
+                onMouseEnter={() => onPreview(action.mimicryTargetId!)}
+                onMouseLeave={() => onPreview(null)}
+                onFocus={() => onPreview(action.mimicryTargetId!)}
+                onBlur={() => onPreview(null)}
+                onClick={() => onPick(action)}
+              >
+                <span>{t("defense.mimicry", { target: animalChoiceLabel(state, action.mimicryTargetId, lang) })}</span>
+                <span className="text-xs font-normal text-muted">{t("defense.mimicryHint")}</span>
               </Button>
-            ) : null,
-          )}
+            );
+          })}
           {tails.map((a) => (
-            <Button key={a.discardTraitId} variant="secondary" onClick={() => onPick(a)}>
-              {t("defense.tailLoss")}
+            <Button key={a.discardTraitId} variant="secondary" className="h-auto flex-col items-start whitespace-normal text-left" onClick={() => onPick(a)}>
+              <span>{t("defense.tailDiscard", { trait: traitName(prey?.traits.find((trait) => trait.id === a.discardTraitId)?.type ?? "tailLoss", lang) })}</span>
+              <span className="text-xs font-normal text-muted">{defenseOutcome(lang, "tail")}</span>
             </Button>
           ))}
           {none ? (
-            <Button variant="danger" onClick={() => onPick(none)}>
-              {t("defense.none")}
+            <Button variant="danger" className="h-auto flex-col items-start whitespace-normal text-left" onClick={() => onPick(none)}>
+              <span>{t("defense.none")}</span>
+              <span className="text-xs font-normal text-clay">{defenseOutcome(lang, "none")}</span>
             </Button>
           ) : null}
         </div>
-      </div>
-    </div>
+    </DialogShell>
   );
 }

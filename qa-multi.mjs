@@ -3,6 +3,7 @@
 // Использование: node qa-multi.mjs [baseUrl]
 import { mkdirSync } from "node:fs";
 import { chromium } from "playwright";
+import { newRuContext } from "./scripts/qa-lib.mjs";
 
 const BASE = process.argv[2] ?? "http://127.0.0.1:8099/";
 const OUT = new URL("./screenshots/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
@@ -34,8 +35,8 @@ function track(page, label) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const browser = await chromium.launch();
-const ctxA = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-const ctxB = await browser.newContext({ viewport: { width: 390, height: 844 } });
+const ctxA = await newRuContext(browser, { viewport: { width: 1280, height: 800 } });
+const ctxB = await newRuContext(browser, { viewport: { width: 390, height: 844 } });
 const pa = await ctxA.newPage();
 const pb = await ctxB.newPage();
 track(pa, "A");

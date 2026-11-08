@@ -2,12 +2,13 @@
 // запускает партию и каждые 15с печатает фазу, кнопки футера/модалки и наличие
 // подсвеченной цели. Помогает понять, чего именно ждёт игра.
 import { chromium } from "playwright";
+import { newRuContext } from "./scripts/qa-lib.mjs";
 
 const BASE = process.argv[2] ?? "http://localhost:8099/";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const browser = await chromium.launch();
-const ctx = await browser.newContext({ viewport: { width: 1366, height: 850 } });
+const ctx = await newRuContext(browser, { viewport: { width: 1366, height: 850 } });
 const page = await ctx.newPage();
 page.on("pageerror", (e) => console.error(`[probe] pageerror: ${e}`));
 page.on("console", (m) => {

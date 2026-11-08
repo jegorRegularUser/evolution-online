@@ -19,7 +19,7 @@
     "check:auth": "node scripts/check-auth-invariant.mjs",
     "qa": "node scripts/qa-all.mjs",
     "qa:full": "node scripts/qa-all.mjs --full",
-    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/auth/gate-identity.test.ts && node --experimental-strip-types --test src/game/engine.test.ts src/lib/net/server.test.ts src/lib/net/views.test.ts",
+    "test": "node scripts/test-runner.mjs",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

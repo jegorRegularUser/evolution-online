@@ -23,8 +23,10 @@
  *                       монтирования (вызывается один раз в __root.tsx).
  *   detectLang()      — автоопределение по navigator.language.
  *   translate(lang, key, params?) — чистая функция перевода.
+ *   pluralRu(n, one, few, many) / pluralEn(n, one, many) —
+ *                       формы множественных чисел.
  *   pointsWord(lang, n) / playersWord(lang, n) / placeLabel(lang, n) —
- *                       формы множественных чисел и порядковые номера мест.
+ *                       готовые числительные и порядковые номера мест.
  *
  * Словари: ru.ts (канонические ключи, `as const` — tsc ловит опечатки),
  * en.ts (обязан покрыть все ключи ru — проверяет Record<keyof typeof ru, string>).
@@ -61,9 +63,13 @@ export type TParams = Record<string, string | number>;
 export function translate(lang: Lang, key: TKey, params?: TParams): string {
   const raw = DICTS[lang][key] ?? ru[key] ?? key;
   if (!params) return raw;
-  return raw.replace(/\{(\w+)\}/g, (m, name: string) => {
+  return raw.replace(/\{(\w+)(?::(\w+))?\}/g, (m, name: string, form?: string) => {
     const v = params[name];
     if (v === undefined || v === null) return m;
+    if (form && typeof v === "number") {
+      const counted = countedValue(lang, v, form);
+      if (counted !== null) return counted;
+    }
     return scientistName(String(v), lang);
   });
 }
@@ -115,7 +121,7 @@ export {
 // ── число-слова ─────────────────────────────────────────────────────────────
 
 /** Русская форма множественного числа: 1 очко / 2 очка / 5 очков. */
-function pluralRu(n: number, one: string, few: string, many: string): string {
+export function pluralRu(n: number, one: string, few: string, many: string): string {
   const a = Math.abs(n) % 100;
   const b = a % 10;
   if (a > 10 && a < 20) return many;
@@ -124,7 +130,7 @@ function pluralRu(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
-function pluralEn(n: number, one: string, many: string): string {
+export function pluralEn(n: number, one: string, many: string): string {
   return Math.abs(n) === 1 ? one : many;
 }
 
@@ -157,4 +163,74 @@ function ordinalEn(n: number): string {
 /** «2-е место» | «2nd place» — подпись места для финала и статистики. */
 export function placeLabel(lang: Lang, n: number): string {
   return lang === "en" ? `${n}${ordinalEn(n)} place` : `${n}-е место`;
+}
+
+type CountForm =
+  | "animal"
+  | "animalGen"
+  | "card"
+  | "cardAcc"
+  | "cardGen"
+  | "expansion"
+  | "floraCard"
+  | "floraCardPrep"
+  | "foodAcc"
+  | "ordinalM"
+  | "pairedTrait"
+  | "plantPrep"
+  | "point"
+  | "year";
+
+const RU_COUNT_FORMS: Record<Exclude<CountForm, "ordinalM">, readonly [string, string, string]> = {
+  animal: ["животное", "животных", "животных"],
+  animalGen: ["животного", "животных", "животных"],
+  card: ["карта", "карты", "карт"],
+  cardAcc: ["карту", "карты", "карт"],
+  cardGen: ["карты", "карты", "карт"],
+  expansion: ["дополнение", "дополнения", "дополнений"],
+  floraCard: ["карта флоры", "карты флоры", "карт флоры"],
+  floraCardPrep: ["карте флоры", "картах флоры", "картах флоры"],
+  foodAcc: ["фишку", "фишки", "фишек"],
+  pairedTrait: ["парное свойство", "парных свойства", "парных свойств"],
+  plantPrep: ["растении", "растениях", "растениях"],
+  point: ["очко", "очка", "очков"],
+  year: ["год", "года", "лет"],
+};
+
+const EN_COUNT_FORMS: Record<Exclude<CountForm, "ordinalM">, readonly [string, string]> = {
+  animal: ["animal", "animals"],
+  animalGen: ["animal", "animals"],
+  card: ["card", "cards"],
+  cardAcc: ["card", "cards"],
+  cardGen: ["card", "cards"],
+  expansion: ["expansion", "expansions"],
+  floraCard: ["flora card", "flora cards"],
+  floraCardPrep: ["flora card", "flora cards"],
+  foodAcc: ["food token", "food tokens"],
+  pairedTrait: ["paired trait", "paired traits"],
+  plantPrep: ["plant", "plants"],
+  point: ["point", "points"],
+  year: ["year", "years"],
+};
+
+function ordinalM(n: number): string {
+  return `${n}-м`;
+}
+
+/**
+ * Значение параметра с падежом/формой, заданной шаблоном: `{n:card}`.
+ * Параметр остаётся обычным числом, поэтому сигнатура `t(key, params)`
+ * и все существующие места вызова не меняются.
+ */
+function countedValue(lang: Lang, n: number, form: string): string | null {
+  if (!Number.isFinite(n)) return null;
+  if (form === "ordinalM") return lang === "en" ? `${n}${ordinalEn(n)}` : ordinalM(n);
+  if (lang === "ru") {
+    const forms = RU_COUNT_FORMS[form as Exclude<CountForm, "ordinalM">];
+    if (!forms) return null;
+    return `${n} ${pluralRu(n, forms[0], forms[1], forms[2])}`;
+  }
+  const forms = EN_COUNT_FORMS[form as Exclude<CountForm, "ordinalM">];
+  if (!forms) return null;
+  return `${n} ${pluralEn(n, forms[0], forms[1])}`;
 }

@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as CANNON from "cannon-es";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -226,6 +227,20 @@ function seedFrom(text: string): number {
   return h >>> 0;
 }
 
+/** Живой медиазапрос: смена настройки перестраивает сцену без перезагрузки. */
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = () => setReduced(query.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+  return reduced;
+}
+
 export function Dice3D({
   values,
   dieSize = 64,
@@ -248,6 +263,9 @@ export function Dice3D({
   tint?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const reducedMotion = usePrefersReducedMotion();
+  // Подпись по умолчанию — из словаря (снапшот useT безопасен для SSR/гидратации).
+  const t = useT();
   const valuesRef = useRef(values);
   valuesRef.current = values;
 
@@ -278,7 +296,7 @@ export function Dice3D({
         paperImage().then((paper) => {
           requestAnimationFrame(() => {
             if (disposed || !canvasRef.current) return;
-            cleanup = buildScene(canvasRef.current, paper, tint, rollKey);
+            cleanup = buildScene(canvasRef.current, paper, tint, rollKey, reducedMotion);
           });
         });
       },
@@ -291,9 +309,15 @@ export function Dice3D({
       cleanup?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rollKey, n, width, height, tint]);
+  }, [reducedMotion, rollKey, n, width, height, tint]);
 
-  function buildScene(canvas: HTMLCanvasElement, paper: HTMLImageElement | null, tint: string, seed: string) {
+  function buildScene(
+    canvas: HTMLCanvasElement,
+    paper: HTMLImageElement | null,
+    tint: string,
+    seed: string,
+    reducedMotion: boolean,
+  ) {
     // preserveDrawingBuffer — чтобы кубики попадали в скриншоты (QA, шеринг).
     const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -493,6 +517,25 @@ export function Dice3D({
       // Пока кубики движутся — тени живые; после укладки карта замораживается.
       if (!done) renderer.shadowMap.needsUpdate = true;
 
+      // При reduce показываем уже итоговые грани на первом кадре: ни падения,
+      // ни доводки и ни ожидания физического таймера.
+      if (reducedMotion) {
+        const vals = valuesRef.current;
+        for (let i = 0; i < dice.length; i++) {
+          const die = dice[i]!;
+          const target = targetOf(vals[i] ?? 3, i);
+          die.target = target;
+          die.restY = 0.5;
+          die.body.position.y = 0.5;
+          die.mesh.position.set(die.body.position.x, 0.5, die.body.position.z);
+          die.mesh.quaternion.copy(target);
+        }
+        renderer.shadowMap.needsUpdate = true;
+        renderer.render(scene, camera);
+        raf = 0;
+        return;
+      }
+
       // Фаза 1 — физика: падение, столкновения, кучкование.
       if (!settled) {
         world.step(1 / 60, dt, 3);
@@ -580,7 +623,7 @@ export function Dice3D({
     <canvas
       ref={canvasRef}
       role="img"
-      aria-label={ariaLabel ?? "Игральные кости"}
+      aria-label={ariaLabel ?? t("dice.aria")}
       style={{ width, height, display: "block" }}
       className={cn(className)}
     />

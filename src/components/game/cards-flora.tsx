@@ -10,14 +10,14 @@ import { useTraitTip } from "./use-trait-tip";
 
 /** Цветовые акценты меток последствий (тон из реестра MARKS). */
 const MARK_TONE: Record<MarkKind, string> = {
-  poison: "border-danger/50 bg-danger/15 text-clay",
-  antidote: "border-good/50 bg-good/15 text-good",
-  madness: "border-virus/50 bg-virus/15 text-virus",
-  rage: "border-danger/60 bg-danger/20 text-clay",
-  sleep: "border-border-strong/60 bg-ink/10 text-muted",
-  thryn: "border-leaf/50 bg-leaf/15 text-leaf",
+  poison: "border-clay-ink/50 bg-clay/15 text-clay-ink",
+  antidote: "border-good-ink/50 bg-good/15 text-good-ink",
+  madness: "border-virus-ink/50 bg-virus/15 text-virus-ink",
+  rage: "border-clay-ink/60 bg-clay/20 text-clay-ink",
+  sleep: "border-ink/25 bg-ink/10 text-ink-soft",
+  thryn: "border-leaf-ink/50 bg-leaf/15 text-leaf-ink",
   haze: "border-food-yellow/60 bg-food-yellow/15 text-ink",
-  pacifism: "border-water/50 bg-water/15 text-water",
+  pacifism: "border-water-ink/50 bg-water/15 text-water-ink",
 };
 
 /** Чип метки последствий на животном: жетон-картинка и цвет по виду, правило — в подсказке. */
@@ -37,6 +37,7 @@ export const MarkChip = memo(function MarkChip({ mark }: { mark: MarkKind }) {
         tip.anchorRef.current = el;
       }}
       {...tip.triggerProps}
+      tabIndex={-1}
       data-mark-chip
       className={cn(
         "anim-chip-in relative inline-flex h-5 items-center gap-1 rounded-[var(--radius-xs)] border px-1.5 text-[10px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
@@ -82,6 +83,15 @@ export const FloraCardView = memo(function FloraCardView({
     image: art,
   };
   const interactive = Boolean(onClick);
+  const activatable = interactive && (highlight || Boolean(selected));
+  const accessibleName = [
+    floraName(flora.kind, lang),
+    kindLabel,
+    t("card.foodTokens", { n: flora.food, m: FLORA_MAX_TOKENS }),
+    def.mark ? t("card.givesMark", { name: markName(def.mark, lang) }) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <div
       data-flora-id={flora.id}
@@ -89,12 +99,18 @@ export const FloraCardView = memo(function FloraCardView({
         tip.anchorRef.current = el;
       }}
       {...tip.triggerProps}
-      aria-label={`${floraName(flora.kind, lang)} — ${kindLabel}`}
-      role={interactive ? "button" : undefined}
+      aria-label={accessibleName}
+      role={activatable ? "button" : "group"}
+      tabIndex={activatable ? 0 : -1}
+      aria-pressed={activatable ? Boolean(selected) : undefined}
+      aria-disabled={interactive && !activatable ? true : undefined}
+      aria-keyshortcuts={activatable ? "Enter Space" : undefined}
+      data-flora-target={activatable || undefined}
       onClick={interactive ? onClick : undefined}
       onKeyDown={
-        interactive
+        activatable
           ? (e) => {
+              if (e.target !== e.currentTarget) return;
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 onClick?.();
@@ -103,12 +119,12 @@ export const FloraCardView = memo(function FloraCardView({
           : undefined
       }
       className={cn(
-        "plant-card anim-card-in relative flex w-[120px] shrink-0 cursor-pointer flex-col overflow-hidden rounded-[var(--radius-md)] border bg-parchment text-ink shadow-[var(--shadow-card)] transition-[transform,border-color,opacity] duration-[var(--motion-fast)] ease-[var(--ease-out)]",
+        "plant-card anim-card-in relative flex w-[120px] shrink-0 flex-col overflow-hidden rounded-[var(--radius-md)] border bg-parchment text-ink shadow-[var(--shadow-card)] outline-none transition-[transform,border-color,opacity] duration-[var(--motion-fast)] ease-[var(--ease-out)] focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-2",
         def.isFungus ? "border-virus/30" : "border-leaf/40",
         selected ? "border-clay ring-2 ring-clay/40" : "",
         highlight ? "border-accent ring-2 ring-accent" : "",
         dimmed ? "opacity-45" : "",
-        interactive && "hover:-translate-y-0.5",
+        activatable && "cursor-pointer hover:-translate-y-0.5",
       )}
     >
       <div className="relative aspect-[4/3] w-full overflow-hidden bg-parchment-2">

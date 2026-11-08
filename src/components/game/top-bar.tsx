@@ -1,3 +1,4 @@
+import { BookOpen } from "lucide-react";
 import type { ReactNode } from "react";
 import { LOGO } from "@/lib/art";
 import { cn } from "@/lib/utils";
@@ -12,10 +13,19 @@ export interface TopBarProps {
    * на <sm показывается она, а полная — с sm и шире.
    */
   subtitleShort?: string;
+  /** Открыть обучение прямо в партии; кнопка скрыта, если обработчика нет. */
+  onTutorial?: () => void;
+  /** Доступное и короткое имя кнопки обучения; по умолчанию — словарное «Обучение». */
+  tutorialLabel?: string;
   /** Правый слот: кнопки, тумблеры, чипы. */
   children?: ReactNode;
   /** Свой левый блок вместо лого и названия (лого и подпись при этом не рендерятся). */
   left?: ReactNode;
+  /**
+   * Мобильная шапка (F7): на <sm лого и название скрыты — на 390px остаётся
+   * одна компактная строка действий, разделы уходят в нижний таб-бар.
+   */
+  hideBrandOnMobile?: boolean;
   className?: string;
 }
 
@@ -52,8 +62,20 @@ export function LangToggle() {
  * Переключатель языка встроен в самый конец правого слота — он виден во всех
  * трёх местах использования шапки (меню, лобби, партия).
  */
-export function TopBar({ subtitle, subtitleShort, children, left, className }: TopBarProps) {
-  const lang = useLang();
+export function TopBar({
+  subtitle,
+  subtitleShort,
+  onTutorial,
+  tutorialLabel,
+  children,
+  left,
+  hideBrandOnMobile,
+  className,
+}: TopBarProps) {
+  const t = useT();
+  // Подпись обучения: явный проп или словарная — язык берём снапшотом useT,
+  // чтобы разметка совпадала с SSR и менялась живо.
+  const tutorialText = tutorialLabel ?? t("topbar.tutorial");
   return (
     <header
       className={cn(
@@ -68,12 +90,15 @@ export function TopBar({ subtitle, subtitleShort, children, left, className }: T
           <img
             src={LOGO}
             alt=""
-            className="size-8 shrink-0 rounded-full border border-border object-cover"
+            className={cn(
+              "size-8 shrink-0 rounded-full border border-border object-cover",
+              hideBrandOnMobile && "max-sm:hidden",
+            )}
           />
-          <div className="min-w-0 flex-1">
+          <div className={cn("min-w-0 flex-1", hideBrandOnMobile && "max-sm:hidden")}>
             <div className="font-display text-lg leading-none">
               {/* Название игры — тоже переводится, но длина почти не меняется. */}
-              {lang === "en" ? "Evolution" : "Эволюция"}
+              {t("app.name")}
             </div>
             {/* На телефоне подпись переносится, а не обрезается: места в шапке
                 мало, а «Правильные игры · Кнорре» терять многоточие не должен. */}
@@ -94,8 +119,28 @@ export function TopBar({ subtitle, subtitleShort, children, left, className }: T
       )}
       {/* Правый слот на узких экранах сжимается и переносится: шапка не
           задаёт документу минимальную ширину (иначе мобильный Chrome
-          выбирает layout viewport шире экрана и уводит стол за кадр). */}
-      <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
+          выбирает layout viewport шире экрана и уводит стол за кадр).
+          Если бренд на телефоне скрыт (hideBrandOnMobile), слот забирает
+          всю ширину строки — действия прижаты к правому краю, как принято
+          на мобильных шапках. */}
+      <div
+        className={cn(
+          "flex min-w-0 flex-wrap items-center justify-end gap-1",
+          hideBrandOnMobile && "max-sm:flex-1",
+        )}
+      >
+        {onTutorial ? (
+          <button
+            type="button"
+            onClick={onTutorial}
+            aria-label={tutorialText}
+            title={tutorialText}
+            className="flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-border bg-surface px-2 text-xs font-medium text-fg transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+          >
+            <BookOpen className="size-4" aria-hidden />
+            <span className="hidden sm:inline">{tutorialText}</span>
+          </button>
+        ) : null}
         {children}
         <LangToggle />
       </div>

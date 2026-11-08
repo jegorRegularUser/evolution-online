@@ -16,6 +16,7 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
+import { newRuContext } from "./qa-lib.mjs";
 
 const BASE = process.env.EVO_URL ?? "http://127.0.0.1:8099/";
 const SHOTS = process.env.EVO_SHOTS ?? join(tmpdir(), "evo-qa-shots");
@@ -112,7 +113,7 @@ function track(page, label) {
 }
 
 async function newPage(label, viewport = { width: 1280, height: 900 }) {
-  const context = await browser.newContext({ viewport });
+  const context = await newRuContext(browser, { viewport });
   const page = await context.newPage();
   track(page, label);
   return page;
@@ -375,7 +376,7 @@ const WARM_MODULES = [
 ];
 
 async function warmupServer() {
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1280, height: 900 } });
   const page = await ctx.newPage();
   let navs = 0;
   let lastNavAt = Date.now();

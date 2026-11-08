@@ -32,6 +32,7 @@ import { chromium } from "playwright";
 import {
   SHOTS,
   bodyOf,
+  newRuContext,
   openMenu,
   sleep,
   startNetGame,
@@ -462,7 +463,7 @@ const clicks = [];
 let step = "старт";
 
 try {
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctx = await newRuContext(browser, { viewport: { width: 1440, height: 900 } });
   page = await ctx.newPage();
   const pageProblems = trackPage(page, "стол");
   await openMenu(page);
