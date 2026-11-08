@@ -21,6 +21,11 @@ export interface TopBarProps {
   children?: ReactNode;
   /** Свой левый блок вместо лого и названия (лого и подпись при этом не рендерятся). */
   left?: ReactNode;
+  /**
+   * Мобильная шапка (F7): на <sm лого и название скрыты — на 390px остаётся
+   * одна компактная строка действий, разделы уходят в нижний таб-бар.
+   */
+  hideBrandOnMobile?: boolean;
   className?: string;
 }
 
@@ -64,6 +69,7 @@ export function TopBar({
   tutorialLabel,
   children,
   left,
+  hideBrandOnMobile,
   className,
 }: TopBarProps) {
   const t = useT();
@@ -84,9 +90,12 @@ export function TopBar({
           <img
             src={LOGO}
             alt=""
-            className="size-8 shrink-0 rounded-full border border-border object-cover"
+            className={cn(
+              "size-8 shrink-0 rounded-full border border-border object-cover",
+              hideBrandOnMobile && "max-sm:hidden",
+            )}
           />
-          <div className="min-w-0 flex-1">
+          <div className={cn("min-w-0 flex-1", hideBrandOnMobile && "max-sm:hidden")}>
             <div className="font-display text-lg leading-none">
               {/* Название игры — тоже переводится, но длина почти не меняется. */}
               {t("app.name")}
@@ -110,8 +119,16 @@ export function TopBar({
       )}
       {/* Правый слот на узких экранах сжимается и переносится: шапка не
           задаёт документу минимальную ширину (иначе мобильный Chrome
-          выбирает layout viewport шире экрана и уводит стол за кадр). */}
-      <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
+          выбирает layout viewport шире экрана и уводит стол за кадр).
+          Если бренд на телефоне скрыт (hideBrandOnMobile), слот забирает
+          всю ширину строки — действия прижаты к правому краю, как принято
+          на мобильных шапках. */}
+      <div
+        className={cn(
+          "flex min-w-0 flex-wrap items-center justify-end gap-1",
+          hideBrandOnMobile && "max-sm:flex-1",
+        )}
+      >
         {onTutorial ? (
           <button
             type="button"

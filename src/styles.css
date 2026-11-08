@@ -807,3 +807,18 @@
 .reaction-bubble {
   animation: reaction-bubble-kf 2.6s var(--ease-out) forwards;
 }
+
+/* ── F7: мобильная нижняя навигация (таб-бар страниц-разделов) ────────────
+   Панель прижата к низу экрана (fixed, <640px) и не заезжает под жест-полосу
+   iPhone: env(safe-area-inset-bottom) добавляется к её внутренней подложке.
+   Тап-таргеты вкладок — 44px+, активная вкладка подсвечена акцентом
+   (data-status="active" от Link из TanStack Router). Сама панель и её вкладки
+   размечены в screens.tsx (MobileTabBar); здесь только safe-area. */
+.mobile-tabbar {
+  padding-bottom: max(env(safe-area-inset-bottom), 0.25rem);
+}
+@supports not (padding: max(env(safe-area-inset-bottom), 0.25rem)) {
+  .mobile-tabbar {
+    padding-bottom: 0.25rem;
+  }
+}

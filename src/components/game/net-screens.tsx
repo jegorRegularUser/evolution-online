@@ -32,7 +32,6 @@ import { moduleCompatibilityError } from "@/game/module-compatibility";
 import type { Difficulty, MutatorId, TableRuleId } from "@/game/types";
 import { PLAYER_COLORS, type PlayerColor, type ReactionEmoji, type RoomSummary, type SeatInfo } from "@/lib/net/shared";
 import { EventFeed, reactionsByChatId, type FeedItem } from "./event-feed";
-import { HintNote } from "./hint-note";
 import { loadLastNetConfig, typingNamesOf } from "@/store/game-store";
 import { loadName, saveName } from "@/lib/net/session";
 import { SoundToggle } from "./sound-toggle";
@@ -342,18 +341,19 @@ export function NetMenuScreen() {
   const rooms = useGameStore((s) => s.rooms);
   const netRefreshRooms = useGameStore((s) => s.netRefreshRooms);
 
-  // Форма входа раскрывается кнопкой «Присоединиться к столу»; поле пароля
-  // появляется только когда сервер его запросил (код password-required/wrong).
-  const [joinOpen, setJoinOpen] = useState(false);
+  // Поле пароля появляется только когда сервер его запросил
+  // (код password-required/wrong). Поле кода стола видно всегда (F10) —
+  // раньше оно пряталось за кнопкой «Присоединиться к столу».
+  const [needPassword, setNeedPassword] = useState(false);
   // Имя из localStorage подставляем ПОСЛЕ гидратации, а не в useState: на
   // сервере localStorage нет, и состояние «Аня» против SSR-разметки «пусто»
   // оставляло кнопку «Создать стол» навсегда disabled — React такие
   // расхождения атрибутов не патчит («won't be patched up»).
   const [name, setName] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
+  const codeInputRef = useRef<HTMLInputElement>(null);
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
-  const [needPassword, setNeedPassword] = useState(false);
   const [makePrivate, setMakePrivate] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -372,7 +372,6 @@ export function NetMenuScreen() {
     const room = new URLSearchParams(window.location.search).get("room");
     if (!room) return;
     setCode(room.toUpperCase());
-    setJoinOpen(true);
     // На телефоне форма входа живёт во вкладке «Создать» — открываем её.
     setTab("create");
     // Возвращение за своё место по токену — без формы, если получится.
@@ -407,7 +406,6 @@ export function NetMenuScreen() {
       const code = (e as { code?: unknown } | null)?.code;
       if (typeof code === "string" && code.startsWith("password")) {
         setNeedPassword(true);
-        setJoinOpen(true);
         setTab("create");
       }
     } finally {
@@ -588,16 +586,6 @@ export function NetMenuScreen() {
             <Play className="size-4" />
             {tt("menu.create")}
           </Button>
-          <Button
-            variant="secondary"
-            size="lg"
-            aria-expanded={joinOpen}
-            disabled={busy}
-            onClick={() => setJoinOpen((v) => !v)}
-          >
-            <Users className="size-4" />
-            {tt("menu.join")}
-          </Button>
         </div>
         {!named ? (
           <p id="create-name-hint" role="status" className="text-xs leading-snug text-muted">
@@ -605,8 +593,67 @@ export function NetMenuScreen() {
           </p>
         ) : null}
 
-        {/* Обучение (волна 1.5): интерактивные миссии против лёгкого бота. */}
-        <TutorialMissionBlock name={name} busy={busy} />
+        {/* ── Вход по коду (F10) ──
+            Поле кода видно всегда: раньше оно пряталось за кнопкой
+            «Присоединиться к столу» и раскрывалось панелью где-то внизу
+            колонки — неочевидно и далеко. Заголовок блока остался кнопкой
+            (клик уводит фокус в поле кода) — по нему же проходят QA-сценарии. */}
+        <div className="rounded-[var(--radius-lg)] border border-border bg-bg/50 p-3">
+          <button
+            type="button"
+            className={cn(
+              TOGGLE_BASE,
+              "-mx-1 -mt-1 flex min-h-11 items-center gap-1.5 rounded-[var(--radius-sm)] px-1 text-xs font-medium uppercase tracking-[0.14em] text-subtle transition-colors hover:text-fg",
+            )}
+            onClick={() => codeInputRef.current?.focus()}
+          >
+            <Users className="size-3.5 shrink-0" aria-hidden />
+            {tt("menu.join")}
+          </button>
+          <label className="mb-3 mt-1 block">
+            <span className="mb-1 block text-xs text-muted">{tt("menu.code")}</span>
+            <input
+              ref={codeInputRef}
+              value={code}
+              onChange={(e) => setCode(e.target.value.toUpperCase().slice(0, 4))}
+              maxLength={4}
+              placeholder={tt("menu.code.placeholder")}
+              aria-label={tt("menu.code")}
+              className="h-11 w-full rounded-[var(--radius-md)] border border-border bg-bg px-3 font-display text-lg tracking-[0.3em] uppercase text-fg outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            />
+          </label>
+          {needPassword ? (
+            <label className="mb-3 block">
+              <span className="mb-1 block text-xs text-muted">{tt("menu.password")}</span>
+              <input
+                value={password}
+                onChange={(e) => setPassword(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                inputMode="numeric"
+                maxLength={4}
+                autoFocus
+                placeholder={tt("menu.digits4")}
+                aria-label={tt("menu.password")}
+                className="h-11 w-full rounded-[var(--radius-md)] border border-border bg-bg px-3 font-display text-lg tracking-[0.3em] tabular-nums text-fg outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+              />
+            </label>
+          ) : null}
+          <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+            <Button size="lg" disabled={busy || !canJoin} onClick={joinNow}>
+              <Play className="size-4" />
+              {tt("common.enter")}
+            </Button>
+            <Button
+              variant="secondary"
+              size="lg"
+              disabled={busy || !canJoin}
+              title={tt("menu.watch.title")}
+              onClick={watchNow}
+            >
+              <Eye className="size-4" />
+              {tt("menu.watch")}
+            </Button>
+          </div>
+        </div>
 
         {/* min-h-11: чекбокс — тап-таргет 44px на телефоне, а не полоса в одну строку текста. */}
         <label className="flex min-h-11 items-center gap-2 text-xs text-muted">
@@ -620,54 +667,10 @@ export function NetMenuScreen() {
           {tt("menu.private")}
         </label>
 
-        {joinOpen ? (
-          <div className="rounded-[var(--radius-lg)] border border-border bg-bg/50 p-3">
-            <label className="mb-3 block">
-              <span className="mb-1 block text-xs text-muted">{tt("menu.code")}</span>
-              <input
-                value={code}
-                onChange={(e) => setCode(e.target.value.toUpperCase().slice(0, 4))}
-                maxLength={4}
-                placeholder={tt("menu.code.placeholder")}
-                aria-label={tt("menu.code")}
-                className="h-11 w-full rounded-[var(--radius-md)] border border-border bg-bg px-3 font-display text-lg tracking-[0.3em] uppercase text-fg outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-              />
-            </label>
-            {needPassword ? (
-              <label className="mb-3 block">
-                <span className="mb-1 block text-xs text-muted">{tt("menu.password")}</span>
-                <input
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                  inputMode="numeric"
-                  maxLength={4}
-                  autoFocus
-                  placeholder={tt("menu.digits4")}
-                  aria-label={tt("menu.password")}
-                  className="h-11 w-full rounded-[var(--radius-md)] border border-border bg-bg px-3 font-display text-lg tracking-[0.3em] tabular-nums text-fg outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-                />
-              </label>
-            ) : null}
-            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-              <Button size="lg" disabled={busy || !canJoin} onClick={joinNow}>
-                <Play className="size-4" />
-                {tt("common.enter")}
-              </Button>
-              <Button
-                variant="secondary"
-                size="lg"
-                disabled={busy || !canJoin}
-                title={tt("menu.watch.title")}
-                onClick={watchNow}
-              >
-                <Eye className="size-4" />
-                {tt("menu.watch")}
-              </Button>
-            </div>
-          </div>
-        ) : null}
-
-        <HintNote>{tt("menu.hint")}</HintNote>
+        {/* Обучение (волна 1.5): интерактивные миссии против лёгкого бота.
+            По F10 — в самом низу колонки: ниже присоединения и приватности.
+            Когда все миссии пройдены, блок исчезает сам. */}
+        <TutorialMissionBlock name={name} busy={busy} />
 
         {error ? <p className="text-sm text-clay">{error}</p> : null}
       </MenuColumn>

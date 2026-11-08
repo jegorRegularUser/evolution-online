@@ -12,7 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { BookMarked, CheckCircle2, Compass, ShoppingBag, Star, Swords, Target } from "lucide-react";
 import { DialogShell } from "@/components/ui/dialog-shell";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -77,11 +77,68 @@ const FOCUS_VISIBLE =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 
 /**
+ * Мобильная нижняя навигация (F7): четыре страницы-раздела как таб-бар в зоне
+ * большого пальца. Показывается только на телефоне (<sm, 640px): шапка на
+ * мобилке оставляет себе модалки и язык, а переходы по разделам уходят вниз —
+ * паттерн iOS/Android tab bar. Иконка + короткая подпись, тап-таргет ≥44px,
+ * активная вкладка подсвечена акцентом и полоской сверху (Link ставит
+ * data-status="active" и aria-current сам). Панель прижата к нижнему краю и
+ * уважает жест-полосу iPhone: padding-bottom из env(safe-area-inset-bottom)
+ * задаёт .mobile-tabbar в styles.css.
+ */
+const MOBILE_TABS = [
+  { to: "/shop", labelKey: "shop.title", Icon: ShoppingBag },
+  { to: "/bestiary", labelKey: "bestiarium.title", Icon: BookMarked },
+  { to: "/campaign", labelKey: "campaign.title", Icon: Compass },
+  { to: "/challenges", labelKey: "challenges.title", Icon: Target },
+] as const satisfies Array<{ to: "/shop" | "/bestiary" | "/campaign" | "/challenges"; labelKey: TKey; Icon: typeof ShoppingBag }>;
+
+export function MobileTabBar() {
+  const tt = useT();
+  return (
+    <nav
+      aria-label={tt("nav.tabbar")}
+      data-testid="mobile-tabbar"
+      className="mobile-tabbar fixed inset-x-0 bottom-0 z-30 border-t border-border bg-bg/95 backdrop-blur-sm sm:hidden"
+    >
+      <div className="mx-auto grid w-full max-w-lg grid-cols-4">
+        {MOBILE_TABS.map(({ to, labelKey, Icon }) => (
+          <Link
+            key={to}
+            to={to}
+            activeOptions={{ exact: true }}
+            data-testid="mobile-tab"
+            className="flex min-h-14 flex-col items-center justify-center gap-1 px-1 py-1.5 text-[10px] font-medium leading-none text-muted transition-colors duration-[var(--motion-fast)] hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[status=active]:text-accent"
+          >
+            {({ isActive }) => (
+              <>
+                <Icon className="size-5 shrink-0" aria-hidden />
+                <span>{tt(labelKey)}</span>
+                <span
+                  aria-hidden
+                  className={cn(
+                    "h-0.5 w-7 rounded-full transition-colors",
+                    isActive ? "bg-accent" : "bg-transparent",
+                  )}
+                />
+              </>
+            )}
+          </Link>
+        ))}
+      </div>
+    </nav>
+  );
+}
+
+/**
  * Каркас страницы-раздела (магазин, бестиарий, кампания, вызовы): фон и шапка
  * — те же, что у главного меню, но в правом слоте шапки одна заметная кнопка
  * «Назад» (ведёт в меню, /). Заголовок раздела и содержимое рендерит
  * content-компонент экрана в children; модальный вариант при необходимости —
  * тот же компонент, обёрнутый в DialogShell (см. RulesPanel/StatsScreen).
+ * На телефоне (<sm) шапка без лого и названия (компактная строка «Назад» +
+ * язык), а внизу появляется таб-бар разделов — контент получает нижний
+ * паддинг, чтобы не прятаться под панелью.
  */
 export function FeaturePage({ titleKey, children }: { titleKey: TKey; children: ReactNode }) {
   const tt = useT();
@@ -102,11 +159,14 @@ export function FeaturePage({ titleKey, children }: { titleKey: TKey; children: 
         <div className="absolute inset-0 paper-desk opacity-[0.14]" />
       </div>
       <div className="relative flex min-h-dvh flex-col">
-        <TopBar subtitle={tt("app.brand")}>
+        <TopBar subtitle={tt("app.brand")} hideBrandOnMobile>
+          {/* На телефоне шапка без бренда: правый слот растянут (см. TopBar),
+              поэтому «Назад» прижата к левому краю (mr-auto) — каноничный
+              мобильный паттерн, язык остаётся справа. */}
           <Button
             variant="secondary"
             size="sm"
-            className="max-xl:h-11"
+            className="max-xl:h-11 max-sm:mr-auto"
             aria-label={tt("nav.backToMenu")}
             title={tt("nav.backToMenu")}
             onClick={() => {
@@ -119,8 +179,12 @@ export function FeaturePage({ titleKey, children }: { titleKey: TKey; children: 
           </Button>
         </TopBar>
         {/* Ширина чуть больше модальной панели (max-w-2xl): страница дышит,
-            сетки каталога получают те же два столбца, что и в модалке. */}
-        <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-6">{children}</main>
+            сетки каталога получают те же два столбца, что и в модалке.
+            Нижний паддинг на телефоне — под таб-бар (F7). */}
+        <main className="mx-auto w-full max-w-3xl flex-1 px-4 pb-[calc(4.75rem_+_env(safe-area-inset-bottom))] pt-6 sm:pb-6">
+          {children}
+        </main>
+        <MobileTabBar />
       </div>
     </>
   );
@@ -178,12 +242,16 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
       </div>
       <div className="relative flex min-h-dvh flex-col">
         {/* Полоса навигации — как шапка игрового стола: лого и название
-            слева, справа правила, обучение, статистика и звук. */}
-        <TopBar subtitle={tt("app.brand")}>
+            слева, справа правила, обучение, статистика и звук.
+            На телефоне (F7) шапка компактная: без лого и названия, без
+            обучения и без кнопок разделов (они ушли в нижний таб-бар) —
+            остаются модалки (правила, статистика), звук и язык. */}
+        <TopBar subtitle={tt("app.brand")} hideBrandOnMobile>
           {/* На узком экране подписи скрыты — кнопки остаются иконочными,
               поэтому у каждой есть постоянное доступное имя. max-xl:h-11 —
-              тап-таргет 44px на телефоне и планшете. */}
-          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.tutorial")} title={tt("topbar.tutorial")} onClick={openTutorial}>
+              тап-таргет 44px на телефоне и планшете. max-sm:hidden у обучения
+              и разделов: на телефоне эти места живут в нижнем таб-баре. */}
+          <Button variant="ghost" size="sm" className="max-xl:h-11 max-sm:hidden" aria-label={tt("topbar.tutorial")} title={tt("topbar.tutorial")} onClick={openTutorial}>
             <GraduationCap className="size-4" />
             <span className="hidden sm:inline">{tt("topbar.tutorial")}</span>
           </Button>
@@ -191,19 +259,19 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
             <BookOpen className="size-4" />
             <span className="hidden sm:inline">{tt("topbar.rules")}</span>
           </Button>
-          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("bestiarium.title")} title={tt("bestiarium.title")} onClick={() => goTo("/bestiary")}>
+          <Button variant="ghost" size="sm" className="max-xl:h-11 max-sm:hidden" aria-label={tt("bestiarium.title")} title={tt("bestiarium.title")} onClick={() => goTo("/bestiary")}>
             <BookMarked className="size-4" />
             <span className="hidden sm:inline">{tt("bestiarium.title")}</span>
           </Button>
-          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("campaign.title")} title={tt("campaign.title")} onClick={() => goTo("/campaign")}>
+          <Button variant="ghost" size="sm" className="max-xl:h-11 max-sm:hidden" aria-label={tt("campaign.title")} title={tt("campaign.title")} onClick={() => goTo("/campaign")}>
             <Compass className="size-4" />
             <span className="hidden sm:inline">{tt("campaign.title")}</span>
           </Button>
-          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("challenges.title")} title={tt("challenges.title")} onClick={() => goTo("/challenges")}>
+          <Button variant="ghost" size="sm" className="max-xl:h-11 max-sm:hidden" aria-label={tt("challenges.title")} title={tt("challenges.title")} onClick={() => goTo("/challenges")}>
             <Target className="size-4" />
             <span className="hidden sm:inline">{tt("challenges.title")}</span>
           </Button>
-          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("shop.title")} title={tt("shop.title")} onClick={() => goTo("/shop")}>
+          <Button variant="ghost" size="sm" className="max-xl:h-11 max-sm:hidden" aria-label={tt("shop.title")} title={tt("shop.title")} onClick={() => goTo("/shop")}>
             <ShoppingBag className="size-4" />
             <span className="hidden sm:inline">{tt("shop.title")}</span>
           </Button>
@@ -215,8 +283,10 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
         </TopBar>
 
         {/* Столы — единственный путь в партию: соло-режим убран, игра с ботами
-            идёт через «Создать стол» → боты в лобби → «Начать год». */}
-        <div className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col px-4 py-4 lg:h-[calc(100dvh-3.5rem)] lg:flex-[1_1_0px] lg:overflow-hidden">
+            идёт через «Создать стол» → боты в лобби → «Начать год».
+            Нижний паддинг на телефоне — под таб-бар разделов (F7), на sm+ —
+            прежние 1rem. */}
+        <div className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col px-4 pt-4 pb-[calc(4.75rem_+_env(safe-area-inset-bottom))] sm:pb-4 lg:h-[calc(100dvh-3.5rem)] lg:flex-[1_1_0px] lg:overflow-hidden">
           <header className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <h1 className="font-display text-2xl tracking-[0.08em] text-fg sm:text-3xl">{tt("app.name")}</h1>
             <p className="text-xs text-muted sm:text-sm">{tt("menu.subtitle")}</p>
@@ -246,6 +316,9 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
             <NetMenuScreen />
           </div>
         </div>
+        {/* Мобильный таб-бар разделов: Магазин · Бестиарий · Кампания ·
+            Вызовы. На <sm шапка их больше не дублирует. */}
+        <MobileTabBar />
       </div>
       {/* Обучение и статистика остались модалками меню; магазин, бестиарий,
           кампания и вызовы переехали на страницы /shop, /bestiary, /campaign
