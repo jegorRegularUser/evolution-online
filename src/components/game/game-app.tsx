@@ -16,7 +16,7 @@ import {
   type DragStartEvent,
   type Over,
 } from "@dnd-kit/core";
-import { BookOpen, Eye, LayoutGrid, List, Minimize2 } from "lucide-react";
+import { BookOpen, Eye, LayoutGrid, List, Minimize2, Trash2 } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -47,7 +47,7 @@ import { cn } from "@/lib/utils";
 import { sfx, type AmbientMood, type SfxId } from "@/lib/sfx";
 import { emptySession, recordGame, type SessionCounters } from "@/lib/stats";
 import { BG, MUTATION_ART, PHASE_ICON, TERRITORY_ART } from "@/lib/art";
-import { useGameStore, typingNamesOf, type NetUiState, type UiIntent } from "@/store/game-store";
+import { isSoloBotTable, useGameStore, typingNamesOf, type NetUiState, type UiIntent } from "@/store/game-store";
 import { AnimalCard, CardPreview, HandCard, PAIR_COLORS, PairPlate, type PairMark } from "./cards";
 import { FloraStrip } from "./cards-flora";
 import { PlantStrip } from "./cards-plants";
@@ -1425,7 +1425,9 @@ function OfflineStartNotice({
   );
 }
 
-/** Тихая плашка ожидания ходящего игрока без намёка на его вину. */
+/** Тихая плашка ожидания ходящего игрока без намёка на его вину.
+ *  Живёт в одной строке с панелью реакций (см. ReactionsLayer), чтобы две
+ *  тонкие строки не съедали высоту стола. */
 function WaitingPlayerNotice({ actor, net }: { actor: Player | null; net: NetUiState | null }) {
   const t = useT();
   const lang = useLang();
@@ -1447,7 +1449,7 @@ function WaitingPlayerNotice({ actor, net }: { actor: Player | null; net: NetUiS
       role="status"
       aria-live="polite"
       data-waiting-player={actor.id}
-      className="pointer-events-none mx-auto mt-2 flex w-fit max-w-[calc(100%_-_1.5rem)] items-center gap-2 rounded-full border border-border bg-surface/90 px-3 py-1.5 text-xs text-muted shadow-[var(--shadow-card)]"
+      className="pointer-events-none mr-auto flex w-fit max-w-[calc(100%_-_1.5rem)] min-w-0 items-center gap-2 rounded-full border border-border bg-surface/90 px-3 py-1.5 text-xs text-muted shadow-[var(--shadow-card)]"
     >
       <span className="size-1.5 shrink-0 rounded-full bg-muted/70" aria-hidden />
       <span>
@@ -1984,8 +1986,14 @@ function Table({
   const sendTyping = useGameStore((s) => s.sendTyping);
   const leaveNet = useGameStore((s) => s.leaveNet);
   const netResign = useGameStore((s) => s.netResign);
+  const netCloseTable = useGameStore((s) => s.netCloseTable);
   const [replaceTarget, setReplaceTarget] = useState<SeatInfo | null>(null);
   const { replace: replaceOfflineBot, busySeat: replaceBusySeat } = useOfflineBotReplacement(net);
+  // #4: за столом, где кроме нас одни боты, доступно «Закрыть стол» — полное
+  // удаление комнаты (а не только выход с неё). Тот же предикат, что гасит
+  // «мягкий» выход в сторе: возвращаться за столом из одних ботов некуда.
+  const soloBotsOnly = isSoloBotTable(net);
+  const [confirmClose, setConfirmClose] = useState(false);
   const netError = useGameStore((s) => s.net?.error);
   const clearNetError = useGameStore((s) => s.clearNetError);
   const t = useT();
@@ -2009,7 +2017,7 @@ function Table({
     setSoftResumeToken(readSeatToken(softResumeCode));
   }, [softResumeCode]);
   const canResumeSoftExit = Boolean(
-    !net?.spectating && net?.seat !== -2 && !net?.waiting && softResumeToken,
+    !net?.spectating && net?.seat !== -2 && !net?.waiting && softResumeToken && !soloBotsOnly,
   );
   const leaveForResume = useCallback(() => {
     const code = softResumeCode;
@@ -3065,12 +3073,26 @@ function Table({
             >
               <Minimize2 className="size-4" />
             </Button>
+            {soloBotsOnly ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-9 sm:size-11"
+                aria-label={t("table.closeButton")}
+                title={t("table.closeButton")}
+                onClick={() => {
+                  sfx.play("click");
+                  setConfirmClose(true);
+                }}
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            ) : null}
           </div>
         </div>
       </TopBar>
 
       <TableBanners state={state} />
-      <WaitingPlayerNotice actor={actor} net={net} />
 
       {/* Режим зрителя: read-only бейдж и панель реакций (доступна и игрокам). */}
       {net?.spectating ? (
@@ -3107,7 +3129,7 @@ function Table({
         </div>
       ) : null}
 
-      {net ? <ReactionsLayer net={net} phase={state.phase} /> : null}
+      {net ? <ReactionsLayer net={net} phase={state.phase} actor={actor} /> : null}
 
       {/* Стол: узкое центральное поле-сукно, соперники по бокам без прокрутки, игрок снизу. */}
       {/* Журнал-док на xl+ живёт рядом с полем и сдвигает его раскрытием. */}
@@ -3459,23 +3481,51 @@ function Table({
           body={
             net?.spectating
               ? t("leave.bodySpectator")
-              : canResumeSoftExit
-                ? t("leave.bodyPlayer")
-                : t("leave.bodyNoResume")
+              : soloBotsOnly
+                ? t("leave.bodySolo")
+                : canResumeSoftExit
+                  ? t("leave.bodyPlayer")
+                  : t("leave.bodyNoResume")
           }
-          confirmLabel={net?.spectating ? t("leave.confirmSpectator") : t("leave.confirmPlayer")}
+          confirmLabel={
+            net?.spectating
+              ? t("leave.confirmSpectator")
+              : soloBotsOnly
+                ? t("leave.confirmSolo")
+                : t("leave.confirmPlayer")
+          }
           cancelLabel={t("leave.stay")}
           tone={net?.spectating ? "default" : "danger"}
           extraLabel={net?.spectating || !canResumeSoftExit ? undefined : t("leave.justLeave")}
           onExtra={net?.spectating || !canResumeSoftExit ? undefined : leaveForResume}
           onConfirm={() => {
             askLeave(false);
-            // Зрителю сдаваться нечем: просто выходит. Игрок отправляет сдачу
-            // на сервер (место остаётся до финального счёта) и уходит в меню.
-            if (net?.spectating) leaveNet();
+            // Зрителю сдаваться нечем: просто выходит. За столом из одних ботов
+            // сдача не нужна — leaveNet сам закроет стол целиком (#3). Игрок
+            // отправляет сдачу на сервер (место остаётся до финального счёта)
+            // и уходит в меню.
+            if (net?.spectating || soloBotsOnly) leaveNet();
             else void netResign().finally(() => leaveNet());
           }}
           onClose={() => askLeave(false)}
+        />
+      ) : null}
+
+      {confirmClose ? (
+        <ConfirmDialog
+          title={t("table.closeTitle")}
+          body={t("table.closeBody")}
+          confirmLabel={t("table.closeConfirm")}
+          cancelLabel={t("common.cancel")}
+          tone="danger"
+          onConfirm={() => {
+            setConfirmClose(false);
+            // Сервер удаляет комнату (closeTable идемпотентен, повтор из
+            // leaveNet не страшен); затем — обычный выход в меню, который
+            // дочистит токен и адрес.
+            void netCloseTable().finally(() => leaveNet());
+          }}
+          onClose={() => setConfirmClose(false)}
         />
       ) : null}
 
@@ -4840,9 +4890,11 @@ function useActionBarOffset(phase: string): number {
 function ReactionsLayer({
   net,
   phase,
+  actor,
 }: {
   net: NetUiState;
   phase: string;
+  actor: Player | null;
 }) {
   const sendReaction = useGameStore((s) => s.sendReaction);
   const t = useT();
@@ -4895,8 +4947,12 @@ function ReactionsLayer({
       </div>
 
       {/* Панель реакций — обычная строка дока. Так она доступна на телефоне,
-          но не перекрывает ни табло игроков, ни центральное поле. */}
-      <div className="flex justify-end px-3 py-1 sm:px-5">
+          но не перекрывает ни табло игроков, ни центральное поле. Плашку
+          «Ждём игрока…» держим в этой же строке (mr-auto уводит её влево):
+          две отдельные строки съедали высоту стола. На узких экранах строка
+          переносится (flex-wrap) — плашка остаётся сверху, панель уходит вниз. */}
+      <div className="flex flex-wrap items-center justify-end gap-2 px-3 py-1 sm:px-5">
+        <WaitingPlayerNotice actor={actor} net={net} />
         <div
           data-reactions
           role="group"
