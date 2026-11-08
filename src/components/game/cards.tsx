@@ -700,11 +700,19 @@ const HandFace = memo(function HandFace({
  * иллюстрации оставалась бы верхняя треть (небо над сюжетом). Подписи живут
  * отдельной стопкой под артами (FaceLabelRow) — в узкой колонке название
  * обрезалось бы до нечитаемого.
+ *
+ * Колонка — ещё и ручка драга своей грани: data-face-drag читает корень карты
+ * при pointerdown (до активации датчика), чтобы бросок нёс именно эту грань.
+ * Зажатая грань подсвечивается, остальные темнеют — видно, какую половину
+ * держишь; при клике та же логика работает через active/siblingDim.
  */
 const HandFaceImage = memo(function HandFaceImage({
   face,
+  index,
   divided,
   active,
+  pressed,
+  siblingDim,
   disabled,
   dimmed,
   blocked,
@@ -712,9 +720,15 @@ const HandFaceImage = memo(function HandFaceImage({
   onBlocked,
 }: {
   face: TraitId;
+  /** Позиция грани: попадает в data-face-drag — ручку драга этой грани. */
+  index: number;
   /** Разделитель между колонками арта: вертикальный пунктир. */
   divided: boolean;
   active?: boolean;
+  /** Грань зажата (pointerdown) и/или летит в драге — акцентное кольцо. */
+  pressed?: boolean;
+  /** Зажата/выбрана другая грань — эта темнеет. */
+  siblingDim?: boolean;
   disabled?: boolean;
   dimmed?: boolean;
   /** Грань недоступна: легального действия для неё сейчас нет. */
@@ -735,6 +749,7 @@ const HandFaceImage = memo(function HandFaceImage({
         {...tip.triggerProps}
         type="button"
         disabled={disabled}
+        data-face-drag={index}
         onClick={(e) => {
           if (blocked) {
             // Отказ звучит сам (треск): щелчок дока здесь не нужен.
@@ -750,7 +765,9 @@ const HandFaceImage = memo(function HandFaceImage({
         className={cn(
           "group relative block min-h-0 min-w-0 flex-1 overflow-hidden text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
           divided && "border-l border-dashed border-ink/15",
-          active ? "evo-face-picked" : "hover:bg-ink/5",
+          // Зажатая и выбранная грань выглядят одинаково: одно кольцо-акцент.
+          active || pressed ? "evo-face-picked" : "hover:bg-ink/5",
+          siblingDim && "opacity-45 saturate-50",
           dimmed && "opacity-55",
           dark && "bg-ink",
         )}
@@ -772,6 +789,8 @@ const HandFaceImage = memo(function HandFaceImage({
  * Подпись грани multi-карты: строка под артами на всю ширину карты (в узкой
  * колонке название обрезалось бы до нечитаемого). Клин-вырез указывает на
  * колонку арта этой грани. Не кнопка: грань выбирается кликом по её арту.
+ * Ручкой драга не служит, но темнеет вместе со своей половиной, когда зажата
+ * другая грань — половину видно целиком.
  */
 const FaceLabelRow = memo(function FaceLabelRow({
   face,
@@ -779,6 +798,7 @@ const FaceLabelRow = memo(function FaceLabelRow({
   index,
   count,
   dimmed,
+  siblingDim,
 }: {
   face: TraitId;
   /** У строк ниже первой — верхний пунктирный разделитель. */
@@ -787,6 +807,8 @@ const FaceLabelRow = memo(function FaceLabelRow({
   index: number;
   count: number;
   dimmed?: boolean;
+  /** Зажата/выбрана другая грань — строка этой грани темнеет. */
+  siblingDim?: boolean;
 }) {
   const t = useT();
   const lang = useLang();
@@ -796,6 +818,7 @@ const FaceLabelRow = memo(function FaceLabelRow({
       className={cn(
         "relative block shrink-0 px-1.5 py-[3px] text-[11px] font-semibold leading-tight",
         divided && "border-t border-dashed border-ink/15",
+        siblingDim && "opacity-45 saturate-50",
         dimmed && "opacity-55",
       )}
     >
@@ -823,11 +846,17 @@ const FaceLabelRow = memo(function FaceLabelRow({
  * Карта руки: кнопка «Животное» плюс по кнопке на каждое свойство грани.
  * Перетаскивается целиком (карта в руке — один объект), но клики по кнопкам
  * остаются: датчики @dnd-kit включаются только после порога движения.
+ *
+ * У multi-карты каждая колонка арта — ручка драга СВОЕЙ грани
+ * (data-face-drag): зажатая грань подсвечивается, остальные темнеют, и бросок
+ * уносит выбранную грань. Строки подписей и «Животное» ручками не являются —
+ * драг оттуда не выбирает грань (её подскажет выбор кликом или движок).
  */
 export function HandCard({
   card,
   selected,
   selectedFace,
+  pressedFace,
   onSelect,
   onBlockedFace,
   blockedFace,
@@ -840,6 +869,8 @@ export function HandCard({
   card: Card;
   selected?: boolean;
   selectedFace?: number | null;
+  /** Грань, зажатая под курсором/пальцем или летящая в драге (multi-карты). */
+  pressedFace?: number | null;
   onSelect: (face: number | "animal") => void;
   /** Клик по недоступной грани (её нельзя разыграть прямо сейчас). */
   onBlockedFace?: (face: number) => void;
@@ -897,8 +928,15 @@ export function HandCard({
               <HandFaceImage
                 key={`${card.id}-${face}-${i}`}
                 face={face}
+                index={i}
                 divided={i > 0}
                 active={selected && selectedFace === i}
+                pressed={pressedFace === i}
+                // Зажата или кликом выбрана другая грань — эта темнеет.
+                siblingDim={Boolean(
+                  (pressedFace != null && pressedFace !== i) ||
+                    (selected && selectedFace != null && selectedFace !== i),
+                )}
                 blocked={blockedFace?.(i)}
                 onBlocked={() => onBlockedFace?.(i)}
                 disabled={disabled}
@@ -914,6 +952,10 @@ export function HandCard({
               divided={i > 0}
               index={i}
               count={card.faces.length}
+              siblingDim={Boolean(
+                (pressedFace != null && pressedFace !== i) ||
+                  (selected && selectedFace != null && selectedFace !== i),
+              )}
               dimmed={noAnimals && !selected}
             />
           ))}
@@ -939,8 +981,10 @@ export function HandCard({
 /**
  * «Призрак» карты для DragOverlay: те же грани, но без кнопок и обработчиков —
  * в оверлее карта едет под курсором и не должна ловить клики и фокус.
+ * activeFace — грань, за которую карту тянут: её колонка подсвечена, остальные
+ * темнеют, чтобы под курсором было видно, какая половина летит.
  */
-export function CardPreview({ card }: { card: Card }) {
+export function CardPreview({ card, activeFace }: { card: Card; activeFace?: number | null }) {
   const t = useT();
   const lang = useLang();
   return (
@@ -965,6 +1009,8 @@ export function CardPreview({ card }: { card: Card }) {
                     "relative block min-h-0 min-w-0 flex-1 overflow-hidden",
                     i > 0 && "border-l border-dashed border-ink/15",
                     dark && "bg-ink",
+                    activeFace === i && "evo-face-picked",
+                    activeFace != null && activeFace !== i && "opacity-45 saturate-50",
                   )}
                 >
                   <FaceArt face={face} inColumn />
@@ -973,7 +1019,14 @@ export function CardPreview({ card }: { card: Card }) {
             })}
           </span>
           {card.faces.map((face, i) => (
-            <FaceLabelRow key={`label-${card.id}-${face}-${i}`} face={face} divided={i > 0} index={i} count={card.faces.length} />
+            <FaceLabelRow
+              key={`label-${card.id}-${face}-${i}`}
+              face={face}
+              divided={i > 0}
+              index={i}
+              count={card.faces.length}
+              siblingDim={activeFace != null && activeFace !== i}
+            />
           ))}
         </>
       ) : (
