@@ -1,7 +1,9 @@
 /**
  * QA страниц-разделов (/shop, /bestiary, /campaign, /challenges): прямые
- * заходы по глубоким ссылкам, переходы из меню по кнопкам шапки, «Назад»
- * в меню, скриншоты 1280px (в каталог вне репозитория, см. qa-lib).
+ * заходы по глубоким ссылкам, переходы из меню по кнопкам шапки, шапка
+ * страниц = шапка меню с подсветкой активного раздела (кнопки «Назад» больше
+ * нет), мобильный таб-бар с домиком по центру, скриншоты 1280/390px (в
+ * каталог вне репозитория, см. qa-lib).
  * Запуск при живом dev-сервере: node scripts/qa-pages.mjs
  */
 import { chromium } from "playwright";
@@ -116,7 +118,9 @@ for (const p of PAGES) {
   else fail(`меню → ${p.url}: url=${urlOk}(${page.url()}) h1=${h1ok}; экран: ${await bodyOf(page)}`);
 }
 
-// ── 3. «Назад» с каждой страницы возвращает в меню ──────────────────────────
+// ── 3. шапка страниц: та же навигация, что у меню, «Назад» больше нет ────────
+// Активный раздел подсвечен (data-active="true"), остальные кнопки — нет.
+const NAV_NAMES = PAGES.map((p) => p.button);
 for (const p of PAGES) {
   await gotoUrl(page, base + p.url);
   await waitUntil(
@@ -124,24 +128,40 @@ for (const p of PAGES) {
     20000,
     400,
   );
-  const back = page.getByRole("button", { name: "Вернуться в меню" }).first();
-  if (!(await back.isVisible().catch(() => false))) {
-    fail(`${p.url}: кнопки «Назад» нет`);
-    continue;
+  const backGone = !(await page
+    .getByRole("button", { name: "Вернуться в меню" })
+    .first()
+    .isVisible()
+    .catch(() => false));
+  const states = [];
+  for (const name of NAV_NAMES) {
+    const b = page.getByRole("button", { name, exact: true });
+    if (!(await b.isVisible().catch(() => false))) {
+      states.push(`${name}:none`);
+      continue;
+    }
+    const active = (await b.getAttribute("data-active").catch(() => null)) === "true";
+    states.push(`${name}:${active ? "active" : "plain"}`);
   }
-  await back.click();
-  const urlOk = await waitUntil(() => at("/"), 15000, 300);
-  const menu = await menuReady(page, 20000);
-  if (urlOk && menu) ok(`${p.url} → «Назад» → меню`);
-  else fail(`${p.url} → «Назад»: url=${urlOk}(${page.url()}) menu=${menu}`);
+  const activeCount = states.filter((s) => s.endsWith(":active")).length;
+  if (backGone && activeCount === 1 && states.includes(`${p.button}:active`)) {
+    ok(`${p.url}: «Назад» нет, в шапке активен «${p.button}»`);
+  } else {
+    fail(`${p.url}: backGone=${backGone} шапка=[${states.join(", ")}]`);
+  }
 }
 
 // ── 4. главный маршрут жив: / всё ещё открывает меню игры ───────────────────
+// В меню ни один раздел не подсвечен.
 await gotoUrl(page, base + "/");
 const home = await menuReady(page, 30000);
 const cols = await page.locator("[data-menu-col]").count().catch(() => 0);
-if (home && cols === 3) ok("/: меню игры на месте (3 колонки)");
-else fail(`/: menu=${home} cols=${cols}; экран: ${await bodyOf(page)}`);
+const menuActive = await page
+  .locator('header button[data-active="true"]')
+  .count()
+  .catch(() => 1);
+if (home && cols === 3 && menuActive === 0) ok("/: меню игры на месте (3 колонки), без активного раздела в шапке");
+else fail(`/: menu=${home} cols=${cols} menuActive=${menuActive}; экран: ${await bodyOf(page)}`);
 
 await page.screenshot({ path: `${SHOTS}/page-menu.png`, fullPage: true });
 await ctx.close().catch(() => {});
@@ -167,21 +187,69 @@ await ctx.close().catch(() => {});
   await run.ctx.close().catch(() => {});
 }
 
-// ── 6. телефон 390px: страницы без горизонтального скролла ──────────────────
+// ── 6. телефон 390px: таб-бар с домиком по центру, «Назад» нет ───────────────
 {
   const run = await newRuPage(browser, { viewport: { width: 390, height: 844 } });
+  const mob = run.page;
+  const tabbar = mob.getByTestId("mobile-tabbar");
+  const homeTab = mob.getByTestId("mobile-tab-home");
+  const tabs = mob.getByTestId("mobile-tab");
+  const noHScrollMob = () =>
+    mob
+      .evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)
+      .catch(() => false);
+
+  // Меню: таб-бар с 4 вкладками и домиком строго по центру панели.
+  await gotoUrl(mob, base + "/");
+  await menuReady(mob, 30000);
+  const barVisible = await tabbar.isVisible().catch(() => false);
+  const nTabs = await tabs.count().catch(() => 0);
+  const homeVisible = await homeTab.isVisible().catch(() => false);
+  const center = await mob
+    .evaluate(() => {
+      const bar = document.querySelector('[data-testid="mobile-tabbar"]');
+      const home = bar?.querySelector('[data-testid="mobile-tab-home"]');
+      if (!bar || !(home instanceof HTMLElement)) return null;
+      const b = bar.getBoundingClientRect();
+      const h = home.getBoundingClientRect();
+      return { off: Math.round(Math.abs(b.left + b.width / 2 - (h.left + h.width / 2))) };
+    })
+    .catch(() => null);
+  const centered = center != null && center.off <= 8;
+  const fitMenu = await noHScrollMob();
+  if (barVisible && nTabs === 4 && homeVisible && centered && fitMenu) {
+    ok("390px /: таб-бар, 4 вкладки, домик по центру, без горскролла");
+  } else {
+    fail(`390px /: bar=${barVisible} tabs=${nTabs} home=${homeVisible} center=${JSON.stringify(center)} hScroll=${!fitMenu}`);
+  }
+  await mob.screenshot({ path: `${SHOTS}/page-menu-mobile.png`, fullPage: true });
+
   for (const p of PAGES) {
-    await gotoUrl(run.page, base + p.url);
+    await gotoUrl(mob, base + p.url);
     await waitUntil(
-      () => run.page.getByRole("heading", { level: 1, name: p.title }).isVisible().catch(() => false),
+      () => mob.getByRole("heading", { level: 1, name: p.title }).isVisible().catch(() => false),
       15000,
       400,
     );
-    const fit = await run.page
-      .evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)
-      .catch(() => false);
-    if (fit) ok(`390px ${p.url}: без горскролла`);
-    else fail(`390px ${p.url}: горизонтальный скролл`);
+    const backGone = !(await mob
+      .getByRole("button", { name: "Вернуться в меню" })
+      .first()
+      .isVisible()
+      .catch(() => false));
+    const homeOk = await homeTab.isVisible().catch(() => false);
+    const pageFit = await noHScrollMob();
+    if (backGone && homeOk && pageFit) ok(`390px ${p.url}: домик в таб-баре, «Назад» нет, без горскролла`);
+    else fail(`390px ${p.url}: backGone=${backGone} home=${homeOk} hScroll=${!pageFit}`);
+    if (p.url === "/shop") {
+      await mob.screenshot({ path: `${SHOTS}/page-shop-mobile.png`, fullPage: true });
+    }
+
+    // Домик возвращает в меню с любой страницы.
+    await homeTab.click();
+    const urlOk = await waitUntil(() => new URL(mob.url()).pathname === "/", 15000, 300);
+    const menu = await menuReady(mob, 15000);
+    if (urlOk && menu) ok(`390px ${p.url} → домик → меню`);
+    else fail(`390px ${p.url} → домик: url=${urlOk}(${mob.url()}) menu=${menu}`);
   }
   await run.ctx.close().catch(() => {});
 }
@@ -212,18 +280,20 @@ await ctx.close().catch(() => {});
     await gotoEn(url);
     const h1 = run.page.getByRole("heading", { level: 1, name: title });
     const h1ok = await waitUntil(() => h1.isVisible().catch(() => false), 15000, 400);
-    const back = await waitUntil(
-      () => run.page.getByRole("button", { name: "Back to the menu" }).isVisible().catch(() => false),
-      8000,
-      300,
-    );
-    if (h1ok && back) ok(`en ${url}: h1 «${title}» + кнопка Back`);
-    else fail(`en ${url}: h1=${h1ok} back=${back}; экран: ${await bodyOf(run.page)}`);
+    // Шапка без «Назад»: та же навигация, кнопка текущего раздела активна.
+    const btn = run.page.getByRole("button", { name: title, exact: true });
+    const nav = await waitUntil(() => btn.isVisible().catch(() => false), 8000, 300);
+    const active = (await btn.getAttribute("data-active").catch(() => null)) === "true";
+    const back = await run.page
+      .getByRole("button", { name: "Back to the menu" })
+      .isVisible()
+      .catch(() => false);
+    if (h1ok && nav && active && !back) ok(`en ${url}: h1 «${title}» + активная кнопка шапки, «Назад» нет`);
+    else fail(`en ${url}: h1=${h1ok} nav=${nav} active=${active} back=${back}; экран: ${await bodyOf(run.page)}`);
   }
   await run.ctx.close().catch(() => {});
 }
 
-await browser.close();
 await browser.close();
 
 if (problems.length) {

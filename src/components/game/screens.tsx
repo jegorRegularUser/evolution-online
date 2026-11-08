@@ -1,6 +1,5 @@
 import {
   AlertTriangle,
-  ArrowLeft,
   BarChart3,
   BookOpen,
   ChevronDown,
@@ -12,8 +11,8 @@ import {
   X,
 } from "lucide-react";
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
-import { BookMarked, CheckCircle2, Compass, ShoppingBag, Star, Swords, Target } from "lucide-react";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { BookMarked, CheckCircle2, Compass, House, ShoppingBag, Star, Swords, Target } from "lucide-react";
 import { DialogShell } from "@/components/ui/dialog-shell";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -27,7 +26,7 @@ import type { CosmeticSlot } from "@/lib/profile/shared";
 import { CHALLENGES } from "@/game/challenges";
 import { COSMETIC_ITEMS, cosmeticById, type CosmeticItem } from "@/lib/cosmetics";
 import { CAMPAIGN_ERAS, CAMPAIGN_MISSIONS, type CampaignMissionId } from "@/game/campaign";
-import { loadBestiarium, type BestiariumEntry } from "@/game/bestiarium";
+import { flushPendingSpecimens, type BestiariumEntry } from "@/game/bestiarium";
 import { challengesGet, cosmeticsBuy, cosmeticsEquip, profileGet } from "@/lib/profile/api";
 import { sfx } from "@/lib/sfx";
 import { ACHIEVEMENTS, readStats } from "@/lib/stats";
@@ -78,13 +77,15 @@ const FOCUS_VISIBLE =
 
 /**
  * Мобильная нижняя навигация (F7): четыре страницы-раздела как таб-бар в зоне
- * большого пальца. Показывается только на телефоне (<sm, 640px): шапка на
- * мобилке оставляет себе модалки и язык, а переходы по разделам уходят вниз —
- * паттерн iOS/Android tab bar. Иконка + короткая подпись, тап-таргет ≥44px,
- * активная вкладка подсвечена акцентом и полоской сверху (Link ставит
- * data-status="active" и aria-current сам). Панель прижата к нижнему краю и
- * уважает жест-полосу iPhone: padding-bottom из env(safe-area-inset-bottom)
- * задаёт .mobile-tabbar в styles.css.
+ * большого пальца, а по центру — домик («главная») в приподнятом круге,
+ * классический центральный action. Показывается только на телефоне (<sm,
+ * 640px): шапка на мобилке оставляет себе модалки и язык, а переходы по
+ * разделам и возврат в меню уходят вниз — паттерн iOS/Android tab bar.
+ * Иконка + короткая подпись, тап-таргет ≥44px, активная вкладка подсвечена
+ * акцентом и полоской сверху (Link ставит data-status="active" и aria-current
+ * сам). Панель прижата к нижнему краю и уважает жест-полосу iPhone:
+ * padding-bottom из env(safe-area-inset-bottom) задаёт .mobile-tabbar в
+ * styles.css.
  */
 const MOBILE_TABS = [
   { to: "/shop", labelKey: "shop.title", Icon: ShoppingBag },
@@ -95,54 +96,158 @@ const MOBILE_TABS = [
 
 export function MobileTabBar() {
   const tt = useT();
+  const renderTab = ({ to, labelKey, Icon }: (typeof MOBILE_TABS)[number]) => (
+    <Link
+      key={to}
+      to={to}
+      activeOptions={{ exact: true }}
+      data-testid="mobile-tab"
+      className="flex min-h-14 flex-col items-center justify-center gap-1 px-1 py-1.5 text-[10px] font-medium leading-none text-muted transition-colors duration-[var(--motion-fast)] hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[status=active]:text-accent"
+    >
+      {({ isActive }) => (
+        <>
+          <Icon className="size-5 shrink-0" aria-hidden />
+          <span>{tt(labelKey)}</span>
+          <span
+            aria-hidden
+            className={cn(
+              "h-0.5 w-7 rounded-full transition-colors",
+              isActive ? "bg-accent" : "bg-transparent",
+            )}
+          />
+        </>
+      )}
+    </Link>
+  );
   return (
     <nav
       aria-label={tt("nav.tabbar")}
       data-testid="mobile-tabbar"
       className="mobile-tabbar fixed inset-x-0 bottom-0 z-30 border-t border-border bg-bg/95 backdrop-blur-sm sm:hidden"
     >
-      <div className="mx-auto grid w-full max-w-lg grid-cols-4">
-        {MOBILE_TABS.map(({ to, labelKey, Icon }) => (
-          <Link
-            key={to}
-            to={to}
-            activeOptions={{ exact: true }}
-            data-testid="mobile-tab"
-            className="flex min-h-14 flex-col items-center justify-center gap-1 px-1 py-1.5 text-[10px] font-medium leading-none text-muted transition-colors duration-[var(--motion-fast)] hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[status=active]:text-accent"
-          >
-            {({ isActive }) => (
-              <>
-                <Icon className="size-5 shrink-0" aria-hidden />
-                <span>{tt(labelKey)}</span>
-                <span
-                  aria-hidden
-                  className={cn(
-                    "h-0.5 w-7 rounded-full transition-colors",
-                    isActive ? "bg-accent" : "bg-transparent",
-                  )}
-                />
-              </>
-            )}
-          </Link>
-        ))}
+      {/* Пять мест: два раздела | домик по центру | два раздела. Домик —
+          единственный путь назад в меню с телефона: отдельной кнопки «Назад»
+          в шапке страниц больше нет. */}
+      <div className="mx-auto grid w-full max-w-lg grid-cols-5">
+        {MOBILE_TABS.slice(0, 2).map(renderTab)}
+        <Link
+          to="/"
+          activeOptions={{ exact: true }}
+          data-testid="mobile-tab-home"
+          aria-label={tt("nav.home")}
+          className="flex min-h-14 items-center justify-center px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        >
+          {({ isActive }) => (
+            <span
+              className={cn(
+                "-translate-y-3 flex size-11 items-center justify-center rounded-full border shadow-[var(--shadow-card)] transition-[transform,background-color,border-color,color] duration-[var(--motion-fast)] active:scale-95",
+                isActive ? "border-accent bg-accent text-accent-fg" : "border-border bg-surface text-fg",
+              )}
+            >
+              <House className="size-5" aria-hidden />
+            </span>
+          )}
+        </Link>
+        {MOBILE_TABS.slice(2).map(renderTab)}
       </div>
     </nav>
   );
 }
 
+/** Разделы в верхней навигации — порядок как в шапке меню. */
+const TOP_NAV_PAGES = [
+  { to: "/bestiary", labelKey: "bestiarium.title", Icon: BookMarked },
+  { to: "/campaign", labelKey: "campaign.title", Icon: Compass },
+  { to: "/challenges", labelKey: "challenges.title", Icon: Target },
+  { to: "/shop", labelKey: "shop.title", Icon: ShoppingBag },
+] as const satisfies Array<{ to: "/shop" | "/bestiary" | "/campaign" | "/challenges"; labelKey: TKey; Icon: typeof ShoppingBag }>;
+
+/**
+ * Верхняя навигация меню и страниц-разделов: обучение, правила, четыре
+ * раздела, статистика и звук (язык добавляет сам TopBar). Активный раздел
+ * выводится из URL (useRouterState): страница /shop показывает ровно ту же
+ * шапку, что и меню, только с подсвеченной кнопкой «Магазин» — переход на
+ * страницу ощущается обычной сменой раздела, отдельная кнопка «Назад» не
+ * нужна. Модалки здесь только открываются: сами панели рендерит вызывающий
+ * экран ЗА пределами шапки — backdrop-blur шапки стал бы для fixed-панели
+ * containing block и сломал бы её позиционирование.
+ */
+export function TopBarNav({
+  onTutorial,
+  onRules,
+  onStats,
+}: {
+  onTutorial: () => void;
+  onRules: () => void;
+  onStats: () => void;
+}) {
+  const tt = useT();
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  return (
+    <>
+      {/* На узком экране подписи скрыты — кнопки остаются иконочными,
+          поэтому у каждой есть постоянное доступное имя. max-xl:h-11 —
+          тап-таргет 44px на телефоне и планшете. max-sm:hidden у обучения
+          и разделов: на телефоне эти места живут в нижнем таб-баре. */}
+      <Button variant="ghost" size="sm" className="max-xl:h-11 max-sm:hidden" aria-label={tt("topbar.tutorial")} title={tt("topbar.tutorial")} onClick={onTutorial}>
+        <GraduationCap className="size-4" />
+        <span className="hidden sm:inline">{tt("topbar.tutorial")}</span>
+      </Button>
+      <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.rules")} title={tt("topbar.rules")} onClick={onRules}>
+        <BookOpen className="size-4" />
+        <span className="hidden sm:inline">{tt("topbar.rules")}</span>
+      </Button>
+      {TOP_NAV_PAGES.map(({ to, labelKey, Icon }) => {
+        const active = pathname === to;
+        return (
+          <Button
+            key={to}
+            variant="ghost"
+            size="sm"
+            aria-current={active ? "page" : undefined}
+            data-active={active ? "true" : undefined}
+            className={cn(
+              "max-xl:h-11 max-sm:hidden",
+              active && "bg-accent/10 text-accent hover:bg-accent/15",
+            )}
+            aria-label={tt(labelKey)}
+            title={tt(labelKey)}
+            onClick={() => {
+              sfx.play("click");
+              navigate({ to });
+            }}
+          >
+            <Icon className="size-4" />
+            <span className="hidden sm:inline">{tt(labelKey)}</span>
+          </Button>
+        );
+      })}
+      <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.stats")} title={tt("topbar.stats")} onClick={onStats}>
+        <BarChart3 className="size-4" />
+        <span className="hidden sm:inline">{tt("topbar.stats")}</span>
+      </Button>
+      <SoundToggle />
+    </>
+  );
+}
+
 /**
  * Каркас страницы-раздела (магазин, бестиарий, кампания, вызовы): фон и шапка
- * — те же, что у главного меню, но в правом слоте шапки одна заметная кнопка
- * «Назад» (ведёт в меню, /). Заголовок раздела и содержимое рендерит
- * content-компонент экрана в children; модальный вариант при необходимости —
- * тот же компонент, обёрнутый в DialogShell (см. RulesPanel/StatsScreen).
- * На телефоне (<sm) шапка без лого и названия (компактная строка «Назад» +
- * язык), а внизу появляется таб-бар разделов — контент получает нижний
- * паддинг, чтобы не прятаться под панелью.
+ * — ровно те же, что у главного меню (общая TopBarNav, активный раздел
+ * подсвечен), отдельной шапки раздела и кнопки «Назад» нет: попадая на /shop
+ * или /bestiary, человек видит знакомую навигацию и содержимое ниже —
+ * страница ощущается обычным переходом. Заголовок раздела и содержимое
+ * рендерит content-компонент экрана в children; модальный вариант при
+ * необходимости — тот же компонент, обёрнутый в DialogShell (см.
+ * RulesPanel/StatsScreen). Модалки шапки (обучение, правила, статистика)
+ * открываются и отсюда; панели рендерятся вне шапки, чтобы backdrop-blur
+ * не ломал их fixed-позиционирование. На телефоне (<sm) шапка без лого и
+ * названия (компактная строка модалок + звук + язык), внизу таб-бар разделов
+ * с домиком — контент получает нижний паддинг, чтобы не прятаться под панелью.
  */
 export function FeaturePage({ titleKey, children }: { titleKey: TKey; children: ReactNode }) {
   const tt = useT();
-  const navigate = useNavigate();
   // Заголовок вкладки браузера: LangInit в __root ставит app.name на
   // монтировании и при смене языка; этот эффект перебивает его позже
   // (дерево ниже), поэтому у каждой страницы свой title.
@@ -150,6 +255,11 @@ export function FeaturePage({ titleKey, children }: { titleKey: TKey; children: 
   useEffect(() => {
     document.title = title;
   }, [title]);
+  // Модалки шапки — те же, что в меню; состояние живёт на странице, панели —
+  // за пределами шапки (см. TopBarNav).
+  const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
   return (
     <>
       <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
@@ -160,23 +270,20 @@ export function FeaturePage({ titleKey, children }: { titleKey: TKey; children: 
       </div>
       <div className="relative flex min-h-dvh flex-col">
         <TopBar subtitle={tt("app.brand")} hideBrandOnMobile>
-          {/* На телефоне шапка без бренда: правый слот растянут (см. TopBar),
-              поэтому «Назад» прижата к левому краю (mr-auto) — каноничный
-              мобильный паттерн, язык остаётся справа. */}
-          <Button
-            variant="secondary"
-            size="sm"
-            className="max-xl:h-11 max-sm:mr-auto"
-            aria-label={tt("nav.backToMenu")}
-            title={tt("nav.backToMenu")}
-            onClick={() => {
-              sfx.play("click");
-              navigate({ to: "/" });
+          <TopBarNav
+            onTutorial={() => {
+              sfx.play("modal");
+              setTutorialOpen(true);
             }}
-          >
-            <ArrowLeft className="size-4" />
-            <span className="hidden sm:inline">{tt("nav.back")}</span>
-          </Button>
+            onRules={() => {
+              sfx.play("modal");
+              setRulesOpen(true);
+            }}
+            onStats={() => {
+              sfx.play("modal");
+              setStatsOpen(true);
+            }}
+          />
         </TopBar>
         {/* Ширина чуть больше модальной панели (max-w-2xl): страница дышит,
             сетки каталога получают те же два столбца, что и в модалке.
@@ -186,6 +293,30 @@ export function FeaturePage({ titleKey, children }: { titleKey: TKey; children: 
         </main>
         <MobileTabBar />
       </div>
+      {tutorialOpen ? (
+        <TutorialScreen
+          onClose={() => {
+            sfx.play("modal");
+            setTutorialOpen(false);
+          }}
+        />
+      ) : null}
+      {rulesOpen ? (
+        <RulesPanel
+          onClose={() => {
+            sfx.play("modal");
+            setRulesOpen(false);
+          }}
+        />
+      ) : null}
+      {statsOpen ? (
+        <StatsScreen
+          onClose={() => {
+            sfx.play("modal");
+            setStatsOpen(false);
+          }}
+        />
+      ) : null}
     </>
   );
 }
@@ -201,17 +332,8 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
   const tt = useT();
   const [statsOpen, setStatsOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
-  const navigate = useNavigate();
   const netFatal = useGameStore((s) => s.netFatal);
   const clearNetFatal = useGameStore((s) => s.clearNetFatal);
-
-  // Магазин, бестиарий, кампания и вызовы — отдельные страницы (/shop,
-  // /bestiary, /campaign, /challenges): переход звучит щелчком, как у прочих
-  // кнопок интерфейса; модалок меню для них больше нет.
-  const goTo = (to: "/shop" | "/bestiary" | "/campaign" | "/challenges") => {
-    sfx.play("click");
-    navigate({ to });
-  };
 
   // Обучение и статистика — модалки меню: открытие и закрытие звучат тихим свушем.
   const openTutorial = () => {
@@ -242,44 +364,13 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
       </div>
       <div className="relative flex min-h-dvh flex-col">
         {/* Полоса навигации — как шапка игрового стола: лого и название
-            слева, справа правила, обучение, статистика и звук.
-            На телефоне (F7) шапка компактная: без лого и названия, без
-            обучения и без кнопок разделов (они ушли в нижний таб-бар) —
-            остаются модалки (правила, статистика), звук и язык. */}
+            слева, справа обучение, правила, разделы, статистика и звук
+            (общая TopBarNav — на страницах-разделах она та же, активный
+            раздел подсвечен). На телефоне (F7) шапка компактная: без лого
+            и названия, без обучения и кнопок разделов (они ушли в нижний
+            таб-бар с домиком) — остаются правила, статистика, звук и язык. */}
         <TopBar subtitle={tt("app.brand")} hideBrandOnMobile>
-          {/* На узком экране подписи скрыты — кнопки остаются иконочными,
-              поэтому у каждой есть постоянное доступное имя. max-xl:h-11 —
-              тап-таргет 44px на телефоне и планшете. max-sm:hidden у обучения
-              и разделов: на телефоне эти места живут в нижнем таб-баре. */}
-          <Button variant="ghost" size="sm" className="max-xl:h-11 max-sm:hidden" aria-label={tt("topbar.tutorial")} title={tt("topbar.tutorial")} onClick={openTutorial}>
-            <GraduationCap className="size-4" />
-            <span className="hidden sm:inline">{tt("topbar.tutorial")}</span>
-          </Button>
-          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.rules")} title={tt("topbar.rules")} onClick={onRules}>
-            <BookOpen className="size-4" />
-            <span className="hidden sm:inline">{tt("topbar.rules")}</span>
-          </Button>
-          <Button variant="ghost" size="sm" className="max-xl:h-11 max-sm:hidden" aria-label={tt("bestiarium.title")} title={tt("bestiarium.title")} onClick={() => goTo("/bestiary")}>
-            <BookMarked className="size-4" />
-            <span className="hidden sm:inline">{tt("bestiarium.title")}</span>
-          </Button>
-          <Button variant="ghost" size="sm" className="max-xl:h-11 max-sm:hidden" aria-label={tt("campaign.title")} title={tt("campaign.title")} onClick={() => goTo("/campaign")}>
-            <Compass className="size-4" />
-            <span className="hidden sm:inline">{tt("campaign.title")}</span>
-          </Button>
-          <Button variant="ghost" size="sm" className="max-xl:h-11 max-sm:hidden" aria-label={tt("challenges.title")} title={tt("challenges.title")} onClick={() => goTo("/challenges")}>
-            <Target className="size-4" />
-            <span className="hidden sm:inline">{tt("challenges.title")}</span>
-          </Button>
-          <Button variant="ghost" size="sm" className="max-xl:h-11 max-sm:hidden" aria-label={tt("shop.title")} title={tt("shop.title")} onClick={() => goTo("/shop")}>
-            <ShoppingBag className="size-4" />
-            <span className="hidden sm:inline">{tt("shop.title")}</span>
-          </Button>
-          <Button variant="ghost" size="sm" className="max-xl:h-11" aria-label={tt("topbar.stats")} title={tt("topbar.stats")} onClick={openStats}>
-            <BarChart3 className="size-4" />
-            <span className="hidden sm:inline">{tt("topbar.stats")}</span>
-          </Button>
-          <SoundToggle />
+          <TopBarNav onTutorial={openTutorial} onRules={onRules} onStats={openStats} />
         </TopBar>
 
         {/* Столы — единственный путь в партию: соло-режим убран, игра с ботами
@@ -316,8 +407,8 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
             <NetMenuScreen />
           </div>
         </div>
-        {/* Мобильный таб-бар разделов: Магазин · Бестиарий · Кампания ·
-            Вызовы. На <sm шапка их больше не дублирует. */}
+        {/* Мобильный таб-бар разделов: Магазин · Бестиарий · [домик] ·
+            Кампания · Вызовы. На <sm шапка разделы больше не дублирует. */}
         <MobileTabBar />
       </div>
       {/* Обучение и статистика остались модалками меню; магазин, бестиарий,
@@ -1919,18 +2010,24 @@ function ShopPreview({ item, onClose }: { item: CosmeticItem; onClose: () => voi
  * и статус. Пустой альбом объясняет, как завести первого питомца.
  *
  * Содержимое без диалоговой оболочки: живёт на странице /bestiary
- * (FeaturePage).
+ * (FeaturePage). Чтение альбома — ПОСЛЕ монтирования: альбом device-bound
+ * (localStorage), SSR про него не знает, иначе hydration mismatch. Заодно
+ * монтирование — точка перепроверки чердака: погибшие в партиях питомцы
+ * оседают в альбоме, даже если их партия так и не доигралась.
  */
 export function BestiariumContent() {
   const tt = useT();
-  const [entries] = useState<BestiariumEntry[]>(() => loadBestiarium());
+  const [entries, setEntries] = useState<BestiariumEntry[] | null>(null);
+  useEffect(() => {
+    setEntries(flushPendingSpecimens());
+  }, []);
   return (
     <>
       <header className="mb-4">
         <h1 className="font-display text-2xl tracking-[0.08em] text-fg sm:text-3xl">{tt("bestiarium.title")}</h1>
         <p className="mt-1 text-xs text-muted">{tt("bestiarium.subtitle")}</p>
       </header>
-      {entries.length === 0 ? (
+      {entries === null ? null : entries.length === 0 ? (
         <p className="rounded-[var(--radius-md)] border border-border bg-bg/60 px-4 py-6 text-center text-sm text-muted">
           {tt("bestiarium.empty")}
         </p>
