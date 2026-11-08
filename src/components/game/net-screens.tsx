@@ -30,7 +30,7 @@ import { deckSizeFor } from "@/game/deck";
 import { modifierCompatibilityError, modifierSlotsUsed } from "@/game/modifier-compatibility";
 import { moduleCompatibilityError } from "@/game/module-compatibility";
 import type { Difficulty, MutatorId, TableRuleId } from "@/game/types";
-import { PLAYER_COLORS, type PlayerColor, type ReactionEmoji, type RoomSummary, type SeatInfo } from "@/lib/net/shared";
+import { PLAYER_COLORS, TURN_TIMER_DEFAULT_MS, type PlayerColor, type ReactionEmoji, type RoomSummary, type SeatInfo, type TurnTimerMs } from "@/lib/net/shared";
 import { EventFeed, reactionsByChatId, type FeedItem } from "./event-feed";
 import { loadLastNetConfig, typingNamesOf } from "@/store/game-store";
 import { loadName, saveName } from "@/lib/net/session";
@@ -71,6 +71,19 @@ const RULE_OPTIONS: Array<[TableRuleId, TKey, TKey]> = [
 const MUTATOR_OPTIONS: Array<[MutatorId, TKey, TKey]> = [
   ["scavengers", "lobby.mutator.scavengers", "lobby.mutator.scavengers.hint"],
   ["rapidEvolution", "lobby.mutator.rapidEvolution", "lobby.mutator.rapidEvolution.hint"],
+];
+
+/**
+ * Таймер хода: значения настройки (мс) и их подписи. Значения обязаны
+ * совпадать с TURN_TIMER_CHOICES в net/shared.ts (та же вилка в zod-схеме);
+ * 0 — «Выкл»: сервер не завершает ход принудительно вовсе.
+ */
+const TURN_TIMER_OPTIONS: ReadonlyArray<readonly [TurnTimerMs, TKey]> = [
+  [0, "lobby.turnTimer.off"],
+  [30_000, "lobby.turnTimer.30"],
+  [60_000, "lobby.turnTimer.60"],
+  [120_000, "lobby.turnTimer.120"],
+  [180_000, "lobby.turnTimer.180"],
 ];
 
 /**
@@ -441,6 +454,8 @@ export function NetMenuScreen() {
         rules: last.rules,
         mutators: last.mutators,
         wildWorld: last.wildWorld,
+        // Таймер хода тоже запоминается между партиями (меняется в лобби).
+        turnTimerMs: last.turnTimerMs,
         isPrivate: makePrivate,
       }),
     );
@@ -1230,6 +1245,9 @@ export function LobbyScreen() {
   const shareUrl = `${window.location.origin}/?room=${net.code}`;
   const modules = net.settings.modules ?? {};
   const difficulty = net.settings.difficulty ?? "normal";
+  // Таймер хода: у столов, созданных без ключа (старые/прямые пути), в лобби
+  // показываем умолчание — 1 мин (см. TURN_TIMER_DEFAULT_MS и сервер).
+  const turnTimer = net.settings.turnTimerMs ?? TURN_TIMER_DEFAULT_MS;
   // Волна 2: модификаторы стола — общий лимит 3 слота на правила, мутаторы
   // и «Дикий мир» (§0.10); сервер считает то же самое при create/settings/start.
   const rules = net.settings.rules ?? {};
@@ -1313,6 +1331,12 @@ export function LobbyScreen() {
 
   function pickDifficulty(id: Difficulty) {
     if (isHost) void netSetSettings({ difficulty: id });
+  }
+
+  /** Таймер хода: у столов без ключа показываем и ставим умолчание — 1 мин. */
+  function pickTurnTimer(ms: TurnTimerMs) {
+    if (!isHost) return;
+    void netSetSettings({ turnTimerMs: ms });
   }
 
   /** Волна 2: правила, мутаторы и «Дикий мир» — включение только в лимит слотов. */
@@ -1789,6 +1813,34 @@ export function LobbyScreen() {
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Таймер хода: сколько идёт ход человека (умолчание — 1 мин),
+              «Выкл» — сервер не завершает ход принудительно. Ботов не касается. */}
+          <div className="mb-3">
+            <p className="mb-1.5 text-xs text-muted">{tt("lobby.turnTimer")}</p>
+            <div className="grid grid-cols-5 gap-2" data-turn-timer-setting>
+              {TURN_TIMER_OPTIONS.map(([ms, labelKey]) => (
+                <button
+                  key={ms}
+                  type="button"
+                  disabled={!isHost}
+                  data-timer-option={ms}
+                  aria-pressed={turnTimer === ms}
+                  title={isHost ? tt("lobby.turnTimer.hint") : tt("lobby.hostOnly")}
+                  onClick={() => pickTurnTimer(ms)}
+                  className={cn(
+                    "h-11 rounded-[var(--radius-md)] border px-1 text-xs font-medium whitespace-nowrap disabled:cursor-not-allowed sm:h-10 sm:text-sm disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
+                    turnTimer === ms
+                      ? "border-accent bg-accent text-accent-fg"
+                      : "border-border bg-bg text-fg hover:bg-surface-2",
+                  )}
+                >
+                  {tt(labelKey)}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-xs text-subtle">{tt("lobby.turnTimer.note")}</p>
           </div>
 
           <div>

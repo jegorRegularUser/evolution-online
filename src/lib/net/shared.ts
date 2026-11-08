@@ -116,7 +116,27 @@ export interface RoomSettings {
   wildWorld?: boolean;
   /** Волна 4а: сценарий изверга (кампания) — сид босса + ломающее правило. */
   scenario?: GameScenario;
+  /**
+   * Таймер хода человека (мс): дедлайн, через который сервер сам завершит
+   * ход. 0 — таймер выключен («Выкл»): ход висит, пока игрок не завершит его
+   * сам; ботов это не касается — их шаги двигает темп PACE. Ключ может
+   * отсутствовать у старых столов — тогда действуют legacy-паузы
+   * PACE.idleTurnMs / PACE.afkTurnMs (см. turnTimeoutMs в server.ts).
+   */
+  turnTimerMs?: TurnTimerMs;
 }
+
+/**
+ * Допустимые значения таймера хода (мс): та же вилка в roomSettingsSchema и
+ * в createRoomInput — хост выбирает «Выкл / 30 с / 1 мин / 2 мин / 3 мин»,
+ * сервер принимает ровно эти метки. 1 мин — умолчание: совпадает с прежним
+ * AFK-предохранителем PACE.afkTurnMs.
+ */
+export const TURN_TIMER_CHOICES = [0, 30_000, 60_000, 120_000, 180_000] as const;
+export type TurnTimerMs = (typeof TURN_TIMER_CHOICES)[number];
+
+/** Значение таймера по умолчанию для показа в лобби (у столов без ключа). */
+export const TURN_TIMER_DEFAULT_MS = 60_000;
 
 /** Ключи столовых правил — для UI лобби (порядок как в modifiers.ts). */
 export const TABLE_RULE_KEYS: readonly TableRuleId[] = ["pack", "hungrySeason", "abundance", "startHand"];
@@ -261,6 +281,13 @@ export interface PollResult {
    */
   turnDeadlineAt: number | null;
   /**
+   * Следующий автошаг сервера, когда ходит БОТ (epoch ms, серверные часы);
+   * null — сейчас не ход бота. Клиент рисует по ней тикающий отсчёт до
+   * следующего действия бота на его табло: у ботов нет дедлайна «конца хода»
+   * (их темп ведёт сервер), поэтому честная метка — именно следующий шаг.
+   */
+  botStepAt: number | null;
+  /**
    * Серверное «сейчас» (epoch ms): клиент считает по нему смещение своих
    * часов, чтобы отсчёт не зависел от неточных часов устройства.
    */
@@ -316,6 +343,8 @@ export interface SpectatorSnapshot {
   reactions: ReactionMessage[];
   /** См. PollResult.turnDeadlineAt: отсчёт авто-конца хода виден и зрителям. */
   turnDeadlineAt: number | null;
+  /** См. PollResult.botStepAt: отсчёт до следующего шага бота виден и зрителям. */
+  botStepAt: number | null;
   /** См. PollResult.serverNow. */
   serverNow: number;
 }
@@ -416,6 +445,16 @@ export const roomSettingsSchema = z.object({
   rules: TABLE_RULES.optional(),
   mutators: MUTATORS.optional(),
   wildWorld: z.boolean().optional(),
+  /** Таймер хода: только фиксированная вилка TURN_TIMER_CHOICES (0 = «Выкл»). */
+  turnTimerMs: z
+    .union([
+      z.literal(0),
+      z.literal(30_000),
+      z.literal(60_000),
+      z.literal(120_000),
+      z.literal(180_000),
+    ])
+    .optional(),
 });
 
 export const createRoomInput = z.object({
@@ -447,6 +486,16 @@ export const createRoomInput = z.object({
     .optional(),
   mutators: MUTATORS.optional(),
   wildWorld: z.boolean().optional(),
+  /** Таймер хода (мс, TURN_TIMER_CHOICES; 0 = «Выкл»); живёт в settings стола. */
+  turnTimerMs: z
+    .union([
+      z.literal(0),
+      z.literal(30_000),
+      z.literal(60_000),
+      z.literal(120_000),
+      z.literal(180_000),
+    ])
+    .optional(),
   /** Приватный стол: вход по паролю, в меню виден в колонке «Закрытые». */
   isPrivate: z.boolean().optional(),
   /** Пароль приватного стола; пусто — сервер сгенерирует 4 цифры. */

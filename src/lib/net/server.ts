@@ -919,6 +919,36 @@ function turnDeadlineOf(room: RoomRow): number | null {
   return toMs(room.turn_deadline_at);
 }
 
+/**
+ * Следующий автошаг сервера, когда ходит БОТ (epoch ms), либо null: у бота
+ * нет дедлайна «конца хода» — его темп ведёт сервер шаг за шагом, поэтому
+ * честная метка для чужого табло — время следующего шага. В автофазах
+ * (банк/вымирание/рост) актора нет — метки тоже нет.
+ */
+function botStepAtOf(room: RoomRow): number | null {
+  if (room.status !== "playing" || !room.state || room.auto_step_at === null) return null;
+  const actor = currentActor(room.state);
+  if (!actor || !actor.isAI) return null;
+  return toMs(room.auto_step_at);
+}
+
+/**
+ * Пауза до авто-конца хода человека (мс) по настройке стола «Таймер хода»:
+ * — ключ есть и 0 («Выкл») → null: дедлайна нет, сервер не завершает ход
+ *   принудительно вовсе (игрок заканчивает его сам);
+ * — ключ есть и > 0 → значение настройки: ход (пустой и с действиями)
+ *   длится ровно столько, как хост выбрал в лобби;
+ * — ключа нет (старые столы, прямой путь создания) → прежнее поведение:
+ *   idleTurnMs для хода без действий, afkTurnMs — с действиями.
+ * Темп ботов (stepDelay) не зависит от настройки — она только про людей.
+ */
+export function turnTimeoutMs(settings: RoomSettings | null | undefined, idle: boolean): number | null {
+  const raw = settings?.turnTimerMs;
+  if (raw === undefined) return idle ? PACE.idleTurnMs : PACE.afkTurnMs;
+  if (raw === null || !Number.isFinite(raw) || raw <= 0) return null;
+  return raw;
+}
+
 /** Следующий шаг, который сервер делает сам; null — ждём ход человека. */
 export function nextAutoStep(state: GameState): GameAction | null {
   if (state.phase === "foodBank") {
@@ -1588,14 +1618,27 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       const before = room.state;
       const step = nextAutoStep(before);
       if (!step) {
-        // Ход человека: «ход» — полный ход игрока в текущей фазе. Для пустого
-        // хода действует короткое idleTurnMs, для хода с действиями — AFK
-        // предохранитель afkTurnMs. Оба значения абсолютны и не зависят от
-        // интервала поллинга; watchdog держит их даже без браузера.
+        // Ход человека: «ход» — полный ход игрока в текущей фазе. Паузу до
+        // авто-конца задаёт настройка стола «Таймер хода» (turnTimerMs);
+        // у столов без ключа — прежние idleTurnMs/afkTurnMs. «Выкл» (0)
+        // означает: сервер ход не заканчивает вовсе — игрок завершает его сам.
+        // Оба значения абсолютны и не зависят от интервала поллинга; watchdog
+        // держит их даже без браузера.
         const actor = currentActor(before);
         if (!actor) return;
         const idle = noChoicesLeft(before, actor);
-        const timeoutMs = idle ? PACE.idleTurnMs : PACE.afkTurnMs;
+        const timeoutMs = turnTimeoutMs(room.settings, idle);
+        if (timeoutMs === null) {
+          // «Выкл»: снимаем хвосты прошлого шага (устаревший auto_step_at),
+          // но дедлайн не ставим — ход висит, пока игрок не завершит сам.
+          if (room.turn_deadline_at !== null || room.auto_step_at !== null) {
+            await casUpdate(sql, code, room.version, {
+              autoStepAt: null,
+              turnDeadlineAt: null,
+            }).catch(() => false);
+          }
+          return;
+        }
         if (room.turn_deadline_at === null) {
           await casUpdate(sql, code, room.version, {
             autoStepAt: null,
@@ -1693,6 +1736,7 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       spectators,
       reactions,
       turnDeadlineAt: turnDeadlineOf(room),
+      botStepAt: botStepAtOf(room),
       serverNow: now(),
       ...(opts.actionId ? { actionId: opts.actionId } : {}),
     };
@@ -1879,6 +1923,9 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         // Волна 4а: сценарий изверга живёт в settings комнаты — иначе старт
         // (effectiveSettings) его не увидит и изверг выйдет без правила.
         ...(input.scenario ? { scenario: input.scenario } : {}),
+        // Таймер хода пишем только когда клиент его прислал: столы, созданные
+        // без ключа (старые клиенты, прямые вызовы), живут по legacy-паузам.
+        ...(input.turnTimerMs !== undefined ? { turnTimerMs: input.turnTimerMs } : {}),
       };
       for (let attempt = 0; attempt < 6; attempt++) {
         const code = makeCode();
@@ -2167,6 +2214,9 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       if (patch.rules !== undefined) next.rules = patch.rules;
       if (patch.mutators !== undefined) next.mutators = patch.mutators;
       if (patch.wildWorld !== undefined) next.wildWorld = patch.wildWorld;
+      // Таймер хода: 0 («Выкл») — валидное значение, поэтому проверка на
+      // undefined, а не на falsy. Меняется только до старта (выше).
+      if (patch.turnTimerMs !== undefined) next.turnTimerMs = patch.turnTimerMs;
       const modIncompatibility = modifierCompatibilityError({
         modules: next.modules,
         rules: next.rules,
@@ -2450,6 +2500,7 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         chat,
         reactions,
         turnDeadlineAt: turnDeadlineOf(fresh),
+        botStepAt: botStepAtOf(fresh),
         serverNow: now(),
       };
     },

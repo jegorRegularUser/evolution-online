@@ -10,7 +10,7 @@ import {
   NET_TABLES_DDL,
   nextAutoStep,
   noChoicesLeft,
-  splitStatements,
+  splitStatements, turnTimeoutMs,
   _internals,
 } from "./server.ts";
 import { PACE, PLAYER_COLORS, joinRoomInput, setPasswordInput } from "./shared.ts";
@@ -2905,3 +2905,181 @@ describe("M10: ход человека без действий закрывае�
     assert.equal(fresh.turnDeadlineAt, fixedNow + PACE.afkTurnMs);
   });
 });
+
+describe("таймер хода: настройка стола (T2) и шаг бота в кадре (T1)", () => {
+  it("turnTimeoutMs: настройка сильнее legacy, 0 («Выкл») — дедлайна нет", () => {
+    // Ключ задан: значение настройки действует и для пустого хода, и для
+    // хода с действиями — «сколько идёт ход», одна цифра для обоих случаев.
+    assert.equal(turnTimeoutMs({ turnTimerMs: 30_000 }, false), 30_000);
+    assert.equal(turnTimeoutMs({ turnTimerMs: 30_000 }, true), 30_000);
+    assert.equal(turnTimeoutMs({ turnTimerMs: 180_000 }, false), 180_000);
+    assert.equal(turnTimeoutMs({ turnTimerMs: 0 }, false), null, "«Выкл»: принудительного конца нет");
+    assert.equal(turnTimeoutMs({ turnTimerMs: 0 }, true), null);
+    // Ключа нет (старые столы, прямые вызовы create) — прежние паузы.
+    assert.equal(turnTimeoutMs({}, false), PACE.afkTurnMs);
+    assert.equal(turnTimeoutMs({}, true), PACE.idleTurnMs);
+    assert.equal(turnTimeoutMs(null, false), PACE.afkTurnMs);
+    assert.equal(turnTimeoutMs(undefined, true), PACE.idleTurnMs);
+  });
+
+  it("хост ставит таймер в лобби, гость — нет; после старта настройка заперта", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    const guest = await s.join({ code: host.code, name: "Боря" });
+    await s.setSettings(host.code, host.token, { turnTimerMs: 120_000 });
+    assert.equal(
+      full(await s.poll(host.code, host.token)).room.settings.turnTimerMs,
+      120_000,
+      "значение держится на сервере",
+    );
+    await assert.rejects(
+      () => s.setSettings(host.code, guest.token, { turnTimerMs: 0 }),
+      (e: unknown) => e instanceof NetError && e.code === "host-only",
+    );
+    // «Выкл» — валидное значение, тоже сохраняется.
+    await s.setSettings(host.code, host.token, { turnTimerMs: 0 });
+    assert.equal(full(await s.poll(host.code, host.token)).room.settings.turnTimerMs, 0);
+    await s.setSettings(host.code, host.token, { turnTimerMs: 30_000 });
+    await s.start(host.code, host.token);
+    await assert.rejects(
+      () => s.setSettings(host.code, host.token, { turnTimerMs: 60_000 }),
+      (e: unknown) => e instanceof NetError && e.code === "lobby-only",
+    );
+  });
+
+  it("настройка 30 с: дедлайн хода с действиями = 30 с, по истечении шаг применяется", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({
+      name: "Аня",
+      capacity: 2,
+      botSeats: 0,
+      difficulty: "normal",
+      turnTimerMs: 30_000,
+    });
+    await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const busy = feedingForHuman(room.state!, { animal: true, foodBank: 3 });
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state: busy }), true);
+    const planned = full(await s.poll(host.code, host.token));
+    assert.equal(planned.turnDeadlineAt, fixedNow + 30_000, "дедлайн = настройка, а не afkTurnMs");
+    assert.equal(planned.botStepAt, null, "в ход человека метки шага бота нет");
+    fixedNow += 30_000 + 1;
+    const after = full(await s.poll(host.code, host.token));
+    assert.ok(after.version > planned.version, "принудительный шаг по дедлайну применён");
+    // Соперник без действий: ход возвращается ходящему, и новый отсчёт снова
+    // идёт по настройке (30 с), а не по afkTurnMs.
+    assert.equal(after.turnDeadlineAt, fixedNow + 30_000);
+    // Пустой ход при той же настройке тоже получает 30 с: Setting сильнее
+    // и короткого idle-умолчания — «сколько идёт ход», одна цифра.
+    const room2 = (await _internals.readRoom(sql, host.code))!;
+    const idle2 = feedingForHuman(room2.state!, { animal: false, foodBank: 0 });
+    assert.equal(await _internals.casUpdate(sql, host.code, room2.version, { state: idle2 }), true);
+    const idlePlanned = full(await s.poll(host.code, host.token));
+    assert.equal(idlePlanned.turnDeadlineAt, fixedNow + 30_000, "пустой ход — тоже по настройке");
+    fixedNow += 30_000 + 1;
+    const idleAfter = full(await s.poll(host.code, host.token));
+    assert.ok(
+      idleAfter.state!.phase !== "feeding" || idleAfter.state!.currentPlayerId !== 0,
+      "пустой ход уходит дальше по истечении настройки",
+    );
+  });
+
+  it("«Выкл» (0): метки нет и за 90 с ход не уходит — завершает сам игрок", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({
+      name: "Аня",
+      capacity: 2,
+      botSeats: 0,
+      difficulty: "normal",
+      turnTimerMs: 0,
+    });
+    await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    // Пустой ход (действий нет): именно он раньше закрывался коротким
+    // idleTurnMs — «Выкл» обязан отключить и этот авто-конец.
+    const idle = feedingForHuman(room.state!, { animal: false, foodBank: 0 });
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state: idle }), true);
+    const planned = full(await s.poll(host.code, host.token));
+    assert.equal(planned.turnDeadlineAt, null, "с «Выкл» метки дедлайна нет");
+    fixedNow += 90_000;
+    const later = full(await s.poll(host.code, host.token));
+    assert.equal(later.turnDeadlineAt, null);
+    assert.equal(later.version, planned.version, "версия не менялась — принудительного шага не было");
+    assert.equal(later.state!.currentPlayerId, 0, "ход ждёт завершения игроком");
+  });
+
+  it("стол без ключа настройки (старые клиенты): ход с действиями = afkTurnMs (1 мин)", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    // Прямой путь create без turnTimerMs — как старый клиент или серверный вызов.
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    assert.equal(room.settings?.turnTimerMs, undefined, "ключа у старого стола нет");
+    const busy = feedingForHuman(room.state!, { animal: true, foodBank: 3 });
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state: busy }), true);
+    const planned = full(await s.poll(host.code, host.token));
+    assert.equal(planned.turnDeadlineAt, fixedNow + PACE.afkTurnMs, "умолчание — прежняя минута");
+  });
+
+  it("бот на столе: botStepAt в кадрах игрока и зрителя; в ход человека метки нет", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 1, difficulty: "normal" });
+    const { token: spec } = await s.spectate(host.code, "Зоя");
+    await s.start(host.code, host.token);
+    // Ручной расклад: ход у бота (место 1), в руке три карты — сервер ведёт
+    // его шагами, и ход не кончается одним автошагом.
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const crafted = structuredClone(room.state!);
+    crafted.phase = "development";
+    crafted.pendingAttack = null;
+    crafted.currentPlayerId = 1;
+    crafted.madTurn = undefined;
+    crafted.rageTurn = null;
+    crafted.players[1]!.hand = [
+      { id: "bot-card-1", faces: ["carnivore"] },
+      { id: "bot-card-2", faces: ["swimming"] },
+      { id: "bot-card-3", faces: ["camouflage"] },
+    ] as never;
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state: crafted }), true);
+
+    // rejoin не двигает партию: кадр игрока в ход бота несёт метку шага.
+    const mine = full(await s.rejoin(host.code, host.token));
+    assert.equal(mine.state!.currentPlayerId, 1, "ходит бот");
+    assert.equal(mine.turnDeadlineAt, null, "у бота нет дедлайна «конца хода»");
+    const dbRow = (await _internals.readRoom(sql, host.code))!;
+    assert.equal(mine.botStepAt, toMsOf(dbRow.auto_step_at), "метка = auto_step_at из базы");
+
+    // Зритель видит ту же метку; advance за один вызов делает ровно шаг
+    // (следующий перезапланирован на botMs) — бот всё ещё ходит.
+    const specView = await s.spectatorPoll(host.code, spec);
+    assert.equal(specView.state!.currentPlayerId, 1);
+    assert.ok(specView.botStepAt !== null, "у зрителя метка шага бота тоже есть");
+
+    // После опустошения руки бот пасует — наступает ход человека: метки шага
+    // нет, зато есть дедлайн хода (legacy: afkTurnMs).
+    for (let i = 0; i < 20; i++) {
+      fixedNow += 3_000;
+      const frame = full(await s.poll(host.code, host.token));
+      if (frame.state!.currentPlayerId === host.seat) {
+        assert.equal(frame.botStepAt, null, "в ход человека метки шага бота нет");
+        assert.equal(frame.turnDeadlineAt, fixedNow + PACE.afkTurnMs, "человеку — дедлайн хода");
+        return;
+      }
+    }
+    assert.fail("бот не передал ход человеку за 20 тактов");
+  });
+});
+
+/** auto_step_at из строки БД в epoch ms (null — метки нет). */
+function toMsOf(raw: unknown): number | null {
+  if (raw === null || raw === undefined) return null;
+  return new Date(raw as string).getTime();
+}

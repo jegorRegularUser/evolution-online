@@ -28,6 +28,7 @@ import type {
   RoomSummary,
   SeatInfo,
   SpectatorInfo,
+  TurnTimerMs,
   WaiterInfo,
 } from "@/lib/net/shared";
 
@@ -300,6 +301,12 @@ export interface NetUiState {
    */
   turnDeadlineAt: number | null;
   /**
+   * Следующий автошаг сервера, когда ходит БОТ (epoch ms по серверным часам);
+   * null — сейчас не ход бота. По ней тикает бейдж на табло активного бота:
+   * у ботов нет дедлайна конца хода, есть только темп шагов.
+   */
+  botStepAt: number | null;
+  /**
    * Смещение часов клиента относительно сервера (serverNow − Date.now()):
    * отсчёт считается по серверной метке, а не по часам устройства.
    */
@@ -395,6 +402,8 @@ export interface NetCreateConfig {
   isPrivate?: boolean;
   /** Пароль приватного стола; пусто — сервер сгенерирует 4 цифры. */
   password?: string;
+  /** Таймер хода (мс, TURN_TIMER_CHOICES; 0 = «Выкл»); правится в лобби. */
+  turnTimerMs?: TurnTimerMs;
 }
 
 /** Пустое состояние стола до первого кадра сервера (create/join/watch). */
@@ -429,6 +438,7 @@ function netStartState(patch: Partial<NetUiState> = {}): NetUiState {
     reactions: [],
     reactionFailure: null,
     turnDeadlineAt: null,
+    botStepAt: null,
     serverOffsetMs: 0,
     ...patch,
   };
@@ -605,6 +615,8 @@ function netHooks(
         // Отсчёт авто-конца хода (M10) и смещение часов: кадр несёт метку
         // сервера, поэтому устройство с ушедшими часами не соврёт.
         turnDeadlineAt: snap.turnDeadlineAt,
+        // Отсчёт до следующего шага бота — для бейджа на его табло (T1).
+        botStepAt: snap.botStepAt,
         serverOffsetMs: snap.serverNow - Date.now(),
         waiting: false,
         waiterPosition: null,
@@ -689,6 +701,7 @@ function netHooks(
         isPrivate: snap.room.isPrivate,
         spectators: snap.spectators,
         turnDeadlineAt: snap.turnDeadlineAt,
+        botStepAt: snap.botStepAt,
         serverOffsetMs: snap.serverNow - Date.now(),
         status: get().net?.status === "reconnecting" ? "reconnecting" : statusOfNet(snap.room.status),
       });
@@ -1031,7 +1044,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
         name: cfg.name,
         hostSeat: created.seat,
         capacity: cfg.capacity,
-        settings: { modules: cfg.modules ?? {}, difficulty: cfg.difficulty },
+        settings: {
+          modules: cfg.modules ?? {},
+          difficulty: cfg.difficulty,
+          ...(cfg.turnTimerMs !== undefined ? { turnTimerMs: cfg.turnTimerMs } : {}),
+        },
         isPrivate: created.isPrivate,
         password: created.password,
       }),
@@ -1164,6 +1181,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
         rules: n.settings.rules,
         mutators: n.settings.mutators,
         wildWorld: n.settings.wildWorld,
+        // Таймер хода запоминается наравне с прочими настройками лобби.
+        turnTimerMs: n.settings.turnTimerMs,
       });
     }
   },
