@@ -502,3 +502,21 @@ export const netAgain = createServerFn({ method: "POST" })
       return fail(e);
     }
   });
+
+/**
+ * Закрыть стол целиком (#4): участник по токену удаляет комнату, если все
+ * ОСТАЛЬНЫЕ места — боты (обучение, кампания, соло с ботами). Идемпотентно:
+ * закрытие уже исчезнувшего стола — успех; чужой/людный стол — close-people.
+ */
+export const netCloseTable = createServerFn({ method: "POST" })
+  .middleware([sameSiteGuard])
+  .validator(codeTokenInput)
+  .handler(async ({ data }) => {
+    try {
+      const s = await getRoomService();
+      await s.closeTable(data.code, data.token);
+      return { ok: true as const };
+    } catch (e) {
+      return fail(e);
+    }
+  });

@@ -18,6 +18,17 @@ import {
   legalFeedActions,
 } from "../../game/engine.ts";
 import { chooseAIAction } from "../../game/ai.ts";
+import {
+  CHANCES,
+  categorizePlayerMessage,
+  emptyBotMemory,
+  eventTriggers,
+  pickBotLine,
+  type BotChatMemory,
+  type BotLine,
+  type BotReplyCategory,
+  type BotSpeaker,
+} from "../../game/bot-chat.ts";
 import { moduleCompatibilityError } from "../../game/module-compatibility.ts";
 import { modifierCompatibilityError, mutatorList } from "../../game/modifier-compatibility.ts";
 import type {
@@ -111,6 +122,7 @@ export type NetErrorCode =
   | "rename-turn"
   | "rename-owner"
   | "rename-length"
+  | "close-people"
   | "generic";
 
 export class NetError extends Error {
@@ -1146,6 +1158,12 @@ export interface RoomService {
     sinceReactionId?: number,
   ): Promise<PollResult | UnchangedPoll>;
   again(input: { code: string; token: string }): Promise<void>;
+  /**
+   * Закрыть стол целиком (#4): участник сносит комнатку, где все ОСТАЛЬНЫЕ
+   * места — боты (обучение, кампания, «сам с ботами»). Идемпотентно: уже
+   * закрытый стол закрывается успехом (двойной клик и гонка с janitor).
+   */
+  closeTable(code: string, token: string): Promise<void>;
   /** Фоновый проход по playing-столам: AFK-дедлайны и janitor. */
   watchdog(): Promise<void>;
 }
@@ -1161,6 +1179,25 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
    * вызовы и тесты передают источник явно (без источника лимиты не считаются).
    */
   const rateHits = new Map<string, number[]>();
+
+  // ── реплики ботов в чат (#9) ──────────────────────────────────────────────
+  /**
+   * Чистая логика выбора фраз — в game/bot-chat.ts; здесь только память
+   * комнаты и вставка в evo_chat. Обе карты живут в инстансе сервиса: закрыли
+   * стол — память уходит (closeTable/watchdog), воскрешать репликой закрытую
+   * комнату нельзя.
+   */
+
+  /** Память реплик по коду комнаты: кто, когда и сколько раз говорил. */
+  const botChatMemory = new Map<string, BotChatMemory>();
+
+  /** Отложенный ответ бота на сообщение человека: жребий брошен в chat(), говорит бот на следующем advance. */
+  interface BotReplyRequest {
+    category: BotReplyCategory;
+    /** Подстановка {name} — имя автора сообщения. */
+    playerName: string;
+  }
+  const botReplyQueue = new Map<string, BotReplyRequest[]>();
 
   /** Окно ключа без записей: заодно чистим окно от старых отметок. */
   function rateWindow(key: string, windowMs: number): number[] {
@@ -1397,8 +1434,155 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
     return { ...room, host_seat: next, version: room.version + 1 };
   }
 
+  // ── реплики ботов: выбор и вставка ────────────────────────────────────────
+
+  function botMemoryOf(code: string): BotChatMemory {
+    let mem = botChatMemory.get(code);
+    if (!mem) {
+      mem = emptyBotMemory();
+      botChatMemory.set(code, mem);
+    }
+    return mem;
+  }
+
+  function botsOf(state: GameState): BotSpeaker[] {
+    return state.players.filter((p) => p.isAI).map((p) => ({ seat: p.id, name: p.name }));
+  }
+
+  /**
+   * Вставка реплики от имени бота: отдельный путь в evo_chat, мимо лимитов
+   * chat() — те защищают людей от спама, у ботов темп держит bot-chat.ts
+   * (кулдауны, кап на год). Стол мог закрыться, пока реплика выбиралась:
+   * пишем только в живую комнату (playing; finished — сразу после финального
+   * шага, реплика о победе/поражении дожна доехать), никогда не воскрешаем
+   * закрытый стол и не трогаем чужие ограничения чата.
+   */
+  async function insertBotLine(code: string, line: BotLine): Promise<void> {
+    const room = await readRoom(sql, code);
+    if (!room || (room.status !== "playing" && room.status !== "finished")) return;
+    await sql.query(`insert into evo_chat (room_code, seat, name, text) values ($1, $2, $3, $4)`, [
+      code,
+      line.speaker.seat,
+      line.speaker.name,
+      line.text,
+    ]);
+  }
+
+  /**
+   * Первая удачная реплика по списку триггеров (в порядке событий шага):
+   * не больше одной реплики ботов за вызов advance/action.
+   */
+  async function sayBotLineForTriggers(
+    code: string,
+    room: RoomRow,
+    triggers: ReturnType<typeof eventTriggers>,
+  ): Promise<boolean> {
+    if (!room.state) return false;
+    for (const trigger of triggers) {
+      const line = pickBotLine({
+        category: trigger.category,
+        candidates: trigger.candidates,
+        chance: trigger.chance,
+        nowMs: now(),
+        version: room.version,
+        round: room.state.year,
+        params: trigger.params,
+        rng: Math.random,
+        memory: botMemoryOf(code),
+      });
+      if (!line) continue;
+      botChatMemory.set(code, line.memory);
+      await insertBotLine(code, line);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Реплики по событиям выполненных шагов (охоты, смерти, вымирание, финал).
+   * Если события промолчали — редкий «фоновый» комментарий бота, только пока
+   * партия идёт (шаги выполнялись) и только при живых ботах.
+   */
+  async function flushBotEventLines(
+    code: string,
+    steps: Array<{ before: GameState; events: GameEvent[] }>,
+  ): Promise<void> {
+    if (!steps.length) return;
+    const room = await readRoom(sql, code);
+    if (!room?.state || (room.status !== "playing" && room.status !== "finished")) return;
+    for (const step of steps) {
+      if (await sayBotLineForTriggers(code, room, eventTriggers(step.before, step.events))) return;
+    }
+    if (room.status !== "playing") return;
+    const bots = botsOf(room.state);
+    if (!bots.length) return;
+    const line = pickBotLine({
+      category: "idle",
+      // Порядок кандидатов не фиксирован: фоновая реплика — от случайного бота.
+      candidates: bots.slice().sort(() => Math.random() - 0.5),
+      chance: CHANCES.idle,
+      nowMs: now(),
+      version: room.version,
+      round: room.state.year,
+      rng: Math.random,
+      memory: botMemoryOf(code),
+    });
+    if (!line) return;
+    botChatMemory.set(code, line.memory);
+    await insertBotLine(code, line);
+  }
+
+  /** Жребий ответа на сообщение человека брошен здесь (шанс CHANCES.chatReply). */
+  function queueBotReply(code: string, playerName: string, text: string): void {
+    if (Math.random() >= CHANCES.chatReply) return;
+    const request: BotReplyRequest = { category: categorizePlayerMessage(text), playerName };
+    const queue = botReplyQueue.get(code) ?? [];
+    queue.push(request);
+    // Отвечаем максимум на два последних сообщения: длинный спор людей
+    // боты не комментируют строка в строку.
+    botReplyQueue.set(code, queue.slice(-2));
+  }
+
+  /** Отложить ответ нельзя (сервер без таймеров): первая попытка — на следующем advance. */
+  async function flushQueuedBotReply(code: string): Promise<void> {
+    const queue = botReplyQueue.get(code);
+    if (!queue?.length) return;
+    const room = await readRoom(sql, code);
+    if (!room?.state || room.status !== "playing") {
+      // Стол закрыт/закончился — очередь не должна его воскрешать.
+      botReplyQueue.delete(code);
+      return;
+    }
+    const reply = queue.shift()!;
+    if (queue.length) botReplyQueue.set(code, queue);
+    else botReplyQueue.delete(code);
+    const line = pickBotLine({
+      category: reply.category,
+      candidates: botsOf(room.state),
+      chance: 1, // жребий брошен в chat(): здесь только кап года и кулдауны
+      nowMs: now(),
+      version: room.version,
+      round: room.state.year,
+      params: { name: reply.playerName },
+      rng: Math.random,
+      memory: botMemoryOf(code),
+    });
+    if (!line) return;
+    botChatMemory.set(code, line.memory);
+    await insertBotLine(code, line);
+  }
+
   async function advance(code: string): Promise<void> {
-    for (let i = 0; i < PACE.maxStepsPerTick; i++) {
+    // Отложенный ответ на сообщение человека — до шагов: реплика догоняет
+    // реплику игрока с задержкой в один поллинг.
+    await flushQueuedBotReply(code);
+    // События выполненных шагов — для реплик ботов. Проход почти всегда
+    // кончается ранним return (темп шага, ход человека), поэтому flush —
+    // в finally: не больше одной реплики ботов на advance, где бы цикл
+    // ни кончился.
+    const botSteps: Array<{ before: GameState; events: GameEvent[] }> = [];
+    try {
+      for (let i = 0; i < PACE.maxStepsPerTick; i++) {
       const room = await readRoom(sql, code);
       if (!room?.state || room.status !== "playing") return;
       const before = room.state;
@@ -1438,7 +1622,8 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
           eventsAppend: after.lastEvents.length ? after.lastEvents : undefined,
         });
         if (!ok) return; // обогнали — следующий запрос доведёт
-        if (finished) return;
+        botSteps.push({ before, events: after.lastEvents });
+        if (finished) break;
         continue;
       }
       const due = room.auto_step_at === null ? 0 : toMs(room.auto_step_at);
@@ -1452,7 +1637,11 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         eventsAppend: after.lastEvents.length ? after.lastEvents : undefined,
       });
       if (!ok) return; // обогнали — следующий запрос доведёт
-      if (finished) return;
+      botSteps.push({ before, events: after.lastEvents });
+      if (finished) break;
+    }
+    } finally {
+      if (botSteps.length) await flushBotEventLines(code, botSteps);
     }
   }
 
@@ -2207,6 +2396,10 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
                    (extract(epoch from created_at) * 1000)::float8 as at`,
         [code, author.seat, author.name, clean],
       );
+      // Сообщение от человека — шанс, что бот ответит на следующем advance
+      // (flushQueuedBotReply). Лимиты чата людей ботов не касаются: у тех
+      // свой темп в bot-chat.ts.
+      queueBotReply(code, author.name, clean);
       return inserted[0]!;
     },
 
@@ -2426,6 +2619,23 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         autoStepAt: now() + PACE.initialMs,
         events: [],
       });
+      // Приветствие от бота на старте партии (шанс в CHANCES.greeting).
+      const greeting = botsOf(state).length
+        ? pickBotLine({
+            category: "greeting",
+            candidates: botsOf(state),
+            chance: CHANCES.greeting,
+            nowMs: now(),
+            version: room.version + 1,
+            round: state.year,
+            rng: Math.random,
+            memory: botMemoryOf(code),
+          })
+        : null;
+      if (greeting) {
+        botChatMemory.set(code, greeting.memory);
+        await insertBotLine(code, greeting);
+      }
       return snapshot(code, me.seat);
     },
 
@@ -2510,6 +2720,14 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         const fields = actionFields(room, me, sent);
         if (actionId) fields.actionId = actionId;
         if (await casUpdate(sql, code, room.version, fields)) {
+          // Реплика бота на ход человека (его охоту, смерть зверя, финал).
+          // actionFields уже бросил бы «Партия не идёт» без state — тут он точно есть.
+          await flushBotEventLines(
+            code,
+            fields.eventsAppend
+              ? [{ before: room.state as GameState, events: fields.eventsAppend }]
+              : [],
+          );
           return snapshot(code, me.seat, actionId ? { actionId } : {});
         }
       }
@@ -2581,9 +2799,54 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       });
     },
 
+    async closeTable(code, token) {
+      const seats = await sql.query<{ seat: number; token: string; is_ai: boolean }>(
+        `select seat, token, is_ai from evo_seats where room_code = $1`,
+        [code],
+      );
+      const me = seats.find((row) => row.token === token && token !== "");
+      if (!me) {
+        // Идемпотентность: стол уже закрыт (двойной клик, гонка с janitor,
+        // параллельный выход с другого устройства) — повторное закрытие не ошибка.
+        const room = await readRoom(sql, code);
+        if (!room) return;
+        await goneReason(code, token);
+      }
+      // Право снести стол есть только у единственного человека за ним: любое
+      // живое место другого игрока (лобби или партия) блокирует закрытие.
+      const otherHumans = seats.filter((row) => row.token !== token && !row.is_ai);
+      if (otherHumans.length) {
+        throw new NetError(
+          "За столом есть другие игроки — закрыть его нельзя",
+          "close-people",
+        );
+      }
+      // Полная зачистка строк комнаты. Каскад по FK снял бы дочерние строки сам,
+      // но явные DELETE не зависят от схемы миграций; реакции идут первыми —
+      // они ссылаются на чат (chat_id). Кик-записи тоже: мёртвому столу они
+      // не нужны, а goneReason по токену оставшегося был бы врёт «вас удалили».
+      await sql.query(`delete from evo_reactions where room_code = $1`, [code]);
+      await sql.query(`delete from evo_chat where room_code = $1`, [code]);
+      await sql.query(`delete from evo_kicks where room_code = $1`, [code]);
+      await sql.query(`delete from evo_waiters where room_code = $1`, [code]);
+      await sql.query(`delete from evo_spectators where room_code = $1`, [code]);
+      await sql.query(`delete from evo_seats where room_code = $1`, [code]);
+      await sql.query(`delete from evo_rooms where code = $1`, [code]);
+      // Память реплик ботов и очередь ответов не переживают свой стол:
+      // иначе закрытая комната могла бы «воскреснуть» чужой репликой.
+      botChatMemory.delete(code);
+      botReplyQueue.delete(code);
+    },
+
     async watchdog() {
       // Один проход не блокирует запросы: CAS сам разрулит гонку с poll.
       await janitor(sql).catch(() => {});
+      // Память реплик и очередь ответов не переживают свои комнаты
+      // (TTL, закрытие стола): подчистим за комнатами, которых больше нет.
+      const liveCodes = await sql.query<{ code: string }>(`select code from evo_rooms`);
+      const live = new Set(liveCodes.map((r) => r.code));
+      for (const key of botChatMemory.keys()) if (!live.has(key)) botChatMemory.delete(key);
+      for (const key of botReplyQueue.keys()) if (!live.has(key)) botReplyQueue.delete(key);
       const rooms = await sql.query<{ code: string }>(
         `select code from evo_rooms where status = 'playing'`,
       );
@@ -2619,6 +2882,7 @@ const SERVICE_METHODS = [
   "watchdog",
   "spectate",
   "typing",
+  "closeTable",
 ] as const;
 
 function hasServiceMethods(s: RoomService): boolean {

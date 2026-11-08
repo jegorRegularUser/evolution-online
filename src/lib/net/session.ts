@@ -12,6 +12,7 @@ import {
   netAgain,
   netChat,
   netClaimSeat,
+  netCloseTable,
   netCreateRoom,
   netJoinRoom,
   netKick,
@@ -584,6 +585,18 @@ export class NetSession {
   async again(): Promise<void> {
     await this.call(netAgain({ data: { code: this.code, token: this.token } }));
     this.refresh();
+  }
+
+  /**
+   * Закрыть стол целиком (#4): комната удаляется на сервере, остальные
+   * участники (если каким-то чудом появились) получают room-gone. Сервер
+   * проверяет токен и «все остальные места — боты»; уже закрытый стол
+   * закрывается успехом, поэтому повторный вызов безопасен.
+   */
+  async closeTable(): Promise<void> {
+    const r = await request(netCloseTable({ data: { code: this.code, token: this.token } }));
+    if (!r.ok) throw clientError(r.error, r.code);
+    this.stop();
   }
 
   /** Сдаться в идущей партии: место остаётся, ходы пропускает сервер. */

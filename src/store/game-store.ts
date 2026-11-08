@@ -3,7 +3,9 @@ import { legalDefenseActions, legalDevActions, legalFeedActions } from "@/game/e
 import type { Difficulty, GameAction, GameScenario, GameSpeed, GameState, ModuleId, MutatorId, TableRules } from "@/game/types";
 import {
   TUTORIAL_MISSIONS,
+  loadActiveMission,
   loadDoneMissions,
+  saveActiveMission,
   saveDoneMission,
   type TutorialMissionId,
 } from "@/game/tutorial";
@@ -145,6 +147,7 @@ const NET_ERR_KEYS: Record<string, TKey> = {
   "empty-name": "netErr.emptyName",
   "seat-missing": "netErr.seatMissing",
   "modules-incompatible": "netErr.modulesIncompatible",
+  "close-people": "netErr.closePeople",
   generic: "netErr.generic",
   offline: "netErr.offline",
   invalidResponse: "netErr.invalidResponse",
@@ -360,6 +363,19 @@ export function typingNamesOf(net: NetUiState): string[] {
   return names;
 }
 
+/**
+ * Стол, где человек играет ТОЛЬКО с ботами (обучение, кампания, соло с ботами):
+ * все остальные места — ИИ, клиент занимает своё место и не зритель/не ожидающий.
+ * Такой стол закрывается целиком при любом уходе (#3) — возвращаться за ним
+ * некому, а висящая «идущая» комната в меню и есть та самая жалоба. Пустой
+ * состав (кадра ещё не было) закрывать нельзя: за столом могут появиться люди.
+ */
+export function isSoloBotTable(net: NetUiState | null): boolean {
+  if (!net || net.spectating || net.waiting || net.seat < 0) return false;
+  const others = net.seats.filter((s) => s.seat !== net.seat);
+  return others.length > 0 && others.every((s) => s.isAI);
+}
+
 export interface NetCreateConfig {
   name: string;
   capacity: 2 | 3 | 4 | 5 | 6 | 7 | 8;
@@ -495,6 +511,8 @@ interface GameStore {
   netClaimSeat: () => Promise<void>;
   /** Сдаться в идущей партии: место остаётся, ходы пропускаются, счёт идёт. */
   netResign: () => Promise<void>;
+  /** Закрыть стол целиком (#4): сервер снесёт комнату, если остальные места — боты. */
+  netCloseTable: () => Promise<void>;
   /** Сменить имя (лобби/очередь/зритель); итог сервера ложится в net.name. */
   netSetName: (name: string) => Promise<void>;
   /** Отправить сообщение в чат стола. */
@@ -1231,6 +1249,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (code) forgetSession(code);
   },
 
+  netCloseTable: async () => {
+    const code = get().net?.code ?? "";
+    await runNet(netSession, set, get, (s) => s.closeTable());
+    // Стол закрыт — сессии возврата быть не должно (F5 по ?room обязан
+    // показывать меню, а не упираться в мёртвый код).
+    if (code) forgetSession(code);
+  },
+
   netSetName: async (name) => {
     const s = netSession;
     if (!s) return;
@@ -1365,7 +1391,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const cur = get().net;
     const wasWaiting = cur?.waiting ?? false;
     const code = cur?.code ?? "";
-    const soft = mode === "soft";
+    // #3: стол, где человек играет только с ботами, закрывается ЦЕЛИКОМ при
+    // любом уходе (сдача, верхняя панель, финал «В меню», «Прервать» миссию).
+    // Возвращаться за таким столом некому, а висящая в меню «идущая» комната —
+    // именно та жалоба, из-за которой появилось это правило; поэтому «мягкий»
+    // выход для соло-ботов превращается в обычный (жёсткий).
+    const soloBots = isSoloBotTable(cur);
+    const soft = mode === "soft" && !soloBots;
     netSession = null;
     // Поколение растёт: поздние кадры закрытой сессии стор не трогают.
     netGeneration += 1;
@@ -1379,7 +1411,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!soft && code) forgetSession(code);
     if (soft && code) syncRoomUrl(code);
 
-    if (!soft && code) {
+    if (soloBots && s) {
+      // Сервер удаляет комнату со всеми строками (места/чат/очередь/зрители/
+      // реакции) — closeTable идемпотентен, гонка с двойным вызовом безопасна.
+      // Токен уже забыт выше, поэтому ни ?room, ни F5 не вернут за мёртвый код.
+      void s.closeTable().catch(() => {});
+      urlResumeTried = null;
+      syncRoomUrl(null);
+    } else if (!soft && code) {
       // Совместимость с текущим экраном партии: он ещё не умеет передавать
       // режим в leaveNet(), но синхронно восстанавливает player-token после
       // вызова, сохраняя копию для мягкого выхода. Проверяем результат после
@@ -1401,6 +1440,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
     // партии этим путём не используется, но очередь не должна оставаться занята.
     if (s && wasWaiting && !soft) void s.leaveQueue().catch(() => {});
     s?.stop();
+    // Миссии (обучение/кампания) не переживают уход со стола — каноническое
+    // место, чтобы HUD не всплывал над следующей обычной партией. Запись
+    // evo-tutorial-active чистим только «свою» (без кода или с кодом этого
+    // стола): чужая может принадлежать живой миссии в другой вкладке.
+    const state = get();
+    if (state.tutorialMission) {
+      const rec = loadActiveMission();
+      if (!rec || rec.code === null || rec.code === code) saveActiveMission(null);
+      state.clearTutorial();
+    }
+    if (state.campaignMission) state.clearCampaign();
     set({
       net: null,
       state: null,
