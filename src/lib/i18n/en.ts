@@ -31,8 +31,7 @@ export const en: Record<keyof RuDict, string> = {
   "topbar.stats": "Statistics",
 
   // ── section pages (/shop, /bestiary, /campaign, /challenges) ─────────────
-  "nav.back": "Back",
-  "nav.backToMenu": "Back to the menu",
+  "nav.home": "Home",
   "nav.tabbar": "Game sections",
 
   // ── language toggle (top bar button) ─────────────────────────────────────
@@ -132,6 +131,16 @@ export const en: Record<keyof RuDict, string> = {
   "lobby.modules": "Expansions",
   "lobby.hostOnly": "Only the host can change settings",
   "lobby.difficulty": "Bot difficulty",
+  "lobby.turnTimer": "Turn timer",
+  "lobby.turnTimer.off": "Off",
+  "lobby.turnTimer.30": "30s",
+  "lobby.turnTimer.60": "1 min",
+  "lobby.turnTimer.120": "2 min",
+  "lobby.turnTimer.180": "3 min",
+  "lobby.turnTimer.hint":
+    "How long a human turn may last; Off — turns are never interrupted",
+  "lobby.turnTimer.note":
+    "When the timer runs out, a human turn ends on its own; bots and their pace are unaffected",
   "lobby.deckSize": "Trait deck size",
   "lobby.deckInfo": "Deck of {n:card} · ≈{years:year} of play",
   "lobby.deckShort": "Short",
@@ -745,6 +754,7 @@ export const en: Record<keyof RuDict, string> = {
   // ── game: turn timer ─────────────────────────────────────────────────────
   "game.timerHuman": "Your turn will end on its own in {n}s — you have no actions left",
   "game.timerOther": "{name} has no actions left: their turn ends in {n}s",
+  "game.timerBot": "{name}: next move in {n}s",
 
   // ── game: reactions ──────────────────────────────────────────────────────
   "game.reactions": "Reactions",
