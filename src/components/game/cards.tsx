@@ -585,10 +585,39 @@ export function PairPlate({
   );
 }
 
-/** Грань карты руки: выбор свойства кликом, пояснение — наведением или фокусом. */
+/**
+ * Арт грани: иллюстрация свойства либо векторный глиф, если арта нет.
+ * На single-карте — кроп по верху (как на печатной карте), в колонке
+ * multi-карты — центр-кроп: окно узкое и высокое, целиком видна высота
+ * иллюстрации, а узнаваемость даёт именно её середина.
+ */
+function FaceArt({ face, inColumn = false }: { face: TraitId; inColumn?: boolean }) {
+  const dark = DARK_ART.has(face);
+  return TRAIT_ART[face] ? (
+    <img
+      src={TRAIT_ART[face]}
+      alt=""
+      loading="lazy"
+      className={cn(
+        "absolute inset-0 h-full w-full",
+        dark
+          ? "scale-[0.86] object-contain"
+          : inColumn
+            ? "object-cover object-center transition-[filter] group-hover:brightness-105"
+            : "object-cover object-top",
+      )}
+    />
+  ) : (
+    <span className="absolute inset-0 flex items-center justify-center bg-parchment-2">
+      <TraitGlyph id={face} className="size-10 text-ink-soft" />
+    </span>
+  );
+}
+
+/** Грань одно-свойственной карты руки: выбор кликом, пояснение — наведением
+ *  или фокусом. Арт и подпись — во всю ширину карты, как на печатной. */
 const HandFace = memo(function HandFace({
   face,
-  divided,
   active,
   disabled,
   dimmed,
@@ -597,7 +626,6 @@ const HandFace = memo(function HandFace({
   onBlocked,
 }: {
   face: TraitId;
-  divided: boolean;
   active?: boolean;
   disabled?: boolean;
   /** У игрока нет животных: низ карты слегка сереет, пока не сыграна карта. */
@@ -637,7 +665,6 @@ const HandFace = memo(function HandFace({
         aria-disabled={blocked || undefined}
         className={cn(
           "flex min-h-0 flex-1 flex-col items-stretch text-left outline-none transition-colors duration-[var(--motion-fast)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
-          divided ? "border-b border-dashed border-ink/15" : "",
           // Одно кольцо на состояние: выбранная грань — акцент, приглушение —
           // прозрачностью (без второй заливки и рамки).
           active ? "evo-face-picked" : "hover:bg-ink/5",
@@ -645,21 +672,7 @@ const HandFace = memo(function HandFace({
         )}
       >
         <span className={cn("relative block min-h-0 w-full flex-1 overflow-hidden", dark && "bg-ink")}>
-          {TRAIT_ART[face] ? (
-            <img
-              src={TRAIT_ART[face]}
-              alt=""
-              loading="lazy"
-              className={cn(
-                "absolute inset-0 h-full w-full",
-                dark ? "scale-[0.86] object-contain" : "object-cover object-top",
-              )}
-            />
-          ) : (
-            <span className="absolute inset-0 flex items-center justify-center bg-parchment-2">
-              <TraitGlyph id={face} className="size-10 text-ink-soft" />
-            </span>
-          )}
+          <FaceArt face={face} />
         </span>
         <span className="flex items-center gap-1 px-2 pt-1.5 text-[11px] font-semibold leading-tight">
           <TraitGlyph id={face} className="size-3.5 shrink-0" />
@@ -677,6 +690,132 @@ const HandFace = memo(function HandFace({
         <TraitTooltip def={{ ...def, name: traitName(face, lang), description: traitDesc(face, lang) }} anchorRect={tip.anchorRect} id={tip.tipId} />
       ) : null}
     </>
+  );
+});
+
+/**
+ * Арт грани multi-карты (2+ свойств): узкая колонка с иллюстрацией. Клик по
+ * арту выбирает грань, пояснение — наведением или фокусом. Арты ставятся
+ * рядом на всю высоту тела карты: в вертикальной стопке от портретной
+ * иллюстрации оставалась бы верхняя треть (небо над сюжетом). Подписи живут
+ * отдельной стопкой под артами (FaceLabelRow) — в узкой колонке название
+ * обрезалось бы до нечитаемого.
+ */
+const HandFaceImage = memo(function HandFaceImage({
+  face,
+  divided,
+  active,
+  disabled,
+  dimmed,
+  blocked,
+  onSelect,
+  onBlocked,
+}: {
+  face: TraitId;
+  /** Разделитель между колонками арта: вертикальный пунктир. */
+  divided: boolean;
+  active?: boolean;
+  disabled?: boolean;
+  dimmed?: boolean;
+  /** Грань недоступна: легального действия для неё сейчас нет. */
+  blocked?: boolean;
+  onSelect: () => void;
+  onBlocked?: () => void;
+}) {
+  const lang = useLang();
+  const dark = DARK_ART.has(face);
+  // На тач-устройствах подсказка не переключается тапом: тап выбирает грань.
+  const tip = useTraitTip({ toggleOnTap: false });
+  return (
+    <>
+      <button
+        ref={(el) => {
+          tip.anchorRef.current = el;
+        }}
+        {...tip.triggerProps}
+        type="button"
+        disabled={disabled}
+        onClick={(e) => {
+          if (blocked) {
+            // Отказ звучит сам (треск): щелчок дока здесь не нужен.
+            e.stopPropagation();
+            onBlocked?.();
+            return;
+          }
+          onSelect();
+        }}
+        aria-label={traitName(face, lang)}
+        aria-pressed={active}
+        aria-disabled={blocked || undefined}
+        className={cn(
+          "group relative block min-h-0 min-w-0 flex-1 overflow-hidden text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60",
+          divided && "border-l border-dashed border-ink/15",
+          active ? "evo-face-picked" : "hover:bg-ink/5",
+          dimmed && "opacity-55",
+          dark && "bg-ink",
+        )}
+      >
+        <FaceArt face={face} inColumn />
+      </button>
+      {tip.anchorRect ? (
+        <TraitTooltip
+          def={{ ...TRAITS[face], name: traitName(face, lang), description: traitDesc(face, lang) }}
+          anchorRect={tip.anchorRect}
+          id={tip.tipId}
+        />
+      ) : null}
+    </>
+  );
+});
+
+/**
+ * Подпись грани multi-карты: строка под артами на всю ширину карты (в узкой
+ * колонке название обрезалось бы до нечитаемого). Клин-вырез указывает на
+ * колонку арта этой грани. Не кнопка: грань выбирается кликом по её арту.
+ */
+const FaceLabelRow = memo(function FaceLabelRow({
+  face,
+  divided,
+  index,
+  count,
+  dimmed,
+}: {
+  face: TraitId;
+  /** У строк ниже первой — верхний пунктирный разделитель. */
+  divided: boolean;
+  /** Позиция грани (для клина) и их общее число. */
+  index: number;
+  count: number;
+  dimmed?: boolean;
+}) {
+  const t = useT();
+  const lang = useLang();
+  const def = TRAITS[face];
+  return (
+    <span
+      className={cn(
+        "relative block shrink-0 px-1.5 py-[3px] text-[11px] font-semibold leading-tight",
+        divided && "border-t border-dashed border-ink/15",
+        dimmed && "opacity-55",
+      )}
+    >
+      <span
+        aria-hidden
+        className="absolute -top-[3.5px] size-[7px] rotate-45 border-l border-t border-ink/25 bg-parchment"
+        style={{ left: `${((index + 0.5) / count) * 100}%` }}
+      />
+      <span className="flex items-center gap-1">
+        <TraitGlyph id={face} className="size-3.5 shrink-0" />
+        <span className="truncate">{traitName(face, lang)}</span>
+      </span>
+      {def.extraFood ? (
+        // «+1 к еде» второй строкой: в строке с названием оно вытеснило бы
+        // длинные имена («Большой вес» → «Большой»).
+        <span className="block pl-[18px] text-[10px] font-medium leading-[1.25] text-clay-ink">
+          {t("traitTip.extraFood", { n: def.extraFood })}
+        </span>
+      ) : null}
+    </span>
   );
 });
 
@@ -748,19 +887,51 @@ export function HandCard({
       >
         {t("card.animal")}
       </button>
-      {card.faces.map((face, i) => (
-        <HandFace
-          key={`${card.id}-${face}-${i}`}
-          face={face}
-          divided={i === 0 && card.faces.length > 1}
-          active={selected && selectedFace === i}
-          blocked={blockedFace?.(i)}
-          onBlocked={() => onBlockedFace?.(i)}
-          disabled={disabled}
-          dimmed={noAnimals && !selected}
-          onSelect={() => onSelect(i)}
-        />
-      ))}
+      {card.faces.length > 1 ? (
+        // Несколько свойств: арты — колонками рядом на всю высоту тела карты
+        // (стопка оставляла бы от портретной иллюстрации верхнюю треть),
+        // подписи — стопкой под ними на всю ширину карты.
+        <>
+          <div className="flex min-h-0 flex-1 items-stretch">
+            {card.faces.map((face, i) => (
+              <HandFaceImage
+                key={`${card.id}-${face}-${i}`}
+                face={face}
+                divided={i > 0}
+                active={selected && selectedFace === i}
+                blocked={blockedFace?.(i)}
+                onBlocked={() => onBlockedFace?.(i)}
+                disabled={disabled}
+                dimmed={noAnimals && !selected}
+                onSelect={() => onSelect(i)}
+              />
+            ))}
+          </div>
+          {card.faces.map((face, i) => (
+            <FaceLabelRow
+              key={`${card.id}-${face}-${i}`}
+              face={face}
+              divided={i > 0}
+              index={i}
+              count={card.faces.length}
+              dimmed={noAnimals && !selected}
+            />
+          ))}
+        </>
+      ) : (
+        card.faces.map((face, i) => (
+          <HandFace
+            key={`${card.id}-${face}-${i}`}
+            face={face}
+            active={selected && selectedFace === i}
+            blocked={blockedFace?.(i)}
+            onBlocked={() => onBlockedFace?.(i)}
+            disabled={disabled}
+            dimmed={noAnimals && !selected}
+            onSelect={() => onSelect(i)}
+          />
+        ))
+      )}
     </div>
   );
 }
@@ -780,37 +951,47 @@ export function CardPreview({ card }: { card: Card }) {
       <span className="flex h-8 items-center justify-center border-b border-ink/10 bg-parchment-2/70 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
         {t("card.card")}
       </span>
-      {card.faces.map((face, i) => {
-        const dark = DARK_ART.has(face);
-        return (
-          <span
-            key={`${card.id}-${face}-${i}`}
-            className={cn("flex min-h-0 flex-1 flex-col", i === 0 && card.faces.length > 1 && "border-b border-dashed border-ink/15")}
-          >
-            <span className={cn("relative block min-h-0 w-full flex-1 overflow-hidden", dark && "bg-ink")}>
-              {TRAIT_ART[face] ? (
-                <img
-                  src={TRAIT_ART[face]}
-                  alt=""
-                  loading="lazy"
+      {card.faces.length > 1 ? (
+        // Тот же принцип, что и у карты руки: арты колонками на всю высоту,
+        // подписи — стопкой на всю ширину.
+        <>
+          <span className="flex min-h-0 flex-1 items-stretch">
+            {card.faces.map((face, i) => {
+              const dark = DARK_ART.has(face);
+              return (
+                <span
+                  key={`art-${card.id}-${face}-${i}`}
                   className={cn(
-                    "absolute inset-0 h-full w-full",
-                    dark ? "scale-[0.86] object-contain" : "object-cover object-top",
+                    "relative block min-h-0 min-w-0 flex-1 overflow-hidden",
+                    i > 0 && "border-l border-dashed border-ink/15",
+                    dark && "bg-ink",
                   )}
-                />
-              ) : (
-                <span className="absolute inset-0 flex items-center justify-center bg-parchment-2">
-                  <TraitGlyph id={face} className="size-10 text-ink-soft" />
+                >
+                  <FaceArt face={face} inColumn />
                 </span>
-              )}
-            </span>
-            <span className="flex items-center gap-1 px-2 pb-1.5 pt-1.5 text-[11px] font-semibold leading-tight">
-              <TraitGlyph id={face} className="size-3.5 shrink-0" />
-              <span className="truncate">{traitName(face, lang)}</span>
-            </span>
+              );
+            })}
           </span>
-        );
-      })}
+          {card.faces.map((face, i) => (
+            <FaceLabelRow key={`label-${card.id}-${face}-${i}`} face={face} divided={i > 0} index={i} count={card.faces.length} />
+          ))}
+        </>
+      ) : (
+        card.faces.map((face, i) => {
+          const dark = DARK_ART.has(face);
+          return (
+            <span key={`${card.id}-${face}-${i}`} className="flex min-h-0 flex-1 flex-col">
+              <span className={cn("relative block min-h-0 w-full flex-1 overflow-hidden", dark && "bg-ink")}>
+                <FaceArt face={face} />
+              </span>
+              <span className="flex items-center gap-1 px-2 pb-1.5 pt-1.5 text-[11px] font-semibold leading-tight">
+                <TraitGlyph id={face} className="size-3.5 shrink-0" />
+                <span className="truncate">{traitName(face, lang)}</span>
+              </span>
+            </span>
+          );
+        })
+      )}
     </div>
   );
 }
