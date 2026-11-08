@@ -88,6 +88,47 @@ export function feedTint(color: string): string {
 }
 
 /**
+ * Приближение feedTint в sRGB: 12% цвета автора к поверхности (--color-surface,
+ * #1c2119). Нужно не для рисования (подложку красит CSS), а чтобы заранее
+ * знать светлоту подложки и выбрать контрастный тон надписей. Если цвет не
+ * разбирается как hex (#rgb/#rrggbb) — подложка считается нейтрально тёмной.
+ */
+function mixedTintoSurface(color: string): [number, number, number] | null {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
+  if (!m) return null;
+  const digits = m[1]!;
+  const full =
+    digits.length === 3
+      ? [...digits].map((c) => c + c).join("")
+      : digits;
+  const parts = [0, 2, 4].map((i) => Number.parseInt(full.slice(i, i + 2), 16) / 255);
+  if (parts.some((p) => Number.isNaN(p))) return null;
+  const surface = [0x1c, 0x21, 0x19].map((v) => v / 255);
+  return [0, 1, 2].map((i) => 0.12 * parts[i]! + 0.88 * surface[i]!) as [number, number, number];
+}
+
+/** Относительная яркость WCAG — по ней выбираем тон надписей. */
+function relativeLuminance([r, g, b]: [number, number, number]): number {
+  const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+/**
+ * Тон служебных надписей реплики (время, кнопка реакции) — контрастный её
+ * подложке. Тёмная подложка (все 12%-ные тонирования, включая самые светлые
+ * цвета палитры) — светлые чернила «subtle»; светлая подложка (запас на будущую
+ * смену формулы тонирования) — тёмные чернила, как у светлых карточек.
+ * Едет в строку CSS-переменной --feed-meta-ink: глобальное правило
+ * `.paper-sheet .text-subtle` красит надписи под светлый носитель и на
+ * тонированной реплике без переопределения уводит время в темноту.
+ */
+export function feedMetaInk(color: string | undefined): string {
+  const mixed = color ? mixedTintoSurface(color) : null;
+  if (!mixed || relativeLuminance(mixed) <= 0.3) return "var(--color-subtle)";
+  return "var(--color-ink-soft)";
+}
+
+/**
  * Сдвиг листа бумаги на реплике: строки одного блока красятся одним цветом и
  * без сдвига каждая начинала бы текстуру с одного и того же угла тайла — бумага
  * выглядела бы штампованной. Сдвиг детерминирован по id записи, поэтому
@@ -138,9 +179,13 @@ function timeLabel(at: number, lang: Lang): string {
 }
 
 /**
- * Высота нижнего дока (footer игры) — мобильная шторка не должна его накрывать:
- * в фазе развития док высокий из-за карты руки. Меряем при раскрытии, при
- * ресайзе окна и при изменении самого футера (смена фазы, модулей, вёрстки).
+ * Высота нижнего дока (footer игры) — отступ шторки журнала над ним: в фазе
+ * развития док высокий из-за карты руки. Меряем высоту самого футера, а не
+ * расстояние от низа вьюпорта: sticky-футер при прокрутке «висит» на разных
+ * top, и старый замер (innerHeight - top) ловил момент прокрутки и завышал
+ * отступ — на планшете панель от этого сжималась до трети экрана. Меряем при
+ * раскрытии, при ресайзе окна и при изменении самого футера (смена фазы,
+ * модулей, вёрстки).
  */
 function useDockInset(active: boolean): number {
   const [inset, setInset] = useState(0);
@@ -148,7 +193,7 @@ function useDockInset(active: boolean): number {
     if (!active || typeof window === "undefined") return;
     const measure = () => {
       const footer = document.querySelector("footer");
-      const h = footer ? window.innerHeight - footer.getBoundingClientRect().top : 0;
+      const h = footer ? footer.getBoundingClientRect().height : 0;
       setInset(h > 0 ? Math.round(h) : 0);
     };
     measure();
@@ -312,6 +357,9 @@ function FeedRow({
 }) {
   const rowRef = useRef<HTMLLIElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Панель реакций раскрывается НАД кнопкой; у строк у верхнего края списка
+  // места над ними нет (панель обрезалась бы краем списка) — там она вниз.
+  const [pickerPlacement, setPickerPlacement] = useState<"above" | "below">("above");
   const t = useT();
   const lang = useLang();
   // Локальный (оптимистичный) слой реакций: своя реакция видна сразу, ещё до
@@ -369,6 +417,21 @@ function FeedRow({
     onReact?.(emoji);
   };
 
+  const togglePicker = () => {
+    if (pickerOpen) {
+      setPickerOpen(false);
+      return;
+    }
+    // Хватает ли места НАД строкой (до верха прокручиваемого списка)? Панель
+    // на пальце ~52px высотой; если меньше — раскрываемся вниз, иначе край
+    // списка обрезал бы панель у самых верхних записей.
+    const row = rowRef.current;
+    const scroller = row?.closest('[role="log"]') as HTMLElement | null;
+    const roomAbove = row && scroller ? row.getBoundingClientRect().top - scroller.getBoundingClientRect().top : Infinity;
+    setPickerPlacement(roomAbove > 60 ? "above" : "below");
+    setPickerOpen(true);
+  };
+
   return (
     <li
       ref={rowRef}
@@ -394,15 +457,20 @@ function FeedRow({
         !(grouped && tint) && "mt-1",
       )}
       style={
-        tint
-          ? { backgroundColor: tint, backgroundPosition: textureShift(item.id) }
-          : undefined
+        {
+          // Контрастный тон времени и кнопки реакции под подложку строки —
+          // одно значение на оба элемента (см. feedMetaInk).
+          "--feed-meta-ink": feedMetaInk(item.color),
+          ...(tint
+            ? { backgroundColor: tint, backgroundPosition: textureShift(item.id) }
+            : {}),
+        } as CSSProperties
       }
     >
       {!grouped && item.at ? (
         <time
           dateTime={new Date(item.at).toISOString()}
-          className="mt-px font-mono text-[10px] leading-4 text-subtle tabular-nums"
+          className="mt-px font-mono text-[10px] leading-4 text-[color:var(--feed-meta-ink)] tabular-nums"
         >
           {timeLabel(item.at, lang)}
         </time>
@@ -454,11 +522,16 @@ function FeedRow({
             aria-label={t("game.addReaction")}
             title={t("game.reactionTitle")}
             aria-expanded={pickerOpen}
-            onClick={() => setPickerOpen((v) => !v)}
+            onClick={togglePicker}
             className={cn(
               // Мышь: кнопка проявляется по наведению. Палец: остаётся видимой.
               // Кнопка реакции на сообщение: палцу — 44px, мыши (xl+) — 24px.
-              "absolute right-1 top-1 grid size-11 place-items-center rounded-full text-subtle transition-opacity duration-[var(--motion-fast)] hover:bg-surface-2 hover:text-fg focus-visible:opacity-100 xl:size-6",
+              // Цвет — тот же контрастный тон, что у времени (--feed-meta-ink):
+              // под тонированной репликой «subtle» без адаптива темнёт.
+              // Палец: иконка прижата к верхней строке реплики (на уровне
+              // времени), круг-хитзона остаётся 44px; на xl круг 24px и иконка
+              // по центру — там он и так на строке времени.
+              "absolute right-1 top-1 grid size-11 place-items-start rounded-full pt-2 text-[color:var(--feed-meta-ink)] transition-opacity duration-[var(--motion-fast)] hover:bg-surface-2 hover:text-fg focus-visible:opacity-100 xl:size-6 xl:place-items-center xl:pt-0",
               pickerOpen ? "opacity-100" : "opacity-60 sm:opacity-0 sm:group-hover:opacity-100",
             )}
           >
@@ -468,7 +541,14 @@ function FeedRow({
             <div
               role="group"
               aria-label={t("game.reactions")}
-              className="absolute right-1 top-12 z-10 flex gap-1 rounded-full border border-border bg-surface p-1 shadow-[var(--shadow-card)] xl:top-7 xl:gap-0.5 xl:p-0.5"
+              className={cn(
+                // Панель раскрывается НАД кнопкой (absolute к строке реплики):
+                // под сообщением она упиралась в нижний край дока и обрезалась.
+                // У верхних записей списка места над строкой нет — там панель
+                // раскрывается вниз (флип считается при открытии).
+                "absolute right-1 z-10 flex gap-1 rounded-full border border-border bg-surface p-1 shadow-[var(--shadow-card)] xl:gap-0.5 xl:p-0.5",
+                pickerPlacement === "above" ? "bottom-full" : "top-full mt-1",
+              )}
             >
               {REACTION_EMOJI.map((emoji) => (
                 <button
@@ -496,8 +576,9 @@ function FeedRow({
  * (плавная анимация ширины). Свёрнутое состояние — узкий рельс справа сверху
  * с кнопкой раскрытия и красной точкой непрочитанного чата.
  *
- * Уже (sm…xl): панель поверх стола справа. Телефон (<sm): полноэкранный
- * «мессенджер» с шапкой и вводом внизу.
+ * Телефон и планшет (<xl): шторка в потоке после игрового стола (на планшете
+ * центрированная, ограниченной ширины) — ни табло, ни шапку она не накрывает,
+ * раскрытие прокручивает страницу к ней.
  *
  * Внутри: фильтры «Всё/События/Чат» (кнопки, не списки; «Зрители» — только
  * когда зрительские реплики есть в ленте), быстрые фразы, кнопка броска
@@ -563,7 +644,10 @@ export function EventFeed({
     wasOpenRef.current = open;
     if (!open) return;
     requestAnimationFrame(() => {
-      if (window.matchMedia("(max-width: 39.999rem)").matches) {
+      // Шторка живёт в потоке после стола на всех ширинах до xl: раскрывшись,
+      // прокручиваем страницу к ней (иначе пользователь видит только стол и
+      // решает, что чат не открылся).
+      if (window.matchMedia("(max-width: 79.999rem)").matches) {
         mobileSheetRef.current?.scrollIntoView({ block: "end" });
       }
     });
@@ -964,28 +1048,26 @@ export function EventFeed({
         )}
       </aside>
 
-      {/* ── Планшет и телефон: на телефоне журнал занимает место после стола,
-          на sm…xl — панель справа. Свёрнутой плашки нет: журнал открывается
-          кнопкой в шапке (там же счётчик непрочитанного), а лишняя пилюля
-          поверх стола только мешала. ── */}
+      {/* ── Телефон и планшет (до xl): шторка занимает отдельное место в потоке
+          после игрового стола — не накрывает табло и не сдвигает его; открывается
+          кнопкой в шапке (там же счётчик непрочитанного). Раньше на sm…xl шторка
+          становилась fixed-панелью справа: на планшете она съедала пол-экрана,
+          накрывала шапку и табло, а замер дока завышался прокруткой и сжимал
+          панель до трети высоты. ── */}
       <div className="relative z-30 xl:hidden">
         {open ? (
           <section
             ref={mobileSheetRef}
             aria-label={titleText}
             data-feed-mobile
-            style={
-              {
-                "--feed-dock": `${dockInset}px`,
-                "--feed-gap": `${Math.max(16, dockInset)}px`,
-              } as CSSProperties
-            }
+            style={{ "--feed-gap": `${Math.max(16, dockInset)}px` } as CSSProperties}
             className={cn(
-              // Телефон: шторка занимает отдельное место после игрового стола,
-              // поэтому не закрывает табло; финальный экран (z-40) остаётся
-              // над ней. Планшет: привычная правая панель над доком.
+              // Шторка после стола: финальный экран (z-40) остаётся над ней,
+              // sticky-док (z-20) — под ней. Планшет: та же шторка, но ширина
+              // ограничена и центрирована — строка чата не растягивается на
+              // весь экран, а боковые поля остаются как у телефона.
               "relative z-30 mx-2 mt-2 mb-[var(--feed-gap)] flex h-[min(58dvh,32rem)] max-h-[calc(100dvh-6rem)] min-h-[22rem] flex-col overflow-hidden rounded-[var(--radius-lg)] border border-border bg-surface shadow-[var(--shadow-card)]",
-              "sm:fixed sm:top-0 sm:right-0 sm:bottom-[var(--feed-dock,0px)] sm:left-auto sm:z-50 sm:mx-0 sm:mt-0 sm:h-auto sm:max-h-dvh sm:min-h-0 sm:w-[380px] sm:rounded-none sm:border-y-0 sm:border-r-0 sm:border-l",
+              "sm:mx-auto sm:w-[min(40rem,calc(100%-1rem))]",
               "animate-[fade-in_.2s_var(--ease-out)]",
             )}
           >
