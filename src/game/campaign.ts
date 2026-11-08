@@ -50,6 +50,10 @@ const won = (p: MissionProgress) => p.gameWon;
 const year2 = (p: MissionProgress) => p.year >= 2;
 const year3 = (p: MissionProgress) => p.year >= 3;
 const lostAtMost2 = (p: MissionProgress) => p.gameWon && p.animalsLost <= 2;
+// «Рост» — самостоятельный сценарий, а не клон «Первых шагов»: стадо должно
+// ПРОКОРМИТЬСЯ и РАЗНОИТЬСЯ, а не просто появиться на столе (#5).
+const fedHerd = (p: MissionProgress) => p.maxFedAnimals >= 3;
+const distinctHerd = (p: MissionProgress) => p.maxDistinctHerds >= 2;
 
 export const CAMPAIGN_MISSIONS: Record<CampaignMissionId, CampaignMission> = {
   "cambrian-growth": {
@@ -60,8 +64,8 @@ export const CAMPAIGN_MISSIONS: Record<CampaignMissionId, CampaignMission> = {
     descKey: "campaign.m.cambrianGrowth.diary",
     difficulty: "easy",
     objectives: [
-      { id: "animals", textKey: "tutorial.obj.placeAnimal", done: (p) => p.placedAnimals >= 2 },
-      { id: "traits", textKey: "tutorial.obj.placeTraits", done: (p) => p.placedTraits >= 3 },
+      { id: "fedHerd", textKey: "campaign.obj.fedHerd", done: fedHerd },
+      { id: "distinctHerd", textKey: "campaign.obj.distinctHerd", done: distinctHerd },
       { id: "year2", textKey: "tutorial.obj.reachYear2", done: year2 },
     ],
   },
