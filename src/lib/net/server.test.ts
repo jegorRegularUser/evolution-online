@@ -92,7 +92,7 @@ describe("module compatibility gates", () => {
     });
     // Сценарий сохранён в settings комнаты (P0-фикс ревью: раньше терялся).
     const room = (await _internals.readRoom(sql, host.code))!;
-    assert.deepEqual(room.settings.scenario, { seat: 1, bossFeedsExtra: true });
+    assert.deepEqual(room.settings!.scenario, { seat: 1, bossFeedsExtra: true });
     await s.start(host.code, host.token);
     assert.equal((await s.rejoin(host.code, host.token)).room.status, "playing");
     // Каноническое состояние партии несёт сценарий — движок применит правило
@@ -3075,6 +3075,69 @@ describe("таймер хода: настройка стола (T2) и шаг б
       }
     }
     assert.fail("бот не передал ход человеку за 20 тактов");
+  });
+
+  it("безумие/прозрение: контролёру — животные без руки безумца; подгляд — только смотрящему", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    const guest = await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const st = structuredClone(room.state!);
+    st.phase = "feeding";
+    st.pendingAttack = null;
+    st.currentPlayerId = 1; // безумец — Боря (место 1)
+    st.madTurn = 1;
+    st.madController = 0; // раунд проводит Аня — сосед справа
+    st.madPick = undefined;
+    st.rageTurn = null;
+    st.peek = null;
+    st.turnTerritory = undefined;
+    st.foodBank = 4;
+    st.turnUse = {
+      carnivores: [],
+      pirates: [],
+      grazers: [],
+      foodTaken: false,
+      combatUsed: false,
+      migrated: false,
+      sheltered: false,
+      hibernated: [],
+    };
+    for (const p of st.players) p.passedFeed = false;
+    st.players[0]!.hand = [{ id: "host-card", faces: ["swimming"] }] as never;
+    st.players[1]!.hand = [
+      { id: "bot-card-1", faces: ["carnivore"] },
+      { id: "bot-card-2", faces: ["camouflage"] },
+    ] as never;
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state: st }), true);
+
+    // Кадр контролёра: животные безумца на месте, его рука сервер не отдаёт.
+    const ctrl = full(await s.poll(host.code, host.token));
+    assert.equal(ctrl.state!.madController, 0);
+    assert.equal(ctrl.state!.players[1]!.hand.length, 0, "рука безумца не покидает сервер");
+    assert.equal(ctrl.state!.players[1]!.handCount, 2);
+    // Кадр безумца: свою руку видит, руку контролёра — нет.
+    const mad = full(await s.poll(host.code, guest.token));
+    assert.equal(mad.state!.players[1]!.hand.length, 2);
+    assert.equal(mad.state!.players[0]!.hand.length, 0);
+
+    // Прозрение: содержание подгляда уходит в кадр только смотрящего.
+    const room2 = (await _internals.readRoom(sql, host.code))!;
+    const peeked = structuredClone(room2.state!);
+    peeked.peek = { viewerId: 0, target: { kind: "hand", playerId: 1 } };
+    assert.equal(await _internals.casUpdate(sql, host.code, room2.version, { state: peeked }), true);
+    const viewerFrame = full(await s.poll(host.code, host.token));
+    assert.equal(viewerFrame.state!.peekContent?.kind, "hand");
+    if (viewerFrame.state!.peekContent?.kind === "hand") {
+      assert.deepEqual(
+        viewerFrame.state!.peekContent.cards.map((c) => c.id).sort(),
+        ["bot-card-1", "bot-card-2"],
+      );
+    }
+    const otherFrame = full(await s.poll(host.code, guest.token));
+    assert.equal(otherFrame.state!.peekContent ?? null, null, "содержание подгляда не попадает в чужой кадр");
   });
 });
 

@@ -22,13 +22,15 @@ import { Toaster, toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DialogShell } from "@/components/ui/dialog-shell";
 import { TRAITS } from "@/game/traits";
-import type { Animal, Card, FloraCard, GameAction, GameEvent, GameState, LogEntry, Plant, Player, TerritoryId, TraitId, WildEventId } from "@/game/types";
+import type { Animal, Card, FloraCard, GameAction, GameEvent, GameState, LogEntry, PeekTarget, Plant, Player, TerritoryId, TraitId, WildEventId } from "@/game/types";
 import { TERRITORIES } from "@/game/types";
 import { currentActor, feedBlockReasonInfo, legalDefenseActions, legalDevActions, legalFeedActions } from "@/game/engine";
+import { peekContentFor } from "@/lib/net/views";
 import { canAttack, canPlantAttackTarget, canReceiveFood, canRageAttack, findAnimal, foodNeeded, hasTrait, isFed, liveScore, player } from "@/game/queries";
 import {
   achievementDesc,
   achievementName,
+  floraDesc,
   floraName,
   markName,
   plantName,
@@ -48,7 +50,7 @@ import { sfx, type AmbientMood, type SfxId } from "@/lib/sfx";
 import { emptySession, recordGame, type SessionCounters } from "@/lib/stats";
 import { BG, MUTATION_ART, PHASE_ICON, TERRITORY_ART } from "@/lib/art";
 import { isSoloBotTable, useGameStore, typingNamesOf, type NetUiState, type UiIntent } from "@/store/game-store";
-import { AnimalCard, CardPreview, HandCard, PAIR_COLORS, PairPlate, type PairMark } from "./cards";
+import { AnimalCard, CardPreview, HandCard, PAIR_COLORS, PairPlate, TraitChip, type PairMark } from "./cards";
 import { FloraStrip } from "./cards-flora";
 import { PlantStrip } from "./cards-plants";
 import { ConfirmDialog } from "./confirm-dialog";
@@ -1300,20 +1302,36 @@ function useLastYearBanner(state: GameState): boolean {
 }
 
 /**
- * Ненавязчивые баннеры над столом: «последний год» и «безумие» (раунд
- * человека играет сосед — частая причина ощущения «пас нажался сам»).
- * Ничего не перекрывают: узкие полосы с pointer-events-none.
+ * Ненавязчивые баннеры над столом: «последний год» и семейство «безумия».
+ * Безумие: раунд человека проводит сосед — частая причина ощущения
+ * «пас нажался сам»; контролёру светим его роль, владельцу при 2+ метках —
+ * просьбу выбрать животное. Ничего не перекрывают: узкие полосы.
  */
-function TableBanners({ state }: { state: GameState }) {
+function TableBanners({ state, isHumanTurn }: { state: GameState; isHumanTurn: boolean }) {
   const t = useT();
+  const lang = useLang();
   const lastYear = useLastYearBanner(state);
-  const mad = state.madTurn === state.humanId;
-  if (!lastYear && !mad) return null;
+  const owner = state.madTurn !== undefined ? state.players[state.madTurn] : undefined;
+  const controller = state.madController !== undefined ? state.players[state.madController] : undefined;
+  const madPick = Boolean(state.madPick) && owner?.id === state.humanId;
+  const controlled = state.madController === state.humanId && Boolean(owner);
+  const mad = state.madTurn === state.humanId && !madPick && !controlled;
+  if (!lastYear && !madPick && !mad && !controlled) return null;
   return (
     <div className="pointer-events-none flex flex-col items-center gap-1 px-3 pt-2">
-      {mad ? (
+      {madPick && owner ? (
+        <p className="phase-banner-in rounded-full border border-virus bg-virus/25 px-4 py-1 text-center text-xs font-medium text-fg">
+          {t("game.madPickBanner")}
+        </p>
+      ) : null}
+      {controlled && owner ? (
         <p className="phase-banner-in rounded-full border border-virus/60 bg-virus/15 px-4 py-1 text-center text-xs text-fg">
-          {t("game.madBanner")}
+          {t("game.madBannerControlled", { name: scientistName(owner.name, lang) })}
+        </p>
+      ) : null}
+      {mad && owner ? (
+        <p className="phase-banner-in rounded-full border border-virus/60 bg-virus/15 px-4 py-1 text-center text-xs text-fg">
+          {t("game.madBanner", { name: controller ? scientistName(controller.name, lang) : "" })}
         </p>
       ) : null}
       {lastYear ? (
@@ -1321,6 +1339,191 @@ function TableBanners({ state }: { state: GameState }) {
           {t("game.lastYearBanner")}
         </p>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * «Гриб прозрения»: выбор цели разового подгляда и показ содержания.
+ * Содержание приходит в персональном виде (peekContent) или, в соло,
+ * досчитывается из локального состояния — чужая рука физически не покидает
+ * сервер, кроме единственного легального подгляда смотрящему.
+ */
+function InsightPeekOverlay({
+  state,
+  choices,
+  onChoose,
+}: {
+  state: GameState;
+  choices: Array<Extract<GameAction, { type: "choosePeek" }>>;
+  onChoose: (target: PeekTarget) => void;
+}) {
+  const t = useT();
+  const lang = useLang();
+  const peek = state.peek;
+  const [tab, setTab] = useState<"players" | "decks" | "animals">("players");
+  const [closed, setClosed] = useState(false);
+  const target = peek?.target;
+  // Новая цель или сброс подгляда — панель раскрывается снова.
+  useEffect(() => {
+    setClosed(false);
+  }, [target]);
+  if (!peek) return null;
+  const content = state.peekContent ?? peekContentFor(state, state.humanId) ?? undefined;
+
+  // ── цель выбрана: показываем содержание ──
+  if (target) {
+    if (closed) {
+      return (
+        <button
+          type="button"
+          onClick={() => setClosed(false)}
+          className="fixed bottom-20 left-3 z-40 rounded-full border border-psi/60 bg-psi/20 px-3 py-1 text-xs font-medium text-fg shadow-[var(--shadow-card)] backdrop-blur-sm hover:bg-psi/30"
+        >
+          <span aria-hidden className="mr-1">👁</span>
+          {t("game.peekTitle")}
+        </button>
+      );
+    }
+    const ownerOf = (id: number) => state.players[id]?.name ?? "";
+    return (
+      <div className="fixed inset-x-3 bottom-16 z-40 mx-auto max-w-2xl rounded-[var(--radius-lg)] border border-psi/50 bg-parchment/95 p-3 shadow-[var(--shadow-card)] backdrop-blur-sm sm:bottom-20">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-fg">
+            {target.kind === "hand"
+              ? t("game.peekHandOf", { name: scientistName(ownerOf(target.playerId), lang) })
+              : target.kind === "deckTop"
+                ? target.deck === "floraDeck"
+                  ? t("game.peekDeckFlora")
+                  : target.deck === "blind"
+                    ? t("game.peekDeckBlind", { name: scientistName(ownerOf(target.playerId ?? -1), lang) })
+                    : t("game.peekDeckMain")
+                : t("game.peekAnimalOf", { name: scientistName(ownerOf(state.players.flatMap((p) => p.animals).find((a) => a.id === target.animalId)?.ownerId ?? -1), lang) })}
+          </p>
+          <Button variant="ghost" size="sm" onClick={() => setClosed(true)}>
+            {t("game.peekClose")}
+          </Button>
+        </div>
+        {content?.kind === "hand" ? (
+          <div className="flex max-h-[46vh] flex-wrap gap-2 overflow-y-auto">
+            {content.cards.map((c) => (
+              <CardPreview key={c.id} card={c} />
+            ))}
+          </div>
+        ) : content?.kind === "card" ? (
+          <div className="flex justify-center">
+            <CardPreview card={content.card} />
+          </div>
+        ) : content?.kind === "floraCard" ? (
+          <p className="text-sm leading-snug text-fg">
+            <span className="font-semibold">{floraName(content.flora, lang)}</span> — {floraDesc(content.flora, lang)}
+          </p>
+        ) : content?.kind === "animal" ? (
+          <div className="flex flex-wrap gap-1.5">
+            {content.animal.traits.length ? (
+              content.animal.traits.map((tr) => (
+                <TraitChip key={tr.id} type={tr.type} pair={Boolean(tr.pairWith)} disabled={tr.disabled} />
+              ))
+            ) : (
+              <span className="text-sm text-muted">{t("game.peekEmpty")}</span>
+            )}
+          </div>
+        ) : (
+          <p className="text-sm text-muted">{t("game.peekEmpty")}</p>
+        )}
+        <p className="mt-2 text-[11px] leading-snug text-muted">{t("game.peekHint")}</p>
+      </div>
+    );
+  }
+
+  // ── цель не выбрана: модалка выбора ──
+  const playerChoices = choices.filter((a) => a.target.kind === "hand");
+  const deckChoices = choices.filter((a) => a.target.kind === "deckTop");
+  const animalChoices = choices.filter((a) => a.target.kind === "animal");
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-ink/40 p-4" role="dialog" aria-modal="true">
+      <div className="w-full max-w-md rounded-[var(--radius-lg)] border border-psi/50 bg-parchment p-4 shadow-[var(--shadow-card)]">
+        <p className="text-sm font-semibold text-fg">{t("game.peekTitle")}</p>
+        <p className="mt-1 text-[11px] leading-snug text-muted">{t("game.peekHint")}</p>
+        <div className="mt-3 flex gap-1">
+          {(
+            [
+              ["players", t("game.peekTabPlayers")],
+              ["decks", t("game.peekTabDecks")],
+              ["animals", t("game.peekTabAnimals")],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              className={cn(
+                "flex-1 rounded-full border px-2 py-1 text-xs font-medium",
+                tab === id ? "border-psi bg-psi/20 text-fg" : "border-ink/15 text-muted hover:bg-ink/5",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="mt-3 flex max-h-[40vh] flex-col gap-1.5 overflow-y-auto">
+          {tab === "players"
+            ? playerChoices.map((a) =>
+                a.target.kind === "hand" ? (
+                  <button
+                    key={`h-${a.target.playerId}`}
+                    type="button"
+                    onClick={() => onChoose(a.target)}
+                    className="rounded-[var(--radius-md)] border border-ink/12 px-3 py-2 text-left text-sm text-fg hover:bg-ink/5"
+                  >
+                    {scientistName(state.players[a.target.playerId]?.name ?? "", lang)}
+                    <span className="ml-1 text-xs text-muted">({state.players[a.target.playerId]?.handCount ?? 0})</span>
+                  </button>
+                ) : null,
+              )
+            : null}
+          {tab === "decks"
+            ? deckChoices.map((a) =>
+                a.target.kind === "deckTop" ? (
+                  <button
+                    key={`d-${a.target.deck}-${a.target.playerId ?? "x"}`}
+                    type="button"
+                    onClick={() => onChoose(a.target)}
+                    className="rounded-[var(--radius-md)] border border-ink/12 px-3 py-2 text-left text-sm text-fg hover:bg-ink/5"
+                  >
+                    {a.target.deck === "deck"
+                      ? t("game.peekDeckMain")
+                      : a.target.deck === "floraDeck"
+                        ? t("game.peekDeckFlora")
+                        : t("game.peekDeckBlind", { name: scientistName(state.players[a.target.playerId ?? -1]?.name ?? "", lang) })}
+                  </button>
+                ) : null,
+              )
+            : null}
+          {tab === "animals"
+            ? animalChoices.map((a) => {
+                const target = a.target;
+                return target.kind === "animal" ? (
+                  <button
+                    key={`a-${target.animalId}`}
+                    type="button"
+                    onClick={() => onChoose(target)}
+                    className="rounded-[var(--radius-md)] border border-ink/12 px-3 py-2 text-left text-sm text-fg hover:bg-ink/5"
+                  >
+                    {(() => {
+                      const an = state.players.flatMap((p) => p.animals).find((x) => x.id === target.animalId);
+                      const owner = an ? scientistName(state.players[an.ownerId]?.name ?? "", lang) : "";
+                      return `${an?.name ?? "?"} · ${owner}`;
+                    })()}
+                  </button>
+                ) : null;
+              })
+            : null}
+          {!playerChoices.length && !deckChoices.length && !animalChoices.length ? (
+            <p className="text-sm text-muted">{t("game.peekEmpty")}</p>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2129,12 +2332,13 @@ function Table() {
     [human.id, lang, showRejectHint, t],
   );
 
-  // «Трава и грибы»: раунд безумца проводит сосед справа — стол человека
-  // в этот раунд не интерактивен. Зритель смотрит стол как чужой ход:
-  // сервер ставит ему humanId-якорь, поэтому одним флагом гасим и «Ваш ход»,
-  // и подсветки, и органы управления ходом.
+  // «Трава и грибы»: раунд безумца проводит сосед справа — контролёр действует
+  // наравне со своим ходом, сам безумец в этот раунд не интерактивен (только
+  // разовый подгляд прозрения, если фишку брало его животное). Зритель смотрит
+  // стол как чужой ход: сервер ставит ему humanId-якорь, поэтому одним флагом
+  // гасим и «Ваш ход», и подсветки, и органы управления ходом.
   const isHumanTurn =
-    actor?.id === human.id && state.madTurn !== human.id && !net?.spectating;
+    (actor?.id === human.id || state.madController === human.id) && !net?.spectating;
   // «Ваш ход»: карточка показывается только на реальном переходе хода к человеку.
   // Ключ последнего хода человека отсекает повтор: после своей же атаки актор на
   // миг становится защищающимся и возвращается — это тот же ход, не новый.
@@ -2157,8 +2361,13 @@ function Table() {
     }, 200);
   }, []);
   useEffect(() => {
-    const key = `${state.year}:${state.phase}:${state.currentPlayerId ?? -1}:${state.madTurn ?? -1}:${state.turnSeq ?? 0}`;
-    const on = isHumanTurn && !state.pendingAttack && !state.rageTurn;
+    const key = `${state.year}:${state.phase}:${state.currentPlayerId ?? -1}:${state.madTurn ?? -1}:${state.madController ?? -1}:${state.turnSeq ?? 0}`;
+    const on =
+      isHumanTurn &&
+      !state.pendingAttack &&
+      !state.rageTurn &&
+      // Раунд безумия, которым управляет сосед: владельцу «Ваш ход» не светим.
+      !(state.madController !== undefined && state.madController !== human.id);
     if (!on) {
       setTurnCard(null);
       return;
@@ -2169,7 +2378,7 @@ function Table() {
     if (spotlightActive) return;
     lastHumanKeyRef.current = key;
     setTurnCard(key);
-  }, [isHumanTurn, state.pendingAttack, state.rageTurn, state.year, state.phase, state.currentPlayerId, state.madTurn, state.turnSeq, spotlightActive]);
+  }, [isHumanTurn, state.pendingAttack, state.rageTurn, state.year, state.phase, state.currentPlayerId, state.madTurn, state.madController, state.turnSeq, spotlightActive, human.id]);
   // Карточка живёт в два раза короче прежнего: она лишь подтверждает переход хода.
   useEffect(() => {
     if (!turnCard || turnCardClosing) return;
@@ -3183,7 +3392,7 @@ function Table() {
         </div>
       </TopBar>
 
-      <TableBanners state={state} />
+      <TableBanners state={state} isHumanTurn={isHumanTurn} />
 
       {/* Режим зрителя: на sm+ бейдж висит по центру под шапкой; на телефоне
           он переехал в строку реакций (см. ReactionsLayer) — раньше на узком
@@ -3518,12 +3727,23 @@ function Table() {
               : state.phase === "extinction"
                 ? t("game.wait.extinction")
                 : state.phase === "growth"
-                  ? t("game.wait.growth")
-                  : state.madTurn === (actor?.id ?? -2)
-                    ? t("game.wait.madness", { name: actor ? scientistName(actor.name, lang) : "" })
-                    : actor && actor.id !== human.id
-                      ? t("game.wait.actor", { name: scientistName(actor.name, lang) })
-                      : t("game.wait.waiting")}
+                ? t("game.wait.growth")
+                : state.madTurn !== undefined
+                  ? (() => {
+                      const owner = state.players[state.madTurn];
+                      const controller = state.madController !== undefined ? state.players[state.madController] : undefined;
+                      if (state.madPick && owner) return t("game.wait.madPick", { name: scientistName(owner.name, lang) });
+                      if (isHumanTurn && controller && owner) {
+                        return t("game.wait.madnessControlled", { name: scientistName(owner.name, lang) });
+                      }
+                      return t("game.wait.madness", {
+                        name: owner ? scientistName(owner.name, lang) : "",
+                        controller: controller ? scientistName(controller.name, lang) : "",
+                      });
+                    })()
+                  : actor && actor.id !== human.id
+                    ? t("game.wait.actor", { name: scientistName(actor.name, lang) })
+                    : t("game.wait.waiting")}
           </div>
         )}
       </footer>
@@ -3547,6 +3767,15 @@ function Table() {
 
       {state.pendingAttack && state.pendingAttack.waitingFor === human.id ? (
         <DefenseDock acts={defActs} onPick={(a) => dispatch(a)} onPreview={setDefensePreviewId} />
+      ) : null}
+
+      {/* «Гриб прозрения»: разовый подгляд смотрящего — выбор цели и содержание. */}
+      {state.peek?.viewerId === human.id && !net?.spectating ? (
+        <InsightPeekOverlay
+          state={state}
+          choices={feedActs.filter((a): a is Extract<GameAction, { type: "choosePeek" }> => a.type === "choosePeek")}
+          onChoose={(target) => dispatch({ type: "choosePeek", target })}
+        />
       ) : null}
 
       {replaceTarget ? (
@@ -3644,6 +3873,34 @@ function Table() {
 }
 
 function handleAnimalClick(
+  animal: Animal,
+  ctx: {
+    state: GameState;
+    intent: UiIntent;
+    isHumanTurn: boolean;
+    human: Player;
+    feedActs: GameAction[];
+    devActs: GameAction[];
+    /** См. `mutateGuess` в GameApp: догадка о легальности для скрытой колоды. */
+    mutateGuess: (kind: "trait" | "population" | "plant", target: { animalId?: string; plantId?: string }) => boolean;
+    dispatch: (a: GameAction) => void;
+    setIntent: (i: UiIntent) => void;
+    onReject: (animal: Animal, reason: RejectReason) => void;
+  },
+) {
+  const { state, feedActs, dispatch, onReject } = ctx;
+  // «Безумная шляпка», 2+ меток: владелец снимает метку с выбранного животного —
+  // других действий в этот раунд у него нет.
+  if (state.madPick && state.currentPlayerId === state.humanId) {
+    const ok = feedActs.some((a) => a.type === "chooseMadMark" && a.animalId === animal.id);
+    if (ok) dispatch({ type: "chooseMadMark", animalId: animal.id });
+    else onReject(animal, "target");
+    return;
+  }
+  return handleAnimalIntent(animal, ctx);
+}
+
+function handleAnimalIntent(
   animal: Animal,
   ctx: {
     state: GameState;
@@ -3820,6 +4077,11 @@ function animalHighlight(
   mutateGuess?: (kind: "trait" | "population" | "plant", target: { animalId?: string; plantId?: string }) => boolean,
 ): boolean {
   if (!isHumanTurn) return false;
+  // «Безумная шляпка», 2+ меток: подсвечиваем только животных с меткой —
+  // клик снимает её и передаёт раунд соседу справа.
+  if (state.madPick && state.currentPlayerId === state.humanId) {
+    return feedActs.some((a) => a.type === "chooseMadMark" && a.animalId === animal.id);
+  }
   if (intent.kind === "playTrait") {
     return devActs.some(
       (a) => a.type === "devPlayTrait" && a.cardId === intent.cardId && a.face === intent.face && a.animalId === animal.id,

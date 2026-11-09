@@ -8,6 +8,7 @@ import { PLANTS } from "./plants.ts";
 import { nextRandom } from "./rng.ts";
 import { allAnimals, canAttack, canReceiveFood, foodNeeded, hasTrait } from "./queries.ts";
 import { TRAITS } from "./traits.ts";
+import { peekContentFor } from "../lib/net/views.ts";
 import type { Animal, FloraCard, FloraKind, GameAction, GameEvent, GameState, Plant, PlantKind, TraitId, TraitInstance } from "./types.ts";
 
 let idc = 0;
@@ -1839,9 +1840,99 @@ describe("трава и грибы: бешенство и безумие", () =>
     const next = applyAction(g, { type: "feedEndTurn" });
     assert.equal(next.madTurn, 0);
     assert.equal(next.players[0]!.animals[1]!.marks?.includes("madness"), false);
-    // бот-логика может играть за безумца (chooseAIAction не падает)
+    // бот-логика может играть за контролёра (chooseAIAction не падает)
     const act = chooseAIAction(next);
     assert.ok(act);
+  });
+
+  it("безумие: контролёр распоряжается животными безумца, сам безумец не действует", () => {
+    const g = floraScenario(
+      [[mkAnimal("a", 0, []), mkAnimal("crazy", 0, [])], [mkAnimal("b", 1, [])]],
+      [mkFlora("f1", "thryn", 3)],
+    );
+    g.foodBank = 4;
+    g.players[0]!.animals[1]!.marks = ["madness"];
+    g.currentPlayerId = 1;
+    const next = applyAction(g, { type: "feedEndTurn" });
+    assert.equal(next.madController, 1); // сосед справа в круге из двух игроков
+    // контролёр получает полный набор действий над животными владельца
+    const acts = legalFeedActions(next, 1);
+    assert.ok(acts.some((a) => a.type === "feedTake" && a.animalId === "a"));
+    assert.ok(acts.some((a) => a.type === "feedTake" && a.animalId === "crazy"));
+    // владелец в чужой управе не действует
+    assert.equal(legalFeedActions(next, 0).length, 0);
+    // контролёр кормит животное владельца — фишка ложится на безумца
+    const fed = applyAction(next, { type: "feedTake", animalId: "crazy" });
+    assert.equal(fed.players[0]!.animals[1]!.food, 1);
+  });
+
+  it("безумие при 2+ метках: владелец выбирает животное, затем раунд уходит соседу", () => {
+    const g = floraScenario(
+      [[mkAnimal("a", 0, []), mkAnimal("c1", 0, []), mkAnimal("c2", 0, [])], [mkAnimal("b", 1, [])]],
+      [mkFlora("f1", "thryn", 3)],
+    );
+    g.players[0]!.animals[1]!.marks = ["madness"];
+    g.players[0]!.animals[2]!.marks = ["madness"];
+    g.foodBank = 4;
+    g.currentPlayerId = 1;
+    const next = applyAction(g, { type: "feedEndTurn" });
+    assert.equal(next.madPick, true);
+    assert.equal(next.madController, undefined);
+    // владелец выбирает: легальны только chooseMadMark по меченым животным
+    const picked = legalFeedActions(next, 0)
+      .filter((a) => a.type === "chooseMadMark")
+      .map((a) => (a.type === "chooseMadMark" ? a.animalId : ""));
+    assert.deepEqual(picked.sort(), ["c1", "c2"]);
+    assert.equal(legalFeedActions(next, 1).length, 0); // контролёра ещё нет
+    const chosen = applyAction(next, { type: "chooseMadMark", animalId: "c2" });
+    assert.equal(chosen.madPick, undefined);
+    assert.equal(chosen.madController, 1);
+    assert.equal(chosen.players[0]!.animals[2]!.marks?.includes("madness"), false);
+    assert.equal(chosen.players[0]!.animals[1]!.marks?.includes("madness"), true); // вторая метка на месте
+    assert.ok(legalFeedActions(chosen, 1).some((a) => a.type === "feedTake" && a.animalId === "a"));
+  });
+
+  it("прозрение: сброс руки и разовый подгляд руки соперника — только смотрящему", () => {
+    const g = floraScenario(
+      [[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]],
+      [mkFlora("f1", "insight", 2)],
+    );
+    g.players[0]!.hand = [{ id: "mine", faces: ["swimming", "swimming"] }]; // своя — уйдёт в сброс
+    g.players[1]!.hand = [{ id: "h1", faces: ["carnivore", "fatTissue"] }]; // чужая — предмет подгляда
+    g.currentPlayerId = 0;
+    const taken = applyAction(g, { type: "feedTakeFlora", animalId: "a", floraId: "f1" });
+    // своя рука сброшена, чужая не тронута, право подгляда выдано смотрящему
+    assert.equal(taken.players[0]!.hand.length, 0);
+    assert.equal(taken.players[1]!.hand.length, 1);
+    assert.equal(taken.peek?.viewerId, 0);
+    assert.equal(taken.peek?.target, undefined);
+    // выбор цели легален только смотрящему
+    assert.ok(legalFeedActions(taken, 0).some((a) => a.type === "choosePeek"));
+    assert.equal(legalFeedActions(taken, 1).some((a) => a.type === "choosePeek"), false);
+    const peeked = applyAction(taken, { type: "choosePeek", target: { kind: "hand", playerId: 1 } });
+    assert.deepEqual(peeked.peek?.target, { kind: "hand", playerId: 1 });
+    // содержание подгляда получает только смотрящий — сопернику утечки нет
+    assert.equal(peekContentFor(peeked, 0)?.kind, "hand");
+    assert.equal(peekContentFor(peeked, 1), null);
+    // подгляд не тратит ход: раунд можно завершить, peek при переходе сбрасывается
+    assert.ok(legalFeedActions(peeked, 0).some((a) => a.type === "feedEndTurn"));
+    const ended = applyAction(peeked, { type: "feedEndTurn" });
+    assert.equal(ended.peek ?? null, null);
+  });
+
+  it("прозрение: верх общей колоды доступен как цель подгляда", () => {
+    const g = floraScenario([[mkAnimal("a", 0, [])], [mkAnimal("b", 1, [])]], [mkFlora("f1", "insight", 2)]);
+    g.currentPlayerId = 0;
+    const taken = applyAction(g, { type: "feedTakeFlora", animalId: "a", floraId: "f1" });
+    assert.ok(legalFeedActions(taken, 0).some((a) => a.type === "choosePeek"));
+    const peeked = applyAction(taken, { type: "choosePeek", target: { kind: "deckTop", deck: "deck" } });
+    const content = peekContentFor(peeked, 0);
+    assert.equal(content?.kind, "card");
+    if (content?.kind === "card") {
+      assert.equal(content.card.id, peeked.deck[peeked.deck.length - 1]?.id); // верх = конец массива
+    }
+    // чужая рука в основной вид по-прежнему не попадает
+    assert.equal(peeked.players[1]!.hand.length, 0);
   });
 });
 

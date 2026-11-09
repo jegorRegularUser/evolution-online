@@ -49,7 +49,11 @@ export function chooseAIAction(state: GameState): GameAction | null {
     return pickDev(state, acts);
   }
   if (state.phase === "feeding") {
-    const acts = legalFeedActions(state, state.currentPlayerId);
+    // Раунд безумца играет контролёр (сосед справа): legalFeedActions сама
+    // подставит животных владельца. Скоринг в pickFeed оценивает положение
+    // владельца — бот ведёт его раунд, как вёл бы свой.
+    const actor = state.madController ?? state.currentPlayerId;
+    const acts = legalFeedActions(state, actor);
     return pickFeed(state, acts);
   }
   return null;

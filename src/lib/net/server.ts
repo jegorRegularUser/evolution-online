@@ -868,6 +868,13 @@ export function endTurnStepFor(state: GameState, _actorId: number): GameAction {
     if (state.pendingAttack.choosingPlantDefense) return legalDefenseActions(state, state.pendingAttack.waitingFor)[0]!;
     return { type: "chooseDefense", kind: "none" };
   }
+  // AFK-владелец с 2+ метками «Безумие»: сервер снимает метку с первого
+  // животного сам — выбор без игрока не должен висеть над столом.
+  if (state.madPick) {
+    const p = state.players[state.currentPlayerId];
+    const a = p?.animals.find((x) => x.marks?.includes("madness"));
+    if (a) return { type: "chooseMadMark", animalId: a.id };
+  }
   return { type: "feedEndTurn" };
 }
 
@@ -909,12 +916,24 @@ export function noChoicesLeft(state: GameState, actor: Player): boolean {
 }
 
 /**
+ * Кто реально действует сейчас: жертва защиты, контролёр раунда безумия
+ * («Безумная шляпка») или текущий игрок. Для дедлайнов и подсказок хода.
+ */
+function actingActor(state: GameState): Player | null {
+  if (state.phase === "gameOver") return null;
+  if (state.pendingAttack) return state.players[state.pendingAttack.waitingFor] ?? null;
+  if (state.phase === "foodBank" || state.phase === "extinction" || state.phase === "growth") return null;
+  const id = state.madController ?? state.currentPlayerId;
+  return state.players[id] ?? null;
+}
+
+/**
  * Дедлайн текущего хода человека (epoch ms): idleTurnMs для хода без
  * действий и afkTurnMs для хода с действиями. null: ход бота/автофазы.
  */
 function turnDeadlineOf(room: RoomRow): number | null {
   if (room.status !== "playing" || !room.state || room.turn_deadline_at === null) return null;
-  const actor = currentActor(room.state);
+  const actor = actingActor(room.state);
   if (!actor || actor.isAI || actor.resigned) return null;
   return toMs(room.turn_deadline_at);
 }
@@ -927,7 +946,7 @@ function turnDeadlineOf(room: RoomRow): number | null {
  */
 function botStepAtOf(room: RoomRow): number | null {
   if (room.status !== "playing" || !room.state || room.auto_step_at === null) return null;
-  const actor = currentActor(room.state);
+  const actor = actingActor(room.state);
   if (!actor || !actor.isAI) return null;
   return toMs(room.auto_step_at);
 }
@@ -961,8 +980,18 @@ export function nextAutoStep(state: GameState): GameAction | null {
   // Сдавшийся не ходит: место и имя остаются, но сервер сам пасует и
   // пропускает питание за него — животные гибнут от голода в вымирание.
   if (actor.resigned && !actor.isAI) return resignedStepFor(state);
-  // «Трава и грибы»: раунд безумца проводит сосед справа — логика ботов.
-  if (!actor.isAI && state.madTurn !== actor.id) return null;
+  if (state.pendingAttack) {
+    // Защиту всегда выбирает жертва: бот — сразу, человек — ждём.
+    if (!actor.isAI) return null;
+  } else {
+    // «Безумная шляпка»: раунд безумца выполняет контролёр (сосед справа).
+    // Человек-контролёр — ждём его действий; бот-контролёр (в том числе сосед
+    // человека в соло) шагает сам. Сдавшийся контролёр не оставляет стол в
+    // ожидании — раунд доигрывает AI.
+    const controllerId = state.madController ?? state.currentPlayerId;
+    const controller = state.players[controllerId];
+    if (!controller?.isAI && !controller?.resigned) return null;
+  }
   const pick = chooseAIAction(state);
   if (pick) return pick;
   // Страховка от зависания: у бота всегда есть пас/скип/сдаться.
@@ -1618,13 +1647,14 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       const before = room.state;
       const step = nextAutoStep(before);
       if (!step) {
-        // Ход человека: «ход» — полный ход игрока в текущей фазе. Паузу до
-        // авто-конца задаёт настройка стола «Таймер хода» (turnTimerMs);
-        // у столов без ключа — прежние idleTurnMs/afkTurnMs. «Выкл» (0)
-        // означает: сервер ход не заканчивает вовсе — игрок завершает его сам.
-        // Оба значения абсолютны и не зависят от интервала поллинга; watchdog
-        // держит их даже без браузера.
-        const actor = currentActor(before);
+        // Ход человека: «ход» — полный ход игрока в текущей фазе. В раунде
+        // безумия актор — контролёр (сосед справа), его и ждём по дедлайну.
+        // Паузу до авто-конца задаёт настройка стола «Таймер хода»
+        // (turnTimerMs); у столов без ключа — прежние idleTurnMs/afkTurnMs.
+        // «Выкл» (0) означает: сервер ход не заканчивает вовсе — игрок
+        // завершает его сам. Оба значения абсолютны и не зависят от интервала
+        // поллинга; watchdog держит их даже без браузера.
+        const actor = actingActor(before);
         if (!actor) return;
         const idle = noChoicesLeft(before, actor);
         const timeoutMs = turnTimeoutMs(room.settings, idle);

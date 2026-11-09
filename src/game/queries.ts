@@ -444,6 +444,15 @@ export function nextPlayerId(state: GameState, from = state.currentPlayerId): nu
   return (from + 1) % n;
 }
 
+/**
+ * Предыдущий игрок по кругу хода — «сосед справа»: порядок хода идёт по
+ * часовой стрелке, поэтому право играет перед безумцем.
+ */
+export function prevPlayerId(state: GameState, from = state.currentPlayerId): number {
+  const n = state.players.length;
+  return (from - 1 + n) % n;
+}
+
 // ── «Трава и грибы» ───────────────────────────────────────────────────────────
 
 export function findFlora(state: GameState, id: string): FloraCard | undefined {
