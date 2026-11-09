@@ -27,6 +27,7 @@ import { CHALLENGES } from "@/game/challenges";
 import { COSMETIC_ITEMS, cosmeticById, type CosmeticItem } from "@/lib/cosmetics";
 import { CAMPAIGN_ERAS } from "@/game/campaign";
 import type { RunReward } from "@/game/campaign-run";
+import { StashChips } from "./campaign-hud";
 import { flushPendingSpecimens, type BestiariumEntry } from "@/game/bestiarium";
 import { challengesGet, cosmeticsBuy, cosmeticsEquip, profileGet } from "@/lib/profile/api";
 import { sfx } from "@/lib/sfx";
@@ -2081,6 +2082,7 @@ function traitTitleKey(t: TraitId): TKey {
 export function CampaignContent({ onStarted }: { onStarted?: () => void }) {
   const tt = useT();
   const run = useGameStore((s) => s.campaignRun);
+  const tableLive = useGameStore((s) => Boolean(s.net));
   const startCampaignRun = useGameStore((s) => s.startCampaignRun);
   const continueCampaignRun = useGameStore((s) => s.continueCampaignRun);
   const campaignStartBattle = useGameStore((s) => s.campaignStartBattle);
@@ -2180,14 +2182,15 @@ export function CampaignContent({ onStarted }: { onStarted?: () => void }) {
       </section>
 
       {run.match ? (
-        // Матч приостановлен (ушли со стола): вернуться или сдать забег.
+        // Матч приостановлен (ушли со стола) или стол ещё жив в другой вкладке
+        // навигации: «Продолжить» возобновляет хоста либо возвращает к столу.
         <section className="rounded-[var(--radius-md)] border border-accent/40 bg-accent/5 p-3">
           <p className="text-sm text-fg">{tt("campaign.run.continueHint")}</p>
           <div className="mt-2 flex flex-wrap gap-2">
             <Button
               size="sm"
               onClick={() => {
-                continueCampaignRun();
+                if (!tableLive) continueCampaignRun();
                 onStarted?.();
               }}
             >
@@ -2202,6 +2205,9 @@ export function CampaignContent({ onStarted }: { onStarted?: () => void }) {
         // Узел награды: выбор одного усиления, курсор переходит к следующему бою.
         <section>
           <p className="mb-2 text-sm font-medium text-fg">{tt("campaign.run.pickReward")}</p>
+          <div className="mb-3">
+            <StashChips run={run} emptyKey="campaign.run.stashEmpty" />
+          </div>
           <div className="grid gap-2">
             {node.rewards.map((r: RunReward) => (
               <button

@@ -1410,11 +1410,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   netResign: async () => {
     // Кампания: сдача = проигрыш забега (мягко — мета вне забега не страдает).
-    if (campaignHost) {
-      campaignHost.stop();
+    if (campaignHost || get().net?.code?.startsWith("CAMP-")) {
+      campaignHost?.stop();
       campaignHost = null;
       const run = get().campaignRun;
-      if (run) {
+      if (run && run.status === "active") {
         loseRun(run);
         saveCampaignRun(run);
         set({ campaignRun: { ...run } });
@@ -1566,10 +1566,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   leaveNet: (mode = "hard") => {
-    // Кампания: локальная партия, никакой сети. Матч сохранён в забеге —
-    // вернуться можно с /campaign («Продолжить»), F5 по / возобновит тоже.
-    if (campaignHost) {
-      campaignHost.stop();
+    // Кампания: локальная партия, никакой сети. Ветка срабатывает и когда хост
+    // жив (матч пауза — вернуться с /campaign или F5), и после финала (хоста
+    // уже нет, но шим стола ещё стоит): признак — код стола CAMP-*.
+    if (campaignHost || get().net?.code?.startsWith("CAMP-")) {
+      campaignHost?.stop();
       campaignHost = null;
       set({ net: null, state: null, intent: { kind: "none" } });
       return;

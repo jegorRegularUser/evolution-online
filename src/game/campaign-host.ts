@@ -115,7 +115,7 @@ export class CampaignHost {
         { name: opponentName || "Evo", isAI: true },
       ],
       b.modules,
-      undefined,
+      b.deckSize,
       { mutators: mutatorList(b.mutators), wildWorld: b.wildWorld },
       runBattleScenario(run, node),
     );

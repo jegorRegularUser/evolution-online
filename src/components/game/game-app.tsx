@@ -1700,12 +1700,13 @@ export function GameApp() {
         </div>
       ) : null}
       <Table />
-      {state.phase === "gameOver" && state.scores ? (
-        campaignRun ? (
-          // Финал забега: победа двигает путь, поражение завершает забег —
-          // повторов и сетевого «ждём хоста» здесь не бывает.
-          <CampaignGameOver />
-        ) : spectator ? (
+      {campaignRun && (state.phase === "gameOver" || campaignRun.status !== "active") ? (
+        // Финал боя (партия доиграна) ИЛИ финал забега (сдача посреди боя —
+        // фаза ещё не gameOver): победа двигает путь, поражение завершает
+        // забег. Повторов и сетевого «ждём хоста» здесь не бывает.
+        <CampaignGameOver />
+      ) : state.phase === "gameOver" && state.scores ? (
+        spectator ? (
           <SpectatorGameOver state={state} onMenu={leaveNet} />
         ) : (
           <GameOverScreen
@@ -3177,7 +3178,9 @@ function Table() {
             >
               <Minimize2 className="size-4" />
             </Button>
-            {soloBotsOnly ? (
+            {/* «Закрыть стол» — про удаление серверной комнаты: в кампании
+                комнаты нет, выход и сохранение делает leaveNet (#фундамент). */}
+            {soloBotsOnly && !campaignRun ? (
               <Button
                 variant="ghost"
                 size="icon"
@@ -3580,20 +3583,24 @@ function Table() {
         <ConfirmDialog
           title={t("leave.title")}
           body={
-            net?.spectating
-              ? t("leave.bodySpectator")
-              : soloBotsOnly
-                ? t("leave.bodySolo")
-                : canResumeSoftExit
-                  ? t("leave.bodyPlayer")
-                  : t("leave.bodyNoResume")
+            campaignRun
+              ? t("leave.bodyCampaign")
+              : net?.spectating
+                ? t("leave.bodySpectator")
+                : soloBotsOnly
+                  ? t("leave.bodySolo")
+                  : canResumeSoftExit
+                    ? t("leave.bodyPlayer")
+                    : t("leave.bodyNoResume")
           }
           confirmLabel={
-            net?.spectating
-              ? t("leave.confirmSpectator")
-              : soloBotsOnly
-                ? t("leave.confirmSolo")
-                : t("leave.confirmPlayer")
+            campaignRun
+              ? t("leave.confirmCampaign")
+              : net?.spectating
+                ? t("leave.confirmSpectator")
+                : soloBotsOnly
+                  ? t("leave.confirmSolo")
+                  : t("leave.confirmPlayer")
           }
           cancelLabel={t("leave.stay")}
           // Выход (для зрителя — просто уход, для игрока — сдача) всегда

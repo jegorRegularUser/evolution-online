@@ -2,8 +2,47 @@ import { Compass, Crown, Swords } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "@tanstack/react-router";
 import { CAMPAIGN_ERAS } from "@/game/campaign";
-import { useT } from "@/lib/i18n";
+import type { CampaignRun } from "@/game/campaign-run";
+import { useT, type TKey } from "@/lib/i18n";
 import { useGameStore } from "@/store/game-store";
+
+/** Id гарантированного свойства → имя награды, которой оно получено. */
+const TRAIT_REWARD_KEY: Record<string, TKey> = {
+  burrowing: "campaign.reward.burrow.name",
+  tailLoss: "campaign.reward.tail.name",
+  swimming: "campaign.reward.swim.name",
+};
+
+/**
+ * Заначка наград забега: пилюли «Память рода ×2 · Дар нор». Общий вид для
+ * HUD стола и узла награды на странице кампании.
+ */
+export function StashChips({ run, emptyKey }: { run: CampaignRun; emptyKey?: TKey }) {
+  const tt = useT();
+  const chips: string[] = [];
+  if (run.stash.handBonus > 0) {
+    chips.push(`${tt("campaign.reward.hand.name")} ×${run.stash.handBonus}`);
+  }
+  for (const trait of run.stash.startTraits) {
+    const key = TRAIT_REWARD_KEY[trait];
+    if (key) chips.push(tt(key));
+  }
+  if (!chips.length) {
+    return emptyKey ? <p className="text-xs text-muted">{tt(emptyKey)}</p> : null;
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {chips.map((chip) => (
+        <span
+          key={chip}
+          className="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-fg"
+        >
+          {chip}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 /**
  * HUD забега кампании (фундамент рогалик-переработки): где ты на пути эпохи
@@ -44,6 +83,11 @@ export function CampaignHud() {
         ) : null}
       </p>
       <p className="mt-1 text-xs leading-snug text-muted">{tt(node.diaryKey)}</p>
+      {run.stash.handBonus > 0 || run.stash.startTraits.length > 0 ? (
+        <div className="mt-1.5">
+          <StashChips run={run} />
+        </div>
+      ) : null}
       {state && state.phase !== "gameOver" ? (
         <p className="mt-1.5 text-[11px] text-muted">{tt("game.yearN", { year: state.year })}</p>
       ) : null}
@@ -52,18 +96,33 @@ export function CampaignHud() {
 }
 
 /**
- * Финал забега вместо сетевого GameOverScreen: победа двигает путь (награда
- * ждёт на /campaign), поражение завершает забег — но ничего не отнимает.
- * «Новый забег» стартует ту же эпоху сразу.
+ * Финал боя/забега вместо сетевого GameOverScreen. Три исхода: узел пройден
+ * (забег продолжается — «К пути»), забег выигран (финал пути), забег потерян
+ * (сдача или поражение — ничего вне забега не теряется, «Новый забег» сразу).
  */
 export function CampaignGameOver() {
   const tt = useT();
   const navigate = useNavigate();
   const run = useGameStore((s) => s.campaignRun);
+  const state = useGameStore((s) => s.state);
   const leaveNet = useGameStore((s) => s.leaveNet);
   const startCampaignRun = useGameStore((s) => s.startCampaignRun);
   if (!run) return null;
+  const finished = run.status !== "active";
   const won = run.status === "won";
+  const titleKey = finished
+    ? won
+      ? "campaign.run.wonTitle"
+      : "campaign.run.lostTitle"
+    : "campaign.run.nodeWon.title";
+  const textKey = finished
+    ? won
+      ? "campaign.run.wonText"
+      : "campaign.run.lostText"
+    : "campaign.run.nodeWon.text";
+  const scores = state?.scores;
+  const mine = scores?.find((s) => s.playerId === 0)?.total ?? null;
+  const foe = scores?.find((s) => s.playerId !== 0)?.total ?? null;
   const toPath = () => {
     // Шим стола гасим: путь живёт на странице кампании, а не за столом.
     leaveNet();
@@ -73,21 +132,20 @@ export function CampaignGameOver() {
     <div className="fixed inset-0 z-50 grid place-items-center bg-bg/80 p-4 backdrop-blur-sm">
       <div className="w-full max-w-md rounded-[var(--radius-lg)] border border-border bg-surface p-5 text-center shadow-[var(--shadow-card)]">
         <div className="mx-auto grid size-10 place-items-center rounded-full bg-accent/15">
-          <Crown className={won ? "size-5 text-accent" : "size-5 text-muted"} aria-hidden />
+          <Crown className={finished && !won ? "size-5 text-muted" : "size-5 text-accent"} aria-hidden />
         </div>
-        <p className="mt-3 font-display text-xl tracking-[0.06em] text-fg">
-          {tt(won ? "campaign.run.wonTitle" : "campaign.run.lostTitle")}
-        </p>
-        <p className="mt-2 text-sm leading-snug text-muted">
-          {tt(won ? "campaign.run.wonText" : "campaign.run.lostText")}
-        </p>
+        <p className="mt-3 font-display text-xl tracking-[0.06em] text-fg">{tt(titleKey)}</p>
+        <p className="mt-2 text-sm leading-snug text-muted">{tt(textKey)}</p>
+        {mine !== null && foe !== null ? (
+          <p className="mt-2 text-sm text-fg">{tt("campaign.run.finalScore", { you: mine, foe })}</p>
+        ) : null}
         <div className="mt-4 grid gap-2">
-          {won ? (
-            <Button onClick={toPath}>{tt("campaign.run.toPath")}</Button>
-          ) : (
+          {finished && !won ? (
             <Button onClick={() => startCampaignRun(run.era, useGameStore.getState().net?.name ?? "")}>
               {tt("campaign.run.new")}
             </Button>
+          ) : (
+            <Button onClick={toPath}>{tt("campaign.run.toPath")}</Button>
           )}
           <Button variant="secondary" onClick={leaveNet}>
             {tt("error.menu")}

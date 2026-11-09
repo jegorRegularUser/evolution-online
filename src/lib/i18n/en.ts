@@ -914,6 +914,9 @@ export const en: Record<keyof RuDict, string> = {
   "leave.bodySolo":
     "It is just you and bots at this table. Leaving will close the whole table: the game ends and cannot be resumed.",
   "leave.confirmSolo": "Leave and close the table",
+  "leave.bodyCampaign":
+    "Leave to the menu? The run's match is saved: continue from the home page or the Campaign page. There is no separate resign — resigning loses the whole run.",
+  "leave.confirmCampaign": "Leave the match",
   "leave.bodyNoResume":
     "This browser cannot preserve a return link. If you leave now, you won't be able to return to this seat.",
 
@@ -1495,6 +1498,10 @@ export const en: Record<keyof RuDict, string> = {
   "campaign.run.lostText": "The herd didn't make it to the end of the path — but the diary remains, and a new run starts right away.",
   "campaign.run.toPath": "To the path",
   "campaign.run.hud.boss": "Boss",
+  "campaign.run.stashEmpty": "The stash is empty — rewards accumulate until the end of the run.",
+  "campaign.run.finalScore": "Game score: you {you} — rival {foe}.",
+  "campaign.run.nodeWon.title": "Node cleared!",
+  "campaign.run.nodeWon.text": "The rival is beaten. The path waits on the Campaign page — with a reward, if one is due.",
   "campaign.node.reward.title": "Path reward",
   "campaign.node.reward.diary": "The path marks persistence. Choose what strengthens your herd.",
   "campaign.node.cambrian1.title": "The Young Sea",

@@ -27,6 +27,12 @@ export interface RunBattle {
   /** Имя соперника (ключ словаря): учёный-бот или изверг. */
   nameKey: TKey;
   difficulty: Difficulty;
+  /**
+   * Размер колоды свойств: забег рассчитан на посиделку, поэтому колода
+   * короче полной (база 84, «Растения» 120) — бой на ~5-6 лет вместо ~10 (симуляция калибровки).
+   * Босс чуть длиннее. Движок поднимает до минимума, если модулю нужно больше.
+   */
+  deckSize?: number;
   modules?: Partial<Record<ModuleId, boolean>>;
   mutators?: Partial<Record<MutatorId, boolean>>;
   wildWorld?: boolean;
@@ -147,6 +153,7 @@ function eraPath(era: CampaignEraId): { nodes: Record<string, RunNode>; first: s
           diaryKey: "campaign.node.cambrian1.diary",
           battle: {
             nameKey: "campaign.node.cambrian1.opp",
+            deckSize: 36,
             difficulty: "easy",
           },
         },
@@ -158,6 +165,7 @@ function eraPath(era: CampaignEraId): { nodes: Record<string, RunNode>; first: s
           diaryKey: "campaign.node.cambrian3.diary",
           battle: {
             nameKey: "campaign.node.cambrian3.opp",
+            deckSize: 36,
             difficulty: "easy",
             mutators: { scavengers: true },
           },
@@ -170,6 +178,7 @@ function eraPath(era: CampaignEraId): { nodes: Record<string, RunNode>; first: s
           diaryKey: "campaign.m.cambrianBoss.diary",
           battle: {
             nameKey: "campaign.boss.trilobite",
+            deckSize: 44,
             difficulty: "normal",
             scenario: { doubleHunt: true },
           },
@@ -184,6 +193,7 @@ function eraPath(era: CampaignEraId): { nodes: Record<string, RunNode>; first: s
           diaryKey: "campaign.node.devon1.diary",
           battle: {
             nameKey: "campaign.node.devon1.opp",
+            deckSize: 44,
             difficulty: "easy",
             modules: { plants: true },
           },
@@ -196,6 +206,7 @@ function eraPath(era: CampaignEraId): { nodes: Record<string, RunNode>; first: s
           diaryKey: "campaign.node.devon3.diary",
           battle: {
             nameKey: "campaign.node.devon3.opp",
+            deckSize: 44,
             difficulty: "normal",
             modules: { plants: true },
             mutators: { rapidEvolution: true },
@@ -209,6 +220,7 @@ function eraPath(era: CampaignEraId): { nodes: Record<string, RunNode>; first: s
           diaryKey: "campaign.m.devonBoss.diary",
           battle: {
             nameKey: "campaign.boss.bonecrusher",
+            deckSize: 52,
             difficulty: "normal",
             modules: { plants: true },
             scenario: { bossFeedsExtra: true },
@@ -224,6 +236,7 @@ function eraPath(era: CampaignEraId): { nodes: Record<string, RunNode>; first: s
           diaryKey: "campaign.node.glacier1.diary",
           battle: {
             nameKey: "campaign.node.glacier1.opp",
+            deckSize: 36,
             difficulty: "normal",
             wildWorld: true,
           },
@@ -236,6 +249,7 @@ function eraPath(era: CampaignEraId): { nodes: Record<string, RunNode>; first: s
           diaryKey: "campaign.node.glacier3.diary",
           battle: {
             nameKey: "campaign.node.glacier3.opp",
+            deckSize: 36,
             difficulty: "hard",
             wildWorld: true,
             mutators: { scavengers: true },
@@ -249,6 +263,7 @@ function eraPath(era: CampaignEraId): { nodes: Record<string, RunNode>; first: s
           diaryKey: "campaign.m.glacierBoss.diary",
           battle: {
             nameKey: "campaign.boss.atroxabilis",
+            deckSize: 44,
             difficulty: "hard",
             wildWorld: true,
             scenario: { doubleHunt: true },
