@@ -92,7 +92,7 @@ describe("module compatibility gates", () => {
     });
     // Сценарий сохранён в settings комнаты (P0-фикс ревью: раньше терялся).
     const room = (await _internals.readRoom(sql, host.code))!;
-    assert.deepEqual(room.settings.scenario, { seat: 1, bossFeedsExtra: true });
+    assert.deepEqual(room.settings!.scenario, { seat: 1, bossFeedsExtra: true });
     await s.start(host.code, host.token);
     assert.equal((await s.rejoin(host.code, host.token)).room.status, "playing");
     // Каноническое состояние партии несёт сценарий — движок применит правило

@@ -17,7 +17,6 @@ import {
   legalDevActions,
   legalFeedActions,
 } from "../../game/engine.ts";
-import { chooseAIAction } from "../../game/ai.ts";
 import {
   CHANCES,
   categorizePlayerMessage,
@@ -37,7 +36,6 @@ import type {
   GameEvent,
   GameState,
   ModuleId,
-  Player,
 } from "../../game/types.ts";
 import type {
   ChatMessage,
@@ -854,59 +852,11 @@ async function janitor(sql: SqlLike): Promise<void> {
 }
 
 // ── автошаги: боты и автоматические фазы ───────────────────────────────────
-
-/**
- * Шаг за игрока, у которого не осталось действий: «закончить ход» в его
- * текущем смысле. В развитие это пас, в защите — отказ, в питании — именно
- * завершение ХОДА (feedEndTurn), а не пас до конца фазы: игрок не теряет
- * следующий ход раунда, если к нему снова появятся действия (то же, что
- * кнопка «Закончить ход» в доке). feedSkip в «Растениях» бывает и запрещён.
- */
-export function endTurnStepFor(state: GameState, _actorId: number): GameAction {
-  if (state.phase === "development") return { type: "devPass" };
-  if (state.pendingAttack) {
-    if (state.pendingAttack.choosingPlantDefense) return legalDefenseActions(state, state.pendingAttack.waitingFor)[0]!;
-    return { type: "chooseDefense", kind: "none" };
-  }
-  return { type: "feedEndTurn" };
-}
-
-/**
- * Шаг за сдавшегося: тот же набор, но в питании — пас до конца фазы (feedSkip):
- * сдавшийся не должен возвращаться в круг, даже если еда ещё осталась.
- */
-function resignedStepFor(state: GameState): GameAction {
-  if (state.phase === "development") return { type: "devPass" };
-  if (state.pendingAttack) {
-    if (state.pendingAttack.choosingPlantDefense) return legalDefenseActions(state, state.pendingAttack.waitingFor)[0]!;
-    return { type: "chooseDefense", kind: "none" };
-  }
-  return { type: "feedSkip" };
-}
-
-/**
- * M10: у ходящего человека не осталось осмысленных действий — доступны только
- * завершение хода/пас, а в защите единственный вариант «не защищаться».
- * Боты и сдавшиеся не в счёт: у них свои автошаги. Пока есть хоть одно
- * действие (карта, еда, охота, защита) — таймера нет (решение владельца Q2).
- */
-export function noChoicesLeft(state: GameState, actor: Player): boolean {
-  if (actor.isAI || actor.resigned) return false;
-  if (state.pendingAttack) {
-    return legalDefenseActions(state, actor.id).every(
-      (a) => a.type === "chooseDefense" && a.kind === "none",
-    );
-  }
-  if (state.phase === "development") {
-    return legalDevActions(state, actor.id).every((a) => a.type === "devPass");
-  }
-  if (state.phase === "feeding") {
-    return legalFeedActions(state, actor.id).every(
-      (a) => a.type === "feedEndTurn" || a.type === "feedSkip",
-    );
-  }
-  return false;
-}
+//
+// endTurnStepFor / noChoicesLeft / nextAutoStep переехали в чистый модуль
+// src/game/auto-step.ts: тот же автопилот нужен локальному хосту кампании,
+// а чистым функциям место не в сетевом серверном модуле. Здесь —
+// реэкспорт для совместимости (server.test.ts и внешний код).
 
 /**
  * Дедлайн текущего хода человека (epoch ms): idleTurnMs для хода без
@@ -949,88 +899,27 @@ export function turnTimeoutMs(settings: RoomSettings | null | undefined, idle: b
   return raw;
 }
 
-/** Следующий шаг, который сервер делает сам; null — ждём ход человека. */
-export function nextAutoStep(state: GameState): GameAction | null {
-  if (state.phase === "foodBank") {
-    return state.foodRoll ? { type: "beginFeeding" } : { type: "rollFoodBank" };
-  }
-  if (state.phase === "extinction") return { type: "continueExtinction" };
-  if (state.phase === "growth") return { type: "continueGrowth" };
-  const actor = currentActor(state);
-  if (!actor) return null;
-  // Сдавшийся не ходит: место и имя остаются, но сервер сам пасует и
-  // пропускает питание за него — животные гибнут от голода в вымирание.
-  if (actor.resigned && !actor.isAI) return resignedStepFor(state);
-  // «Трава и грибы»: раунд безумца проводит сосед справа — логика ботов.
-  if (!actor.isAI && state.madTurn !== actor.id) return null;
-  const pick = chooseAIAction(state);
-  if (pick) return pick;
-  // Страховка от зависания: у бота всегда есть пас/скип/сдаться.
-  return state.phase === "development" ? { type: "devPass" } : resignedStepFor(state);
-}
+// Реэкспорт чистого автопилота: следующая самостоятельная шага сервера
+// (боты/автофазы). Тело живёт в src/game/auto-step.ts — там же его берёт
+// локальный хост кампании.
+import { endTurnStepFor, noChoicesLeft, nextAutoStep } from "../../game/auto-step.ts";
+export { endTurnStepFor, noChoicesLeft, nextAutoStep };
 
 // ── пауза на модальные показы клиента ────────────────────────────────────────
+//
+// Длительности карточек и расчёт пауз переехали в чистый модуль
+// src/lib/net/show-pacing.ts: те же паузы держит локальный хост кампании.
+// spotlightMsOf реэкспортируется для совместимости (server.test.ts).
 
-/**
- * Длительности модальных карточек клиента (spotlight.tsx, обычная скорость).
- * После «драматических» шагов — бросок кубика базы, шаг, завершивший фазу с
- * событиями (вымирание, убийство) — сервер держит паузу, пока клиент
- * проигрывает карточки. Без паузы следующее состояние накрывало модалку, и
- * владелец видел «обрыв после последнего хода фазы»: карточка не показывалась
- * или срезалась на середине, а следующий этап начинался резко. Значения —
- * зеркало buildItems в spotlight.tsx: меняются там — правятся и здесь.
- */
-const SPOTLIGHT_MS: Partial<Record<GameEvent["kind"], number>> = {
-  diceRoll: 2900,
-  preyKilled: 3000,
-  plantAttack: 2500,
-  paralyzed: 2300,
-  // ── Волна 1/2: «Дикий мир» (зеркало карточек spotlight.tsx) ──
-  wildEventPlanned: 2400,
-  wildEventStarted: 2400,
-  wildMeteorite: 2800,
-};
-/** Защита добычи: бросок «Быстрого» — самый длинный показ с вердиктом. */
-const SPOTLIGHT_DEFENSE_MS: Record<"running" | "mimicry" | "tailLoss" | "none", number> = {
-  running: 3400,
-  tailLoss: 2800,
-  mimicry: 2400,
-  none: 0,
-};
-/** Сводка «Вымирание» — одна карточка на всех погибших в шаге. */
-const SPOTLIGHT_EXTINCTION_MS = 2700;
-/** Хвост паузы: доставка кадра поллингом (до 0.7 с) + анимация закрытия (0.28 с). */
-const SPOTLIGHT_TAIL_MS = 900;
-
-/** Сколько клиент будет показывать модальные карточки событий этого шага (мс). */
-export function spotlightMsOf(events: GameEvent[]): number {
-  let ms = 0;
-  let deaths = 0;
-  for (const e of events) {
-    if (e.kind === "defenseUsed") ms += SPOTLIGHT_DEFENSE_MS[e.defense];
-    else if (e.kind === "animalDied") deaths += 1;
-    else ms += SPOTLIGHT_MS[e.kind] ?? 0;
-  }
-  if (deaths) ms += SPOTLIGHT_EXTINCTION_MS;
-  return ms;
-}
-
-/**
- * Пауза после шага, завершившего фазу: покрывает показ карточек его событий.
- * Пустые переходы (без модальных событий) не растягиваем — паузы нет вовсе.
- */
-function phaseGapMs(before: GameState, after: GameState): number {
-  if (before.phase === after.phase) return 0;
-  const show = spotlightMsOf(after.lastEvents);
-  return show > 0 ? show + SPOTLIGHT_TAIL_MS : 0;
-}
+import { SHOW_TAIL_MS, phaseGapMs, spotlightMsOf } from "./show-pacing.ts";
+export { spotlightMsOf } from "./show-pacing.ts";
 
 function stepDelay(before: GameState, step: GameAction, after: GameState): number {
   const j = () => Math.round((Math.random() * 2 - 1) * PACE.jitterMs);
   if (step.type === "rollFoodBank") {
     // Бросок базы — сам по себе показ: кубик крутится и ложится значением,
     // пауза должна покрывать карточку целиком, иначе начало питания срезает её.
-    return Math.max(PACE.diceMs, spotlightMsOf(after.lastEvents) + SPOTLIGHT_TAIL_MS) + j();
+    return Math.max(PACE.diceMs, spotlightMsOf(after.lastEvents) + SHOW_TAIL_MS) + j();
   }
   if (step.type === "continueExtinction") return PACE.extinctMs + j();
   if (step.type === "continueGrowth") return PACE.extinctMs + j();
