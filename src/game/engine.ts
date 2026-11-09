@@ -18,6 +18,7 @@ import type {
   FloraKind,
   GameAction,
   GameEvent,
+  GameScenario,
   GameState,
   LogEntry,
   MarkKind,
@@ -187,8 +188,8 @@ export function createGame(
    * раньше, но прямо здесь защита тоже стоит.
    */
   expansion?: { rules?: TableRules; mutators?: MutatorId[]; wildWorld?: boolean },
-  /** Волна 4а: сценарий изверга (сид + ломающее правило). */
-  scenario?: { seat: number; doubleHunt?: boolean; bossFeedsExtra?: boolean },
+  /** Волна 4а: сценарий изверга (сид + ломающее правило) + награды забега. */
+  scenario?: GameScenario,
 ): GameState {
   const rules = expansion?.rules;
   const mutators = expansion?.mutators?.length ? [...expansion.mutators] : undefined;
@@ -240,7 +241,14 @@ export function createGame(
     turnUse: freshTurnUse(),
     scenario:
       scenario && scenario.seat >= 0 && scenario.seat < playerCount
-        ? { seat: scenario.seat, doubleHunt: scenario.doubleHunt, bossFeedsExtra: scenario.bossFeedsExtra }
+        ? {
+            seat: scenario.seat,
+            doubleHunt: scenario.doubleHunt,
+            bossFeedsExtra: scenario.bossFeedsExtra,
+            // Награды забега — только когда есть: сетевые сценарии сохраняют
+            // прежнюю форму (tests deepEqual по полям).
+            ...(scenario.humanBoons ? { humanBoons: scenario.humanBoons } : {}),
+          }
         : undefined,
   };
   state.deck = shuffled(state, buildScaledDeck(state, deckSize));
@@ -288,6 +296,25 @@ export function createGame(
   }
   if (state.rules?.startHand !== undefined) {
     log(state, `Стартовая рука: по ${state.rules.startHand} карт.`, "log.ruleHand", { n: state.rules.startHand });
+  }
+  if (!state.modules.randomMutations && scenario?.humanBoons) {
+    // Награды забега кампании: рука места человека (сид 0) усилена лишними
+    // картами и гарантированным свойством из колоды. В «Случайных мутациях»
+    // рука личная и слепая — бонусы там не имеют смысла, не применяем.
+    const me = state.players[0]!;
+    const bonus = Math.max(0, Math.min(3, Math.floor(scenario.humanBoons.handBonus ?? 0)));
+    for (let i = 0; i < bonus; i++) {
+      const c = state.deck.pop();
+      if (c) me.hand.push(c);
+    }
+    const traits = scenario.humanBoons.startTraits ?? [];
+    for (const trait of traits) {
+      const idx = state.deck.findIndex((c) => c.faces.includes(trait));
+      if (idx >= 0) me.hand.push(state.deck.splice(idx, 1)[0]!);
+    }
+    if (bonus > 0 || traits.length > 0) {
+      log(state, `Награды пути усилят стартовую руку.`, "log.campaignBoons", undefined, "good");
+    }
   }
   if (state.rules?.pack) {
     // «Стая»: каждый начинает с двумя животными (карты сверху колоды ложатся видами).
