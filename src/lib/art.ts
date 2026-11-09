@@ -106,19 +106,18 @@ export const MUTATION_ART = {
 
 /**
  * Портреты учёных (бесплатные аватары мест). Ключи = SCIENTIST_AVATARS в
- * lib/cosmetics.ts. Сейчас на месте SVG-заглушки с инициалами; лист
- * сгенерированных портретов режется в public/img/avatar/*.jpg, после чего
- * расширения меняются здесь — код UI не трогается.
+ * lib/cosmetics.ts. Арты нарезаны из генерированного листа
+ * (2×4, подписи срезаны) в public/img/avatar/*.jpg.
  */
 export const AVATAR_ART: Record<string, string> = {
-  "sci.darwin": "/img/avatar/darwin.svg",
-  "sci.wallace": "/img/avatar/wallace.svg",
-  "sci.mendel": "/img/avatar/mendel.svg",
-  "sci.linnaeus": "/img/avatar/linnaeus.svg",
-  "sci.cuvier": "/img/avatar/cuvier.svg",
-  "sci.lamarck": "/img/avatar/lamarck.svg",
-  "sci.haeckel": "/img/avatar/haeckel.svg",
-  "sci.baer": "/img/avatar/baer.svg",
+  "sci.darwin": "/img/avatar/darwin.jpg",
+  "sci.wallace": "/img/avatar/wallace.jpg",
+  "sci.mendel": "/img/avatar/mendel.jpg",
+  "sci.linnaeus": "/img/avatar/linnaeus.jpg",
+  "sci.cuvier": "/img/avatar/cuvier.jpg",
+  "sci.lamarck": "/img/avatar/lamarck.jpg",
+  "sci.haeckel": "/img/avatar/haeckel.jpg",
+  "sci.baer": "/img/avatar/baer.jpg",
 };
 
 /** Публичный путь арта аватара места: учёный — из реестра, существо — каталог. */
