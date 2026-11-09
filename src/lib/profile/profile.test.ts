@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { createProfileService, ProfileError } from "./service.server.ts";
+import { defaultItemForSlot } from "../cosmetics.ts";
 import type { CosmeticSlot, SqlLike } from "./shared.ts";
 
 /**
@@ -338,6 +339,22 @@ describe("магазин: покупка за ископаемые", () => {
     await s.grantCoins("shop-4", 500, "test");
     await rejectsCode(() => s.buyItem("shop-4", "felt.classic"), "free-item");
     await rejectsCode(() => s.buyItem("shop-4", "cardback.mystery"), "bad-item");
+  });
+
+  it("волна косметики-2: рубашки и существа покупаются и экипируются", async () => {
+    const s = svc();
+    await s.grantCoins("shop-c2", 1000, "test");
+    await s.buyItem("shop-c2", "cardback.malachite");
+    await s.buyItem("shop-c2", "avatar.carn-large");
+    await s.equipItem("shop-c2", "cardback", "cardback.malachite");
+    await s.equipItem("shop-c2", "avatar", "avatar.carn-large");
+    const p = await s.getProfile("shop-c2");
+    assert.ok(p.equipped.some((e) => e.slot === "cardback" && e.itemId === "cardback.malachite"));
+    assert.ok(p.equipped.some((e) => e.slot === "avatar" && e.itemId === "avatar.carn-large"));
+    // Дефолт рубашки — бесплатная классика (единственная price=0 слота).
+    assert.equal(defaultItemForSlot("cardback")?.id, "cardback.classic");
+    // Классика cardback и встроенные учёные не продаются: они бесплатны.
+    await rejectsCode(() => s.buyItem("shop-c2", "cardback.classic"), "free-item");
   });
 });
 

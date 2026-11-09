@@ -18,6 +18,7 @@ import type {
   FloraKind,
   GameAction,
   GameEvent,
+  GameScenario,
   GameState,
   LogEntry,
   MarkKind,
@@ -27,6 +28,7 @@ import type {
   Plant,
   PlantKind,
   Player,
+  PeekTarget,
   RegenPending,
   ScoreBreakdown,
   TableRules,
@@ -67,6 +69,7 @@ import {
   nextPlayerId,
   player,
   plantHasTrait,
+  prevPlayerId,
   speciesNeed,
 } from "./queries.ts";
 
@@ -187,8 +190,8 @@ export function createGame(
    * раньше, но прямо здесь защита тоже стоит.
    */
   expansion?: { rules?: TableRules; mutators?: MutatorId[]; wildWorld?: boolean },
-  /** Волна 4а: сценарий изверга (сид + ломающее правило). */
-  scenario?: { seat: number; doubleHunt?: boolean; bossFeedsExtra?: boolean },
+  /** Волна 4а: сценарий изверга (сид + ломающее правило) + награды забега. */
+  scenario?: GameScenario,
 ): GameState {
   const rules = expansion?.rules;
   const mutators = expansion?.mutators?.length ? [...expansion.mutators] : undefined;
@@ -240,7 +243,14 @@ export function createGame(
     turnUse: freshTurnUse(),
     scenario:
       scenario && scenario.seat >= 0 && scenario.seat < playerCount
-        ? { seat: scenario.seat, doubleHunt: scenario.doubleHunt, bossFeedsExtra: scenario.bossFeedsExtra }
+        ? {
+            seat: scenario.seat,
+            doubleHunt: scenario.doubleHunt,
+            bossFeedsExtra: scenario.bossFeedsExtra,
+            // Награды забега — только когда есть: сетевые сценарии сохраняют
+            // прежнюю форму (tests deepEqual по полям).
+            ...(scenario.humanBoons ? { humanBoons: scenario.humanBoons } : {}),
+          }
         : undefined,
   };
   state.deck = shuffled(state, buildScaledDeck(state, deckSize));
@@ -288,6 +298,31 @@ export function createGame(
   }
   if (state.rules?.startHand !== undefined) {
     log(state, `Стартовая рука: по ${state.rules.startHand} карт.`, "log.ruleHand", { n: state.rules.startHand });
+  }
+  if (!state.modules.randomMutations && scenario?.humanBoons) {
+    // Награды забега кампании: рука места человека (сид 0) усилена лишними
+    // картами и гарантированным свойством из колоды. В «Случайных мутациях»
+    // рука личная и слепая — бонусы там не имеют смысла, не применяем.
+    const me = state.players[0]!;
+    const bonus = Math.max(0, Math.min(3, Math.floor(scenario.humanBoons.handBonus ?? 0)));
+    for (let i = 0; i < bonus; i++) {
+      const c = state.deck.pop();
+      if (c) me.hand.push(c);
+    }
+    const traits = scenario.humanBoons.startTraits ?? [];
+    for (const trait of traits) {
+      let idx = state.deck.findIndex((c) => c.faces.includes(trait));
+      if (idx < 0) {
+        // В укороченной колоде масштабирования свойства может не оказаться:
+        // награда обязана сработать — достаём карту с этим свойством в колоду.
+        state.deck.push({ id: nid(state, "c"), faces: [trait] });
+        idx = state.deck.length - 1;
+      }
+      me.hand.push(state.deck.splice(idx, 1)[0]!);
+    }
+    if (bonus > 0 || traits.length > 0) {
+      log(state, `Награды пути усилят стартовую руку.`, "log.campaignBoons", undefined, "good");
+    }
   }
   if (state.rules?.pack) {
     // «Стая»: каждый начинает с двумя животными (карты сверху колоды ложатся видами).
@@ -972,10 +1007,31 @@ function triggerScavenger(state: GameState, hunterOwnerId: number, excludeAnimal
 export function legalFeedActions(state: GameState, playerId: number): GameAction[] {
   if (state.phase !== "feeding") return [];
   if (state.pendingAttack) return [];
-  if (state.currentPlayerId !== playerId) return [];
-  if (state.pendingMigration) return [...legalRemoraActions(state), { type: "feedFinishMigration" }];
-  const p = player(state, playerId);
+  // Раунд безумца: пока владелец не снял метку — действует только он; после
+  // передачи контроля — только контролёр (полный набор действий раунда над
+  // животными владельца, рука последнего ему недоступна).
+  let actorId = playerId;
+  if (state.madPick) {
+    if (state.currentPlayerId !== playerId) return [];
+    return state.players[playerId]!
+      .animals.filter((a) => hasMark(a, "madness"))
+      .map((a): GameAction => ({ type: "chooseMadMark", animalId: a.id }));
+  }
+  if (state.madController !== undefined) {
+    // Непрошедший подгляд прозрения смотрит сам владелец — даже когда раундом
+    // управляет сосед (фишку брало животное владельца).
+    if (state.peek && !state.peek.target && state.peek.viewerId === playerId) {
+      return peekChoices(state);
+    }
+    if (state.madController !== playerId) return [];
+    actorId = state.madTurn!;
+  } else if (state.currentPlayerId !== playerId) {
+    return [];
+  }
+  const p = player(state, actorId);
   const actions: GameAction[] = [];
+
+  if (state.pendingMigration) return [...legalRemoraActions(state), { type: "feedFinishMigration" }];
 
   // «Трава и грибы»: ход бешенства — только обязательная атака бешеного
   // животного. Завершение остаётся страховкой лишь при отсутствии жертвы.
@@ -992,7 +1048,7 @@ export function legalFeedActions(state: GameState, playerId: number): GameAction
     return actions;
   }
 
-  actions.push(...legalRecombinations(state, playerId));
+  actions.push(...legalRecombinations(state, actorId));
   const used = state.turnUse;
   const cont = state.modules.continents;
   const plants = state.modules.plants ? (state.plants ?? []) : [];
@@ -1168,10 +1224,18 @@ export function legalFeedActions(state: GameState, playerId: number): GameAction
     }
   }
 
+  // Гриб прозрения: нераскрытый подгляд — свободное действие смотрящего
+  // (владельца животного) до конца его раунда; можно и не использовать.
+  // Гейт по playerId, а не actorId: в подконтрольном раунде выбор цели
+  // принадлежит владельцу, контролёру его решать нельзя.
+  if (state.peek && !state.peek.target && state.peek.viewerId === playerId) {
+    actions.push(...peekChoices(state));
+  }
+
   actions.push({ type: "feedEndTurn" });
   // «Растения»: пасовать нельзя, пока хоть одно животное способно получить
   // фишку еды или убежища (официальное правило дополнения).
-  if (!state.modules.plants || !canStillFeedOrShelter(state, playerId)) {
+  if (!state.modules.plants || !canStillFeedOrShelter(state, actorId)) {
     actions.push({ type: "feedSkip" });
   }
   return actions;
@@ -2101,6 +2165,12 @@ export function applyAction(state: GameState, action: GameAction): GameState {
       break;
     case "feedFinishMigration":
       finishMigration(next);
+      break;
+    case "chooseMadMark":
+      chooseMadMark(next, action.animalId);
+      break;
+    case "choosePeek":
+      choosePeek(next, action.target);
       break;
     case "reorderAnimal":
       if (action.toZoneId) moveAnimalToZoneHuman(next, action.animalId, action.toZoneId);
@@ -3164,7 +3234,11 @@ function takeFromBank(state: GameState, zone: TerritoryId | undefined, n = 1) {
  */
 function feedTurn(state: GameState, startId: number) {
   // Метки хода («Трава и грибы») относятся к одному раунду — сбрасываем.
+  // Подгляд прозрения живёт до конца раунда смотрящего — тоже сбрасываем.
   state.madTurn = undefined;
+  state.madController = undefined;
+  state.madPick = undefined;
+  state.peek = null;
   state.rageTurn = null;
   let id = startId;
   for (let i = 0; i < state.players.length; i++) {
@@ -3184,8 +3258,9 @@ function feedTurn(state: GameState, startId: number) {
 /**
  * «Трава и грибы»: начало раунда игрока. «Бешенство» — метка снимается и
  * раунд состоит из обязательной атаки этим животным; «Безумие» — метка
- * снимается, раунд вместо игрока проводит сосед справа (в онлайн-версии —
- * логика ботов, руку соперник не видит).
+ * снимается (при 2+ метках владелец выбирает животное сам), раунд вместо
+ * игрока проводит сосед справа — контролёр распоряжается животными, не видя
+ * руки безумца (правило «Безумной шляпки»).
  */
 function startMarkTurn(state: GameState, id: number) {
   if (!state.modules.fungi) return;
@@ -3197,12 +3272,77 @@ function startMarkTurn(state: GameState, id: number) {
     log(state, `Бешенство: животное игрока ${p.name} обязано атаковать в этот раунд!`, "log.rage", { name: p.name }, "hunt");
     return;
   }
-  const crazy = p.animals.find((a) => hasMark(a, "madness"));
-  if (crazy) {
-    returnMarksToPoolSingle(state, crazy, "madness");
+  const crazyList = p.animals.filter((a) => hasMark(a, "madness"));
+  if (crazyList.length === 1) {
+    returnMarksToPoolSingle(state, crazyList[0]!, "madness");
     state.madTurn = id;
+    state.madController = prevPlayerId(state, id);
     log(state, `Безумие: раунд игрока ${p.name} проводит сосед справа.`, "log.madness", { name: p.name }, "bad");
+  } else if (crazyList.length > 1) {
+    // «Взаимодействие» размножило метку: владелец сам выбирает, с какого
+    // животного её снять (chooseMadMark), затем раунд уходит соседу.
+    state.madTurn = id;
+    state.madPick = true;
+    log(state, `Безумие: игрок ${p.name} снимает метку с одного своего животного, затем раунд проводит сосед справа.`, "log.madnessPick", { name: p.name }, "bad");
   }
+}
+
+/** Выбор владельца при 2+ метках: снимаем «Безумие», раунд передаём соседу справа. */
+function chooseMadMark(state: GameState, animalId: string) {
+  if (!state.madPick) return;
+  const p = player(state, state.currentPlayerId);
+  const a = p.animals.find((x) => x.id === animalId);
+  if (!a || !hasMark(a, "madness")) return;
+  returnMarksToPoolSingle(state, a, "madness");
+  state.madPick = undefined;
+  state.madController = prevPlayerId(state, p.id);
+  log(state, `Безумие: метка снята — раунд игрока ${p.name} проводит сосед справа.`, "log.madness", { name: p.name }, "bad");
+}
+
+/** «Гриб прозрения»: доступные цели разового подгляда. */
+function peekChoices(state: GameState): GameAction[] {
+  const viewerId = state.peek?.viewerId;
+  if (viewerId === undefined) return [];
+  const acts: GameAction[] = [];
+  for (const p of state.players) {
+    if (p.id === viewerId || !p.hand.length) continue;
+    acts.push({ type: "choosePeek", target: { kind: "hand", playerId: p.id } });
+  }
+  if (state.deck.length) acts.push({ type: "choosePeek", target: { kind: "deckTop", deck: "deck" } });
+  if (state.floraDeck?.length) acts.push({ type: "choosePeek", target: { kind: "deckTop", deck: "floraDeck" } });
+  // «Случайные мутации»: личные слепые колоды тоже колоды — верх смотреть можно.
+  if (state.modules.randomMutations) {
+    for (const p of state.players) {
+      if (p.blindDeck?.length) acts.push({ type: "choosePeek", target: { kind: "deckTop", deck: "blind", playerId: p.id } });
+    }
+  }
+  for (const a of allAnimals(state)) {
+    if (a.traits.length) acts.push({ type: "choosePeek", target: { kind: "animal", animalId: a.id } });
+  }
+  return acts;
+}
+
+/** Фиксация цели подгляда; содержание уходит в вид только смотрящего (views.ts). */
+function choosePeek(state: GameState, target: PeekTarget) {
+  const peek = state.peek;
+  if (!peek || peek.target) return;
+  const viewer = player(state, peek.viewerId);
+  state.peek = { ...peek, target };
+  const params: Record<string, string | number> = { name: viewer.name };
+  let key: TKey = "log.insightPeekDeck";
+  if (target.kind === "hand") {
+    key = "log.insightPeekHand";
+    params.target = player(state, target.playerId).name;
+  } else if (target.kind === "deckTop") {
+    if (target.deck === "floraDeck") key = "log.insightPeekFlora";
+    else if (target.deck === "blind") {
+      key = "log.insightPeekBlind";
+      params.target = player(state, target.playerId ?? 0).name;
+    }
+  } else {
+    key = "log.insightPeekAnimal";
+  }
+  log(state, `Гриб прозрения: ${viewer.name} взглянул в скрытую область стола.`, key, params, "good");
 }
 
 /** Снять одну метку, вернув её на стол. */
@@ -3444,14 +3584,19 @@ function applyFloraAbility(state: GameState, animal: Animal, flora: FloraCard) {
   const owner = ownerOf(state, animal.id);
   switch (flora.kind) {
     case "insight": {
-      // Гриб прозрения: владелец сбрасывает всю руку (подсмотр чужих карт в
-      // онлайн-версии сознательно упрощён).
+      // Гриб прозрения: владелец сбрасывает всю руку, затем может один раз
+      // посмотреть скрытую область (руку соперника / верх колоды / животное).
+      // Право живёт до конца его раунда и можно не использовать; в соло
+      // содержание подглядывает из локального состояния, в сети его кладёт
+      // в персональный вид только views.ts. Повторное «Взаимодействие» с той
+      // же карты заменяет смотрящего — подгляд достаётся напарнику.
       if (owner.hand.length) {
         const lost = owner.hand.length;
         owner.hand = [];
         ev(state, { kind: "handLost", playerId: owner.id });
         log(state, `Гриб прозрения: ${owner.name} сбрасывает всю руку (${lost} карт).`, "log.insight", { name: owner.name, lost }, "bad");
       }
+      state.peek = { viewerId: owner.id };
       return;
     }
     case "soaring": {

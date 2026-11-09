@@ -28,6 +28,7 @@ import {
   netSetBots,
   netSetCapacity,
   netSetColor,
+  netSetCosmetics,
   netSetName,
   netSetPassword,
   netSetRoomPrivacy,
@@ -666,6 +667,21 @@ export class NetSession {
     );
     this.refresh();
     return r.color;
+  }
+
+  /**
+   * Косметика своего места (аватар/рубашка): частичный патч, null — вернуть
+   * дефолт. Сервер проверяет владение платными предметами по профилю.
+   */
+  async setSeatCosmetics(
+    patch: { avatar?: string | null; cardback?: string | null },
+  ): Promise<{ avatar: string; cardback: string } | null> {
+    const r = await this.call(
+      netSetCosmetics({ data: { code: this.code, token: this.token, ...patch } }),
+    );
+    if (!r.ok) return null;
+    this.refresh();
+    return { avatar: r.avatar, cardback: r.cardback };
   }
 
   async transferHost(seat: number): Promise<void> {

@@ -14,7 +14,6 @@ import {
   type MissionProgress,
   type TutorialMissionId,
 } from "@/game/tutorial";
-import { CAMPAIGN_MISSIONS } from "@/game/campaign";
 import type { TKey } from "@/lib/i18n";
 
 /**
@@ -124,12 +123,13 @@ export function TutorialMissionBlock({ name, busy }: { name: string; busy: boole
 const HUD_HIDDEN_KEY = "evo-tutorial-hud-hidden";
 
 /**
- * Живой список целей поверх миссии (учебной или кампании).
+ * Живой список целей поверх учебной миссии.
  *
  * Блок живёт В ПОТОКЕ стола (первым ребёнком <main>): раньше он висел
  * fixed в левом верхнем углу и накрывал плашку соперника с медальонами
  * его животных. В потоке ничего не перекрывается ни на десктопе, ни на
- * телефоне.
+ * телефоне. У кампании свой HUD (campaign-hud.tsx) — рогалик-забег
+ * считается по победам, а не по целям-предикатам.
  *
  * Крестик — только свернуть блок (пилюля «Обучение» разворачивает обратно;
  * сверток помнится до конца партии, не дольше). Выход из миссии — отдельная
@@ -148,12 +148,8 @@ export function TutorialHud() {
   const net = useGameStore((s) => s.net);
   const missionId = useGameStore((s) => s.tutorialMission);
   const doneMissions = useGameStore((s) => s.doneMissions);
-  const campaignMissionId = useGameStore((s) => s.campaignMission);
-  const campaignHard = useGameStore((s) => s.campaignHard);
   const clearTutorial = useGameStore((s) => s.clearTutorial);
   const completeTutorial = useGameStore((s) => s.completeTutorial);
-  const clearCampaign = useGameStore((s) => s.clearCampaign);
-  const completeCampaignMission = useGameStore((s) => s.completeCampaignMission);
   const progressRef = useRef<MissionProgress>(makeMissionProgress());
   const [, forceTick] = useState(0);
   const [completed, setCompleted] = useState(false);
@@ -178,7 +174,6 @@ export function TutorialHud() {
 
   // Валидация флага стора + возобновление после F5.
   useEffect(() => {
-    if (campaignMissionId) return;
     const rec = loadActiveMission();
     const code = net?.code ?? null;
     if (missionId) {
@@ -191,7 +186,7 @@ export function TutorialHud() {
     if (rec && rec.code && rec.code === code && !doneMissions.includes(rec.id)) {
       setAdoptedId((cur) => (cur === rec.id ? cur : rec.id));
     }
-  }, [missionId, campaignMissionId, net?.code, doneMissions]);
+  }, [missionId, net?.code, doneMissions]);
 
   // Запись активной миссии с кодом стола — точка возобновления после F5.
   // Пишет только валидированный запуск; подхваченная миссия код уже имеет.
@@ -206,23 +201,18 @@ export function TutorialHud() {
   // Смена миссии — чистый прогресс: иначе счётчики прошлой миссии (животные,
   // свойства) засчитывались бы в следующую (нашло ревью волны 4).
   const missionKeyRef = useRef<string>("");
-  const missionKey = activeId ?? adoptedId ?? campaignMissionId ?? "";
+  const missionKey = activeId ?? adoptedId ?? "";
   if (missionKeyRef.current !== missionKey) {
     missionKeyRef.current = missionKey;
     if (missionKey) progressRef.current = makeMissionProgress();
     completedRef.current = false;
   }
 
-  // Миссия приходит из одной из двух систем: обучение (волна 1.5) или
-  // кампания «Эры» (волна 4а). Форма целей одинаковая.
-  const isCampaign = Boolean(campaignMissionId);
   const mission: MissionDef | null = activeId
     ? TUTORIAL_MISSIONS[activeId]
-    : campaignMissionId
-      ? CAMPAIGN_MISSIONS[campaignMissionId]
-      : adoptedId
-        ? TUTORIAL_MISSIONS[adoptedId]
-        : null;
+    : adoptedId
+      ? TUTORIAL_MISSIONS[adoptedId]
+      : null;
   const effectiveId = activeId ?? adoptedId;
 
   // Прогресс: абсорбция кадра идемпотентна по eventSeq — эффект может
@@ -247,11 +237,7 @@ export function TutorialHud() {
     if (!mission.objectives.every((o) => o.done(progressRef.current))) return;
     completedRef.current = true;
     sfx.play("cheer");
-    if (isCampaign && campaignMissionId) {
-      completeCampaignMission(campaignMissionId, campaignHard);
-    } else if (effectiveId) {
-      completeTutorial(effectiveId);
-    }
+    if (effectiveId) completeTutorial(effectiveId);
     // Финал разворачивает блок, даже если игрок свернул его крестиком:
     // баннер «Миссия выполнена» обязан быть виден. Запись свертка чистим —
     // она не должна всплыть в следующей партии.
@@ -262,7 +248,7 @@ export function TutorialHud() {
     } catch {
       // приватный режим — чистить нечего
     }
-  }, [mission, completeTutorial, completeCampaignMission, isCampaign, campaignMissionId, campaignHard, effectiveId, state]);
+  }, [mission, completeTutorial, effectiveId, state]);
 
   // Ушли со стола (сдача, кик) — миссия больше не активна. «Прервать» из
   // HUD стол не покидает и чистит миссию своим обработчиком (abortMission).
@@ -274,16 +260,13 @@ export function TutorialHud() {
       wasInTableRef.current = true;
       return;
     }
-    if (wasInTableRef.current && (effectiveId || campaignMissionId)) {
-      if (isCampaign) clearCampaign();
-      else {
-        clearTutorial();
-        saveActiveMission(null);
-        setAdoptedId(null);
-      }
+    if (wasInTableRef.current && effectiveId) {
+      clearTutorial();
+      saveActiveMission(null);
+      setAdoptedId(null);
     }
     wasInTableRef.current = false;
-  }, [net, state, effectiveId, campaignMissionId, isCampaign, clearTutorial, clearCampaign]);
+  }, [net, state, effectiveId, clearTutorial]);
 
   // Свернутость привязана к коду стола: F5 в той же партии восстанавливает
   // её, новая партия (другой код) начинает с развернутым блоком.
@@ -321,14 +304,9 @@ export function TutorialHud() {
   };
 
   // Явный выход из миссии. НЕ выводит со стола: партия продолжается обычной,
-  // уходит только миссия (флаг + запись возобновления). Кампании отдельный
-  // флаг: leaveNet его раньше гасил, теперь «Прервать» делает это сам.
+  // уходит только миссия (флаг + запись возобновления).
   const abortMission = () => {
     sfx.play("click");
-    if (isCampaign) {
-      clearCampaign();
-      return;
-    }
     clearTutorial();
     saveActiveMission(null);
     setAdoptedId(null);

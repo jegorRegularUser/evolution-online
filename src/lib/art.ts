@@ -1,4 +1,5 @@
 import type { FloraKind, MarkKind, PlantKind, TraitId } from "@/game/types";
+import { cosmeticById } from "@/lib/cosmetics";
 
 /**
  * Реестр арт-ассетов (public/img, собираются scripts/build-art.mjs из assets/).
@@ -102,6 +103,28 @@ export const MUTATION_ART = {
   flip: "/img/mutation/flip.jpg",
   icon: "/img/mutation/icon.jpg",
 } as const;
+
+/**
+ * Портреты учёных (бесплатные аватары мест). Ключи = SCIENTIST_AVATARS в
+ * lib/cosmetics.ts. Арты нарезаны из генерированного листа
+ * (2×4, подписи срезаны) в public/img/avatar/*.jpg.
+ */
+export const AVATAR_ART: Record<string, string> = {
+  "sci.darwin": "/img/avatar/darwin.jpg",
+  "sci.wallace": "/img/avatar/wallace.jpg",
+  "sci.mendel": "/img/avatar/mendel.jpg",
+  "sci.linnaeus": "/img/avatar/linnaeus.jpg",
+  "sci.cuvier": "/img/avatar/cuvier.jpg",
+  "sci.lamarck": "/img/avatar/lamarck.jpg",
+  "sci.haeckel": "/img/avatar/haeckel.jpg",
+  "sci.baer": "/img/avatar/baer.jpg",
+};
+
+/** Публичный путь арта аватара места: учёный — из реестра, существо — каталог. */
+export function avatarArtOf(key: string): string | undefined {
+  if (AVATAR_ART[key]) return AVATAR_ART[key];
+  return cosmeticById(key)?.imageSrc;
+}
 
 /** Фоны и крупные декорации. */
 export const BG = {

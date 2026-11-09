@@ -43,6 +43,8 @@ before(async () => {
     // 0011: key/params у системных реплик чата — setCapacity пишет их наравне
     // с русским текстом, колонки должны существовать и в тестовой базе.
     "0011_chat_key_params.sql",
+    // 0015: avatar/cardback у мест — seatsInfo читает их в каждом кадре.
+    "0015_seat_cosmetics.sql",
   ]) {
     const ddl = readFileSync(
       fileURLToPath(new URL(`../../../migrations/${f}`, import.meta.url)),
@@ -92,7 +94,7 @@ describe("module compatibility gates", () => {
     });
     // Сценарий сохранён в settings комнаты (P0-фикс ревью: раньше терялся).
     const room = (await _internals.readRoom(sql, host.code))!;
-    assert.deepEqual(room.settings.scenario, { seat: 1, bossFeedsExtra: true });
+    assert.deepEqual(room.settings!.scenario, { seat: 1, bossFeedsExtra: true });
     await s.start(host.code, host.token);
     assert.equal((await s.rejoin(host.code, host.token)).room.status, "playing");
     // Каноническое состояние партии несёт сценарий — движок применит правило
@@ -2637,8 +2639,10 @@ describe("S10: same-site сторож net-функций", () => {
     // Сам ответ 403 на кросс-сайтовый POST проверяется вручную (curl).
     const src = readFileSync(fileURLToPath(new URL("./api.ts", import.meta.url)), "utf8");
     const fns = src.match(/createServerFn\(\{ method: "POST" \}\)/g) ?? [];
+    // sameSiteGuard обязан быть в списке middleware (один или вместе с
+    // authMiddleware у функций, проверяющих владение профилем).
     const guarded = src.match(
-      /createServerFn\(\{ method: "POST" \}\)\s*\r?\n\s*\.middleware\(\[sameSiteGuard\]\)/g,
+      /createServerFn\(\{ method: "POST" \}\)\s*\r?\n\s*\.middleware\(\[sameSiteGuard[^\]]*\]\)/g,
     );
     assert.ok(fns.length >= 20, `net-функций найдено: ${fns.length}`);
     assert.equal(
@@ -3075,6 +3079,121 @@ describe("таймер хода: настройка стола (T2) и шаг б
       }
     }
     assert.fail("бот не передал ход человеку за 20 тактов");
+  });
+
+  it("безумие/прозрение: контролёру — животные без руки безумца; подгляд — только смотрящему", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    const guest = await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    const room = (await _internals.readRoom(sql, host.code))!;
+    const st = structuredClone(room.state!);
+    st.phase = "feeding";
+    st.pendingAttack = null;
+    st.currentPlayerId = 1; // безумец — Боря (место 1)
+    st.madTurn = 1;
+    st.madController = 0; // раунд проводит Аня — сосед справа
+    st.madPick = undefined;
+    st.rageTurn = null;
+    st.peek = null;
+    st.turnTerritory = undefined;
+    st.foodBank = 4;
+    st.turnUse = {
+      carnivores: [],
+      pirates: [],
+      grazers: [],
+      foodTaken: false,
+      combatUsed: false,
+      migrated: false,
+      sheltered: false,
+      hibernated: [],
+    };
+    for (const p of st.players) p.passedFeed = false;
+    st.players[0]!.hand = [{ id: "host-card", faces: ["swimming"] }] as never;
+    st.players[1]!.hand = [
+      { id: "bot-card-1", faces: ["carnivore"] },
+      { id: "bot-card-2", faces: ["camouflage"] },
+    ] as never;
+    assert.equal(await _internals.casUpdate(sql, host.code, room.version, { state: st }), true);
+
+    // Кадр контролёра: животные безумца на месте, его рука сервер не отдаёт.
+    const ctrl = full(await s.poll(host.code, host.token));
+    assert.equal(ctrl.state!.madController, 0);
+    assert.equal(ctrl.state!.players[1]!.hand.length, 0, "рука безумца не покидает сервер");
+    assert.equal(ctrl.state!.players[1]!.handCount, 2);
+    // Кадр безумца: свою руку видит, руку контролёра — нет.
+    const mad = full(await s.poll(host.code, guest.token));
+    assert.equal(mad.state!.players[1]!.hand.length, 2);
+    assert.equal(mad.state!.players[0]!.hand.length, 0);
+
+    // Прозрение: содержание подгляда уходит в кадр только смотрящего.
+    const room2 = (await _internals.readRoom(sql, host.code))!;
+    const peeked = structuredClone(room2.state!);
+    peeked.peek = { viewerId: 0, target: { kind: "hand", playerId: 1 } };
+    assert.equal(await _internals.casUpdate(sql, host.code, room2.version, { state: peeked }), true);
+    const viewerFrame = full(await s.poll(host.code, host.token));
+    assert.equal(viewerFrame.state!.peekContent?.kind, "hand");
+    if (viewerFrame.state!.peekContent?.kind === "hand") {
+      assert.deepEqual(
+        viewerFrame.state!.peekContent.cards.map((c) => c.id).sort(),
+        ["bot-card-1", "bot-card-2"],
+      );
+    }
+    const otherFrame = full(await s.poll(host.code, guest.token));
+    assert.equal(otherFrame.state!.peekContent ?? null, null, "содержание подгляда не попадает в чужой кадр");
+  });
+
+  it("косметика места: дефолты по имени, владение платных, запреты бота и старта", async () => {
+    fixedNow = Date.now();
+    const s = svc();
+    // Партия уже идёт: менять косметику нельзя.
+    const started = await s.create({ name: "Аня", capacity: 2, botSeats: 1, difficulty: "normal" });
+    await s.start(started.code, started.token);
+    await assert.rejects(
+      () => s.setSeatCosmetics(started.code, started.token, { avatar: "sci.darwin" }, []),
+      /до начала партии/,
+    );
+
+    // Лобби: дефолт рубашки — классика, аватар — детерминированный «sci.*».
+    const lobby = await s.create({ name: "Оля", capacity: 2, botSeats: 0, difficulty: "normal" });
+    const guest = await s.join({ code: lobby.code, name: "Боря" });
+    const frame = full(await s.poll(lobby.code, lobby.token));
+    assert.equal(frame.seats.find((x) => x.seat === 0)?.cardback, "cardback.classic");
+    assert.ok(frame.seats.find((x) => x.seat === 0)?.avatar.startsWith("sci."), "аватар по умолчанию — учёный");
+
+    // Платная рубашка без владения — отказ, с владением — успех.
+    await assert.rejects(
+      () => s.setSeatCosmetics(lobby.code, lobby.token, { cardback: "cardback.crimson" }, []),
+      /не куплена/,
+    );
+    const r1 = await s.setSeatCosmetics(
+      lobby.code,
+      lobby.token,
+      { cardback: "cardback.crimson", avatar: "sci.baer" },
+      ["cardback.crimson"],
+    );
+    assert.equal(r1.avatar, "sci.baer");
+    assert.equal(r1.cardback, "cardback.crimson");
+    const frame2 = full(await s.poll(lobby.code, lobby.token));
+    assert.equal(frame2.seats.find((x) => x.seat === 0)?.cardback, "cardback.crimson");
+    assert.equal(frame2.seats.find((x) => x.seat === 0)?.avatar, "sci.baer");
+
+    // Неизвестный ключ учёного и предмет чужого слота — отказ.
+    await assert.rejects(
+      () => s.setSeatCosmetics(lobby.code, lobby.token, { avatar: "sci.nobody" }, []),
+      /Такого аватара нет/,
+    );
+    await assert.rejects(
+      () => s.setSeatCosmetics(lobby.code, lobby.token, { cardback: "avatar.carn-large" }, ["avatar.carn-large"]),
+      /Такой рубашки нет/,
+    );
+
+    // Сброс в дефолт (null) возвращает классику и «sci.*».
+    const r2 = await s.setSeatCosmetics(lobby.code, lobby.token, { avatar: null, cardback: null }, []);
+    assert.ok(r2.avatar.startsWith("sci."));
+    assert.equal(r2.cardback, "cardback.classic");
+    void guest;
   });
 });
 

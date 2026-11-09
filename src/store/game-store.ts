@@ -9,13 +9,18 @@ import {
   saveDoneMission,
   type TutorialMissionId,
 } from "@/game/tutorial";
+import type { CampaignEraId } from "@/game/campaign";
 import {
-  CAMPAIGN_MISSIONS,
-  loadCampaignProgress,
-  saveCampaignProgress,
-  type CampaignMissionId,
-  type CampaignProgress,
-} from "@/game/campaign";
+  applyReward,
+  clearCurrentNode,
+  createCampaignRun,
+  loadCampaignRun,
+  loseRun,
+  saveCampaignRun,
+  type CampaignRun,
+  type RunReward,
+} from "@/game/campaign-run";
+import { CampaignHost, speedFactorOf } from "@/game/campaign-host";
 import { t, type TParams, type TKey } from "@/lib/i18n";
 import { NetClientError, NetSession, fetchRoomList, forgetSession, hasStoredSeatSession, hasStoredSession, loadName, type NetHooks, type NetStatus, type PendingNetItem } from "@/lib/net/session";
 import type {
@@ -31,6 +36,8 @@ import type {
   TurnTimerMs,
   WaiterInfo,
 } from "@/lib/net/shared";
+import { colorForSeat } from "@/lib/net/shared";
+import { defaultAvatarForSeat } from "@/lib/cosmetics";
 
 export type UiIntent =
   | { kind: "none" }
@@ -485,13 +492,18 @@ interface GameStore {
   startTutorial: (id: TutorialMissionId, name: string) => Promise<void>;
   clearTutorial: () => void;
   completeTutorial: (id: TutorialMissionId) => void;
-  /** Кампания «Эры» (волна 4а): активная миссия + режим хард. */
-  campaignMission: CampaignMissionId | null;
-  campaignHard: boolean;
-  campaignProgress: CampaignProgress;
-  startCampaign: (id: CampaignMissionId, hard: boolean, name: string) => Promise<void>;
-  clearCampaign: () => void;
-  completeCampaignMission: (id: CampaignMissionId, hard: boolean) => void;
+  /** Кампания-рогалик (фундамент): локальный забег за эпоху на чистом движке. */
+  campaignRun: CampaignRun | null;
+  /** Новый забег за эпоху и сразу бой первого узла. */
+  startCampaignRun: (era: CampaignEraId, name: string) => void;
+  /** Возобновить сохранённый матч забега (кнопка «Продолжить» и F5). */
+  continueCampaignRun: () => void;
+  /** Начать бой текущего боевого узла (после награды или потери матча). */
+  campaignStartBattle: () => void;
+  /** Выбрать награду узла: усиление в заначку, курсор — на следующий узел. */
+  campaignApplyReward: (reward: RunReward) => void;
+  /** Удалить забег целиком (сдаться навсегда). */
+  abandonCampaignRun: () => void;
   startNetCreate: (cfg: NetCreateConfig) => Promise<void>;
   /** Войти за стол; password — только для приватного (см. NetClientError). */
   startNetJoin: (code: string, name: string, password?: string) => Promise<void>;
@@ -512,6 +524,8 @@ interface GameStore {
   netSetPassword: (password: string) => Promise<{ ok: boolean; error?: string }>;
   /** Смена цвета своего места в лобби (цвет из PLAYER_COLORS). */
   netSetColor: (color: PlayerColor) => Promise<void>;
+  /** Косметика своего места (аватар/рубашка, только лобби); null — дефолт. */
+  netSetCosmetics: (patch: { avatar?: string | null; cardback?: string | null }) => Promise<void>;
   netTransferHost: (seat: number) => Promise<void>;
   /** Убрать ожидающего по индексу в очереди. */
   netKickWaiter: (index: number) => Promise<void>;
@@ -564,6 +578,103 @@ let netGeneration = 0;
 
 /** Код из ?room, по которому уже пробовали вернуться: страховка от цикла меню. */
 let urlResumeTried: string | null = null;
+
+// ── кампания-рогалик: локальный забег на чистом движке ──────────────────────
+
+/**
+ * Хост идущего матча кампании. Ровно один на вкладку; не нулевой — значит
+ * dispatch/leaveNet/resign работают с локальной партией, а не с сетевой
+ * комнатой (netSession при этом всегда null).
+ */
+let campaignHost: CampaignHost | null = null;
+
+/** Шим сетевого стола под кампанию: стол рендерится по тем же полям. */
+function campaignNetShim(run: CampaignRun, name: string): NetUiState {
+  const node = run.nodes[run.match?.nodeId ?? run.currentNodeId];
+  const b = node?.battle;
+  return netStartState({
+    code: `CAMP-${run.era.slice(0, 4).toUpperCase()}`,
+    seat: 0,
+    name,
+    status: "playing",
+    hostSeat: 0,
+    capacity: 2,
+    settings: {
+      difficulty: b?.difficulty,
+      modules: b?.modules ?? {},
+      ...(b?.mutators ? { mutators: b.mutators } : {}),
+      ...(b?.wildWorld ? { wildWorld: true } : {}),
+    },
+    seats: [
+      { seat: 0, name, isAI: false, online: true, disconnected: false, resigned: false, color: colorForSeat(0), avatar: defaultAvatarForSeat(name, false), cardback: "cardback.classic", typing: false },
+      {
+        seat: 1,
+        name: b ? t(b.nameKey) : "Evo",
+        isAI: true,
+        online: true,
+        disconnected: false,
+        resigned: false,
+        color: colorForSeat(1),
+        avatar: defaultAvatarForSeat(b ? t(b.nameKey) : "Evo", true),
+        cardback: "cardback.classic",
+        typing: false,
+      },
+    ],
+  });
+}
+
+/**
+ * Мост CampaignHost → стор: кадры ложатся в state/net (батчи — как от
+ * сервера), персист пишет полный стейт в забег, финал двигает курсор пути.
+ */
+function campaignHooks(
+  set: (partial: Partial<GameStore>) => void,
+  get: () => GameStore,
+): import("@/game/campaign-host").CampaignHostHooks {
+  return {
+    onFrame: (view, batch) => {
+      const cur = get().net;
+      if (!cur) return;
+      const nextNet = batch
+        ? mergeNetState(cur, { events: [...cur.events, batch].slice(-40) })
+        : cur;
+      set({ state: view, net: nextNet });
+    },
+    onPersist: (full, version) => {
+      const run = get().campaignRun;
+      if (!run) return;
+      run.match = { nodeId: run.match?.nodeId ?? run.currentNodeId, state: full, version };
+      // Сохраняем ссылку без set(): кадры и так рендерят стол, а подписчикам
+      // campaignRun новый объект нужен только при смене узла/статуса.
+      saveCampaignRun(run);
+    },
+    onFinished: (won) => {
+      const run = get().campaignRun;
+      if (!run) return;
+      campaignHost = null;
+      if (won) {
+        run.match = null;
+        clearCurrentNode(run);
+      } else {
+        loseRun(run);
+      }
+      saveCampaignRun(run);
+      set({ campaignRun: { ...run } });
+    },
+  };
+}
+
+/** Запустить бой текущего боевого узла (шим стола ставится до первого кадра). */
+function campaignStartNode(set: (partial: Partial<GameStore>) => void, get: () => GameStore): void {
+  const run = get().campaignRun;
+  if (!run || run.status !== "active") return;
+  const node = run.nodes[run.currentNodeId];
+  if (!node?.battle) return;
+  const name = get().net?.name || loadName() || "Evo";
+  set({ net: campaignNetShim({ ...run, match: null }, name), state: null, intent: { kind: "none" } });
+  const host = CampaignHost.startNode(run, node, name, t(node.battle.nameKey), campaignHooks(set, get), speedFactorOf(get().speed));
+  if (host) campaignHost = host;
+}
 
 /**
  * Мост NetSession → стор: кадры сервера ложатся в state/net, статус
@@ -888,14 +999,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setEquippedCosmetics: (v) => set({ equippedCosmetics: v }),
   tutorialMission: null,
   doneMissions: loadDoneMissions(),
-  campaignMission: null,
-  campaignHard: false,
-  campaignProgress: loadCampaignProgress(),
+  campaignRun: loadCampaignRun(),
   net: null,
   netFatal: null,
   rooms: [],
 
   dispatch: (action) => {
+    // Локальная партия кампании: ход применяется хостом в браузере, без сети.
+    if (campaignHost) {
+      set({ intent: { kind: "none" } });
+      campaignHost.act(action);
+      return;
+    }
     const cur = get().net;
     // Меню (стола нет), зритель (стол read-only) и предыдущий запрос хода.
     if (!cur || cur.spectating || cur.sending) return;
@@ -939,6 +1054,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     } catch {
       // приватный режим — скорость просто не сохранится
     }
+    campaignHost?.setSpeedFactor(speedFactorOf(speed));
     set({ speed });
   },
 
@@ -979,35 +1095,72 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ doneMissions: saveDoneMission(id) });
   },
 
-  // ── кампания «Эры» (волна 4а) ───────────────────────────────────────────
-  startCampaign: async (id, hard, name) => {
-    const m = CAMPAIGN_MISSIONS[id];
-    set({ campaignMission: id, campaignHard: hard });
-    try {
-      await get().startNetCreate({
-        name: name || "Evo",
-        capacity: 2,
-        botSeats: 1,
-        difficulty: hard ? "hard" : m.difficulty,
-        modules: m.modules,
-        mutators: m.mutators,
-        wildWorld: m.wildWorld,
-        scenario: m.boss ? { seat: 1, ...m.boss.scenario } : undefined,
-      });
-    } catch (e) {
-      set({ campaignMission: null, campaignHard: false });
-      throw e;
-    }
+  // ── кампания-рогалик (фундамент): локальный забег ───────────────────────
+  startCampaignRun: (era, name) => {
+    // Новый забег затирает прежний (даже незавершённый): явное намерение.
+    campaignHost?.stop();
+    campaignHost = null;
+    const run = createCampaignRun(era);
+    saveCampaignRun(run);
+    syncedRoomCode = null;
+    syncRoomUrl(null);
+    urlResumeTried = null;
+    set({
+      campaignRun: run,
+      net: campaignNetShim(run, name || loadName() || "Evo"),
+      state: null,
+      intent: { kind: "none" },
+      netFatal: null,
+    });
+    campaignStartNode(set, get);
   },
 
-  clearCampaign: () => set({ campaignMission: null, campaignHard: false }),
+  continueCampaignRun: () => {
+    const run = get().campaignRun;
+    if (!run || run.status !== "active") return;
+    // Хост уже работает или шим стоит — возобновлять нечего (повторный вызов,
+    // например повторное монтирование GameApp).
+    if (campaignHost || get().net) return;
+    if (!run.match) return; // между узлами: страница кампании ведёт сама
+    set({
+      net: campaignNetShim({ ...run, match: null }, loadName() || "Evo"),
+      state: null,
+      intent: { kind: "none" },
+      netFatal: null,
+    });
+    const host = CampaignHost.resumeMatch(run, campaignHooks(set, get), speedFactorOf(get().speed));
+    if (host) {
+      campaignHost = host;
+      return;
+    }
+    // Матч не восстановился (битый стейт) — сбрасываем: страница покажет узел.
+    run.match = null;
+    saveCampaignRun(run);
+    set({ campaignRun: { ...run }, net: null, state: null });
+  },
 
-  completeCampaignMission: (id, hard) => {
-    const progress = hard
-      ? { ...get().campaignProgress, hard: get().campaignProgress.hard.includes(id) ? get().campaignProgress.hard : [...get().campaignProgress.hard, id] }
-      : { ...get().campaignProgress, done: get().campaignProgress.done.includes(id) ? get().campaignProgress.done : [...get().campaignProgress.done, id] };
-    saveCampaignProgress(progress);
-    set({ campaignProgress: progress });
+  campaignStartBattle: () => {
+    campaignStartNode(set, get);
+  },
+
+  campaignApplyReward: (reward) => {
+    const run = get().campaignRun;
+    if (!run || run.status !== "active") return;
+    const node = run.nodes[run.currentNodeId];
+    if (!node || node.kind !== "reward") return;
+    applyReward(run, reward);
+    clearCurrentNode(run);
+    saveCampaignRun(run);
+    set({ campaignRun: { ...run } });
+  },
+
+  abandonCampaignRun: () => {
+    campaignHost?.stop();
+    campaignHost = null;
+    saveCampaignRun(null);
+    syncedRoomCode = null;
+    syncRoomUrl(null);
+    set({ campaignRun: null, net: null, state: null, intent: { kind: "none" } });
   },
 
   // ── сетевой стол ──────────────────────────────────────────────────────────
@@ -1251,6 +1404,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
   },
 
+  netSetCosmetics: async (patch) => {
+    const s = netSession;
+    if (!s) return;
+    try {
+      await s.setSeatCosmetics(patch);
+    } catch (e) {
+      const cur = get().net;
+      const { text, code } = caughtNetError(e);
+      if (cur) set({ net: { ...cur, error: text, errorCode: code } });
+    }
+  },
+
   netTransferHost: (seat) => runNet(netSession, set, get, (s) => s.transferHost(seat)),
 
   netKickWaiter: (index) => runNet(netSession, set, get, (s) => s.kickWaiter(index)),
@@ -1261,6 +1426,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }),
 
   netResign: async () => {
+    // Кампания: сдача = проигрыш забега (мягко — мета вне забега не страдает).
+    if (campaignHost || get().net?.code?.startsWith("CAMP-")) {
+      campaignHost?.stop();
+      campaignHost = null;
+      const run = get().campaignRun;
+      if (run && run.status === "active") {
+        loseRun(run);
+        saveCampaignRun(run);
+        set({ campaignRun: { ...run } });
+      }
+      return;
+    }
     const code = get().net?.code ?? "";
     await runNet(netSession, set, get, (s) => s.resign());
     // Сдача — явное намерение покинуть место: даже если UI затем вызовет
@@ -1406,6 +1583,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   leaveNet: (mode = "hard") => {
+    // Кампания: локальная партия, никакой сети. Ветка срабатывает и когда хост
+    // жив (матч пауза — вернуться с /campaign или F5), и после финала (хоста
+    // уже нет, но шим стола ещё стоит): признак — код стола CAMP-*.
+    if (campaignHost || get().net?.code?.startsWith("CAMP-")) {
+      campaignHost?.stop();
+      campaignHost = null;
+      set({ net: null, state: null, intent: { kind: "none" } });
+      return;
+    }
     const s = netSession;
     const cur = get().net;
     const wasWaiting = cur?.waiting ?? false;
@@ -1469,7 +1655,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (!rec || rec.code === null || rec.code === code) saveActiveMission(null);
       state.clearTutorial();
     }
-    if (state.campaignMission) state.clearCampaign();
     set({
       net: null,
       state: null,

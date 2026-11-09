@@ -22,7 +22,11 @@ function nextAction(g: GameState): GameAction {
   if (g.phase === "growth") return { type: "continueGrowth" };
   const legal = g.pendingAttack
     ? legalDefenseActions(g, g.pendingAttack.waitingFor)
-    : g.phase === "development" ? legalDevActions(g, g.currentPlayerId) : legalFeedActions(g, g.currentPlayerId);
+    : g.phase === "development"
+      ? legalDevActions(g, g.currentPlayerId)
+      // Раунд безумия: действия легальны для контролёра (сосед справа),
+      // а не для владельца, чей currentPlayerId остаётся в круге.
+      : legalFeedActions(g, g.madController ?? g.currentPlayerId);
   // AI consumes the game's RNG; both replays use the same exported policy.
   const action = chooseAIAction(g);
   assert.ok(action, `No action: year=${g.year} phase=${g.phase}`);
