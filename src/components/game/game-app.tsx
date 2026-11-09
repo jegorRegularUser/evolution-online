@@ -54,7 +54,7 @@ import { PlantStrip } from "./cards-plants";
 import { ConfirmDialog } from "./confirm-dialog";
 import { EventFeed, reactionsByChatId, type FeedItem } from "./event-feed";
 import { netKick, netReplaceWithBot, netSetBots } from "@/lib/net/api";
-import { colorForSeat, PACE, REACTION_EMOJI, type SeatInfo } from "@/lib/net/shared";
+import { colorForSeat, PACE, REACTION_EMOJI, type ReactionEmoji, type SeatInfo } from "@/lib/net/shared";
 import type { PendingNetItem } from "@/lib/net/session";
 import { HintNote } from "./hint-note";
 import { FoodCube } from "./icons";
@@ -3239,7 +3239,9 @@ function Table() {
         </div>
       ) : null}
 
-      {net ? <ReactionsLayer net={net} phase={state.phase} actor={actor} /> : null}
+      {/* Реакции — сетевая забава: в кампании соперник-изверг нем и панель
+          реакций над столом не нужна (и верстку она распирала). */}
+      {net && !campaignRun ? <ReactionsLayer net={net} phase={state.phase} actor={actor} /> : null}
 
       {/* Стол: узкое центральное поле-сукно, соперники по бокам без прокрутки, игрок снизу. */}
       {/* Журнал-док на xl+ живёт рядом с полем и сдвигает его раскрытием. */}
@@ -3250,21 +3252,32 @@ function Table() {
           // На широких экранах поле прокручивается внутри себя: стол любой
           // населённости помещается в экран, документ не растёт.
           "flex flex-1 flex-col gap-3 px-3 py-3 sm:px-5 xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain",
-          wideSeats && (plantsOn || fungiOn) &&
+          wideSeats && campaignRun && (plantsOn || fungiOn) &&
             // Литеральные классы: динамическую сборку Tailwind не видит в исходнике.
+            // 'hud' — полоса HUD забега кампании (иначе авто-плейсмент кидает его
+            // в чужие ячейки сетки и стол «плывёт»).
+            "lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(360px,1fr)_minmax(0,1fr)] lg:grid-rows-[auto_auto_1fr_auto_auto] lg:gap-3 lg:[grid-template-areas:'hud_hud_hud''plants_plants_plants''top_top_top''left_felt_right''bottom_bottom_bottom''human_human_human']",
+          wideSeats && campaignRun && !plantsOn && !fungiOn &&
+            "lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(360px,1fr)_minmax(0,1fr)] lg:grid-rows-[auto_auto_1fr_auto_auto] lg:gap-3 lg:[grid-template-areas:'hud_hud_hud''top_top_top''left_felt_right''bottom_bottom_bottom''human_human_human']",
+          wideSeats && !campaignRun && (plantsOn || fungiOn) &&
             "lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(360px,1fr)_minmax(0,1fr)] lg:grid-rows-[auto_1fr_auto_auto] lg:gap-3 lg:[grid-template-areas:'plants_plants_plants''top_top_top''left_felt_right''bottom_bottom_bottom''human_human_human']",
-          wideSeats && !plantsOn && !fungiOn &&
+          wideSeats && !campaignRun && !plantsOn && !fungiOn &&
             "lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(360px,1fr)_minmax(0,1fr)] lg:grid-rows-[auto_1fr_auto_auto] lg:gap-3 lg:[grid-template-areas:'top_top_top''left_felt_right''bottom_bottom_bottom''human_human_human']",
           !wideSeats && "lg:mx-auto lg:w-full lg:max-w-4xl",
           state.phase === "extinction" ? "extinction-glow" : "",
         )}
       >
         {/* Обучение (волна 1.5) и кампания (фундамент рогалика): HUD первым
-            блоком в потоке стола. Раньше HUD висел fixed в левом верхнем углу
-            и накрывал плашку соперника с медальонами животных; в потоке ничто
-            никого не перекрывает ни на десктопе, ни на телефоне. У кампании
-            свой HUD: путь эпохи и узел вместо целей-предикатов. */}
-        {campaignRun ? <CampaignHud /> : <TutorialHud />}
+            блоком в потоке стола. У кампании — тонкая строка-пилюля в своей
+            grid-полосе 'hud' (на узких раскладках — первый ребёнок flex);
+            дневник раскрывается кнопкой и не висит над столом весь матч. */}
+        {campaignRun ? (
+          <div style={wideSeats ? { gridArea: "hud" } : undefined} className="order-first min-w-0">
+            <CampaignHud />
+          </div>
+        ) : (
+          <TutorialHud />
+        )}
         {/* «Растения»/«Трава и грибы»: общий стол растений и флоры; с «Континентами» — по континентам. */}
         {plantsOn || fungiOn ? (
           // Полоса растений — цель броска для свойств растений (найти само
@@ -3434,15 +3447,20 @@ function Table() {
         open={logOpen}
         onToggle={setLogOpen}
         title={t("game.logButton")}
-        onSend={(text) => void sendChat(text)}
-        quickPhrases={netQuickPhrases(t)}
-        // Реакция на реплику: chatId ложится в серверную привязку, место
-        // автора — для пузыря над столом. Реакция «в стол» — панель справа.
-        onReact={(item, emoji) =>
-          void sendReaction(emoji, "reaction", item.seat !== undefined && item.seat >= 0 ? item.seat : null, item.chatId ?? null)
-        }
-        onTyping={sendTyping}
-        typingNames={typingNames}
+        {...(campaignRun
+          ? // Кампания: чата нет — композер, быстрые фразы и реакции на реплики
+            // скрыты; в доке остаётся только журнал партии.
+            {}
+          : {
+              onSend: (text: string) => void sendChat(text),
+              quickPhrases: netQuickPhrases(t),
+              // Реакция на реплику: chatId ложится в серверную привязку, место
+              // автора — для пузыря над столом. Реакция «в стол» — панель справа.
+              onReact: (item: FeedItem, emoji: ReactionEmoji) =>
+                void sendReaction(emoji, "reaction", item.seat !== undefined && item.seat >= 0 ? item.seat : null, item.chatId ?? null),
+              onTyping: sendTyping,
+              typingNames,
+            })}
       />
       </div>
 

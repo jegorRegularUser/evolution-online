@@ -309,8 +309,14 @@ export function createGame(
     }
     const traits = scenario.humanBoons.startTraits ?? [];
     for (const trait of traits) {
-      const idx = state.deck.findIndex((c) => c.faces.includes(trait));
-      if (idx >= 0) me.hand.push(state.deck.splice(idx, 1)[0]!);
+      let idx = state.deck.findIndex((c) => c.faces.includes(trait));
+      if (idx < 0) {
+        // В укороченной колоде масштабирования свойства может не оказаться:
+        // награда обязана сработать — достаём карту с этим свойством в колоду.
+        state.deck.push({ id: nid(state, "c"), faces: [trait] });
+        idx = state.deck.length - 1;
+      }
+      me.hand.push(state.deck.splice(idx, 1)[0]!);
     }
     if (bonus > 0 || traits.length > 0) {
       log(state, `Награды пути усилят стартовую руку.`, "log.campaignBoons", undefined, "good");

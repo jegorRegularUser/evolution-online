@@ -294,7 +294,7 @@ ok("прогрев сервера выполнен");
     const txt = await page.evaluate(
       () => document.querySelector('aside[aria-label="Кембрий"]')?.textContent ?? null,
     );
-    return txt && txt.includes("Молодое море") && txt.includes("из 5") ? txt : null;
+    return txt && txt.includes("Молодое море") && txt.includes("1/5") ? txt : null;
   }, 20_000, 400);
   assert(Boolean(hudText), "c: HUD забега виден: узел и прогресс пути");
   await sleep(600);

@@ -1,9 +1,11 @@
-import { Compass, Crown, Swords } from "lucide-react";
+import { BookOpen, Compass, Crown, Swords, X } from "lucide-react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "@tanstack/react-router";
 import { CAMPAIGN_ERAS } from "@/game/campaign";
 import type { CampaignRun } from "@/game/campaign-run";
 import { useT, type TKey } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 import { useGameStore } from "@/store/game-store";
 
 /** Id гарантированного свойства → имя награды, которой оно получено. */
@@ -45,15 +47,18 @@ export function StashChips({ run, emptyKey }: { run: CampaignRun; emptyKey?: TKe
 }
 
 /**
- * HUD забега кампании (фундамент рогалик-переработки): где ты на пути эпохи
- * и что за узел идёт. Живёт в потоке стола на слоте учебного HUD. Целей-
- * предикатов нет — у боя одно условие: победи соперника; изверг ещё и
- * ломает правило (бейдж «Изверг»). Прогресс забега считается по победам.
+ * HUD забега кампании (фундамент рогалик-переработки): ОДНА тонкая строка
+ * над столом — эпоха, счётчик пути, узел, бейдж изверга. Дневник натуралиста
+ * не висит весь матч: кнопка-книжка раскрывает компактную карточку с текстом
+ * узла, заначкой наград и годом (клик мимо — закрывает). Полоса занимает
+ * свою grid-полосу 'hud' на широких раскладках (см. game-app) — она не
+ * авто-плейсится в чужие ячейки и ничего не перекрывает.
  */
 export function CampaignHud() {
   const tt = useT();
   const run = useGameStore((s) => s.campaignRun);
   const state = useGameStore((s) => s.state);
+  const [diaryOpen, setDiaryOpen] = useState(false);
   if (!run || run.status !== "active" || !run.match) return null;
   const node = run.nodes[run.match.nodeId];
   if (!node) return null;
@@ -61,35 +66,69 @@ export function CampaignHud() {
   const total = Object.keys(run.nodes).length;
   const done = run.cleared.length;
   const isBoss = node.kind === "boss";
+  const hasStash = run.stash.handBonus > 0 || run.stash.startTraits.length > 0;
   return (
-    <aside
-      aria-label={tt(era?.titleKey ?? "campaign.title")}
-      className="relative order-first z-30 w-full rounded-[var(--radius-lg)] border border-accent/40 bg-surface/95 p-3 text-sm shadow-[var(--shadow-card)] backdrop-blur-sm sm:w-64 lg:order-none"
-    >
-      <div className="flex items-center gap-2 font-medium text-fg">
+    <aside aria-label={tt(era?.titleKey ?? "campaign.title")} className="relative order-first z-30 w-full lg:order-none">
+      <div
+        className={cn(
+          "flex w-full items-center gap-2 rounded-full border bg-surface/95 px-3 py-1.5 text-xs shadow-[var(--shadow-card)] backdrop-blur-sm",
+          isBoss ? "border-danger/50" : "border-accent/40",
+        )}
+      >
         <Compass className="size-4 shrink-0 text-accent" aria-hidden />
-        <span className="truncate">{tt(era?.titleKey ?? "campaign.title")}</span>
-        <span className="ml-auto shrink-0 text-xs text-muted">
-          {tt("campaign.run.progress", { done: String(done + 1), total: String(total) })}
+        <span className="hidden shrink-0 truncate font-medium text-fg sm:inline">{tt(era?.titleKey ?? "campaign.title")}</span>
+        <span className="shrink-0 rounded-full bg-accent/15 px-1.5 py-0.5 text-[10px] tabular-nums text-muted" aria-label={tt("campaign.run.progress", { done: String(done + 1), total: String(total) })}>
+          {done + 1}/{total}
+        </span>
+        <span aria-hidden className="hidden h-3 w-px bg-border sm:block" />
+        <span className="flex min-w-0 items-center gap-1.5">
+          {isBoss ? <Swords className="size-3.5 shrink-0 text-danger" aria-hidden /> : null}
+          <span className="truncate font-medium text-fg">{tt(node.titleKey)}</span>
+          {isBoss ? (
+            <span className="hidden shrink-0 items-center rounded-[var(--radius-sm)] border border-danger/40 bg-danger/10 px-1.5 py-0.5 text-[10px] text-clay sm:inline-flex">
+              {tt("campaign.run.hud.boss")}
+            </span>
+          ) : null}
+        </span>
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          {hasStash ? <StashChips run={run} /> : null}
+          <button
+            type="button"
+            aria-label={tt("rules.campaign.diary")}
+            title={tt("rules.campaign.diary")}
+            className="rounded-full p-1 text-muted transition-colors hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => setDiaryOpen((v) => !v)}
+          >
+            <BookOpen className="size-4" aria-hidden />
+          </button>
         </span>
       </div>
-      <p className="mt-1 flex items-center gap-1.5 text-xs font-medium text-fg">
-        {isBoss ? <Swords className="size-3.5 shrink-0 text-danger" aria-hidden /> : null}
-        <span className="truncate">{tt(node.titleKey)}</span>
-        {isBoss ? (
-          <span className="inline-flex shrink-0 items-center rounded-[var(--radius-sm)] border border-danger/40 bg-danger/10 px-1.5 py-0.5 text-[10px] text-clay">
-            {tt("campaign.run.hud.boss")}
-          </span>
-        ) : null}
-      </p>
-      <p className="mt-1 text-xs leading-snug text-muted">{tt(node.diaryKey)}</p>
-      {run.stash.handBonus > 0 || run.stash.startTraits.length > 0 ? (
-        <div className="mt-1.5">
-          <StashChips run={run} />
+      {diaryOpen ? (
+        <div className="absolute inset-x-0 top-full z-30 mt-1.5 w-full max-w-md rounded-[var(--radius-lg)] border border-accent/40 bg-surface/95 p-3 text-sm shadow-[var(--shadow-card)] backdrop-blur-sm">
+          <div className="flex items-start justify-between gap-2">
+            <p className="flex items-center gap-1.5 font-medium text-fg">
+              <Swords className={isBoss ? "size-4 shrink-0 text-danger" : "hidden"} aria-hidden />
+              {tt(node.titleKey)}
+            </p>
+            <button
+              type="button"
+              aria-label={tt("common.close")}
+              className="-m-1 rounded-[var(--radius-sm)] p-1 text-muted hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => setDiaryOpen(false)}
+            >
+              <X className="size-4" aria-hidden />
+            </button>
+          </div>
+          <p className="mt-1 text-xs leading-snug text-muted">{tt(node.diaryKey)}</p>
+          {hasStash ? (
+            <div className="mt-2">
+              <StashChips run={run} />
+            </div>
+          ) : null}
+          {state && state.phase !== "gameOver" ? (
+            <p className="mt-2 text-[11px] text-muted">{tt("game.yearN", { year: state.year })}</p>
+          ) : null}
         </div>
-      ) : null}
-      {state && state.phase !== "gameOver" ? (
-        <p className="mt-1.5 text-[11px] text-muted">{tt("game.yearN", { year: state.year })}</p>
       ) : null}
     </aside>
   );
