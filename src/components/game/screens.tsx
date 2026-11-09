@@ -23,7 +23,8 @@ import { CONTINENTS_TRAIT_IDS, FUNGI_TRAIT_IDS, MUTATIONS_TRAIT_IDS, PLANTS_TRAI
 import { TERRITORIES } from "@/game/types";
 import type { FloraKind, MarkKind, ModuleId, MutatorId, PlantKind, ScoreBreakdown, TerritoryId, TraitId } from "@/game/types";
 import type { CosmeticSlot } from "@/lib/profile/shared";
-import { CardBackChip } from "./avatar";
+import { AvatarChip, CardBackChip } from "./avatar";
+import { defaultAvatarForSeat } from "@/lib/cosmetics";
 import { CHALLENGES } from "@/game/challenges";
 import { COSMETIC_ITEMS, cosmeticById, type CosmeticItem } from "@/lib/cosmetics";
 import { CAMPAIGN_ERAS, CAMPAIGN_MISSIONS, type CampaignMissionId } from "@/game/campaign";
@@ -1326,6 +1327,14 @@ function ScoreRow({
 }) {
   const tt = useT();
   const lang = useLang();
+  // Аватар строки финала: в сети — с места, в соло — дефолт по имени
+  // (ботам — портрет их учёного). playerId -1 — это флора, аватара нет.
+  const netSeats = useGameStore((s) => s.net?.seats);
+  const isAI = useGameStore((s) => Boolean(s.state?.players[row.playerId]?.isAI));
+  const avatar =
+    row.playerId >= 0
+      ? netSeats?.find((x) => x.seat === row.playerId)?.avatar ?? defaultAvatarForSeat(row.name, isAI)
+      : undefined;
   const labels = sourceLabels(row, lang);
   const parts: Array<{ key: "animals" | "traits" | "extras"; label: string; value: number; hint: string }> = [
     { key: "animals", label: labels.animals, value: row.animals, hint: labels.animalsHint },
@@ -1346,8 +1355,9 @@ function ScoreRow({
       )}
     >
       <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate font-medium">
+        <div className="flex min-w-0 items-center gap-2">
+          {avatar ? <AvatarChip avatarKey={avatar} name={scoreRowName(row, lang)} className="size-7 shrink-0" /> : null}
+          <p className="min-w-0 truncate font-medium">
             {place}. {scoreRowName(row, lang)}
           </p>
           {winner ? <p className="mt-0.5 text-[10px] uppercase tracking-wide text-accent">{tt("final.best")}</p> : null}

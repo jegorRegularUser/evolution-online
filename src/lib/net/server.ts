@@ -889,6 +889,13 @@ export function endTurnStepFor(state: GameState, _actorId: number): GameAction {
     const a = p?.animals.find((x) => x.marks?.includes("madness"));
     if (a) return { type: "chooseMadMark", animalId: a.id };
   }
+  // AFK в раунд «Бешенства»: feedEndTurn — тихий no-op, пока атака
+  // обязательна (дедлайн крутится впустую). Сервер атакует первым легальным
+  // бешеным; без жертв feedEndTurn корректно закрывает раунд.
+  if (state.rageTurn) {
+    const hunt = legalFeedActions(state, state.currentPlayerId).find((a) => a.type === "feedHunt");
+    if (hunt) return hunt;
+  }
   return { type: "feedEndTurn" };
 }
 

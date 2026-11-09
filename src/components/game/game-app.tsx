@@ -22,7 +22,7 @@ import { Toaster, toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DialogShell } from "@/components/ui/dialog-shell";
 import { TRAITS } from "@/game/traits";
-import type { Animal, Card, FloraCard, GameAction, GameEvent, GameState, LogEntry, PeekTarget, Plant, Player, TerritoryId, TraitId, WildEventId } from "@/game/types";
+import type { Animal, Card, FloraCard, GameAction, GameEvent, GameState, LogEntry, PeekTarget, Plant, Player, ScoreBreakdown, TerritoryId, TraitId, WildEventId } from "@/game/types";
 import { TERRITORIES } from "@/game/types";
 import { currentActor, feedBlockReasonInfo, legalDefenseActions, legalDevActions, legalFeedActions } from "@/game/engine";
 import { peekContentFor } from "@/lib/net/views";
@@ -1373,20 +1373,23 @@ function InsightPeekOverlay({
   if (!peek) return null;
   const content = state.peekContent ?? peekContentFor(state, state.humanId) ?? undefined;
 
+  // Схлопнутая панель («Довольно» у содержания, «Отмена» у выбора цели):
+  // подгляд остаётся до конца раунда — чип возвращает панель на экран.
+  if (closed) {
+    return (
+      <button
+        type="button"
+        onClick={() => setClosed(false)}
+        className="fixed bottom-20 left-3 z-40 rounded-full border border-psi/60 bg-psi/20 px-3 py-1 text-xs font-medium text-fg shadow-[var(--shadow-card)] backdrop-blur-sm hover:bg-psi/30"
+      >
+        <span aria-hidden className="mr-1">👁</span>
+        {t("game.peekTitle")}
+      </button>
+    );
+  }
+
   // ── цель выбрана: показываем содержание ──
   if (target) {
-    if (closed) {
-      return (
-        <button
-          type="button"
-          onClick={() => setClosed(false)}
-          className="fixed bottom-20 left-3 z-40 rounded-full border border-psi/60 bg-psi/20 px-3 py-1 text-xs font-medium text-fg shadow-[var(--shadow-card)] backdrop-blur-sm hover:bg-psi/30"
-        >
-          <span aria-hidden className="mr-1">👁</span>
-          {t("game.peekTitle")}
-        </button>
-      );
-    }
     const ownerOf = (id: number) => state.players[id]?.name ?? "";
     return (
       <div className="fixed inset-x-3 bottom-16 z-40 mx-auto max-w-2xl rounded-[var(--radius-lg)] border border-psi/50 bg-parchment/95 p-3 shadow-[var(--shadow-card)] backdrop-blur-sm sm:bottom-20">
@@ -1447,6 +1450,14 @@ function InsightPeekOverlay({
       <div className="w-full max-w-md rounded-[var(--radius-lg)] border border-psi/50 bg-parchment p-4 shadow-[var(--shadow-card)]">
         <p className="text-sm font-semibold text-fg">{t("game.peekTitle")}</p>
         <p className="mt-1 text-[11px] leading-snug text-muted">{t("game.peekHint")}</p>
+        {/* Подгляд — право, а не обязанность: «Отмена» убирает модалку и
+            возвращает «Закончить ход» в доке (правило «может посмотреть»). */}
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <p className="text-[11px] leading-snug text-psi">{t("game.peekPending")}</p>
+          <Button variant="ghost" size="sm" onClick={() => setClosed(true)}>
+            {t("common.cancel")}
+          </Button>
+        </div>
         <div className="mt-3 flex gap-1">
           {(
             [
@@ -1946,6 +1957,12 @@ export function GameApp() {
 function SpectatorGameOver({ state, onMenu }: { state: GameState; onMenu: () => void }) {
   const t = useT();
   const lang = useLang();
+  // Аватары строк финала: у зрителя места нет — читаем места из сети,
+  // соло-строкам даём дефолт по имени.
+  const netSeats = useGameStore((s) => s.net?.seats);
+  const avatarOf = (row: ScoreBreakdown): string | undefined =>
+    netSeats?.find((x) => x.seat === row.playerId)?.avatar ??
+    (row.playerId >= 0 ? defaultAvatarForSeat(row.name, Boolean(state.players[row.playerId]?.isAI)) : undefined);
   const rows = [...(state.scores ?? [])].sort((a, b) => b.total - a.total || b.discard - a.discard);
   const winners = new Set(state.winnerIds ?? []);
   const title = t("final.spectatorTitle");
@@ -1961,9 +1978,12 @@ function SpectatorGameOver({ state, onMenu }: { state: GameState; onMenu: () => 
           <ul aria-label={t("final.scoreAria")} className="mt-5 space-y-2">
             {rows.map((row, index) => (
               <li key={row.playerId} className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-border bg-surface-2/50 px-3 py-2 text-sm">
-                <span className="font-medium text-fg">
-                  {index + 1}. {scoreRowName(row, lang)}
-                  {winners.has(row.playerId) ? <span className="ml-2 text-xs text-accent">★</span> : null}
+                <span className="flex min-w-0 items-center gap-2 font-medium text-fg">
+                  {avatarOf(row) ? <AvatarChip avatarKey={avatarOf(row)!} name={scoreRowName(row, lang)} className="size-6 shrink-0" /> : null}
+                  <span className="min-w-0 truncate">
+                    {index + 1}. {scoreRowName(row, lang)}
+                    {winners.has(row.playerId) ? <span className="ml-2 text-xs text-accent">★</span> : null}
+                  </span>
                 </span>
                 <span className="font-display tabular-nums text-fg">{row.total}</span>
               </li>

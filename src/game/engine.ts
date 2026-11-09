@@ -1193,7 +1193,9 @@ export function legalFeedActions(state: GameState, playerId: number): GameAction
 
   // Гриб прозрения: нераскрытый подгляд — свободное действие смотрящего
   // (владельца животного) до конца его раунда; можно и не использовать.
-  if (state.peek && !state.peek.target && state.peek.viewerId === actorId) {
+  // Гейт по playerId, а не actorId: в подконтрольном раунде выбор цели
+  // принадлежит владельцу, контролёру его решать нельзя.
+  if (state.peek && !state.peek.target && state.peek.viewerId === playerId) {
     actions.push(...peekChoices(state));
   }
 
