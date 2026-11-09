@@ -248,7 +248,7 @@ export const FLORA_EN: Record<string, TermEn> = {
   },
   madCap: {
     name: "Mad Cap",
-    desc: "The animal that takes a token gets the \"Madness\" mark: at the start of the next round of the feeding phase its owner removes the mark. A bot controls their animals for that round; the neighbor does not participate — control by the right-hand neighbor is not yet implemented in the online version.",
+    desc: "The animal that takes a token gets the \"Madness\" mark: at the start of the next round of the feeding phase its owner removes the mark (with several marks — they choose the animal), then the neighbor on the right plays that round instead of them: commanding their animals without looking at the cards in their hand.",
   },
   flyAgaric: {
     name: "Fly Agaric",
@@ -256,7 +256,7 @@ export const FLORA_EN: Record<string, TermEn> = {
   },
   insight: {
     name: "Mushroom of Insight",
-    desc: "Having taken a token, the animal's owner discards their whole hand to the discard pile. Looking at other players' cards (as the board game rule allows) is not yet implemented in the online version.",
+    desc: "Having taken a token, the animal's owner discards their whole hand to the discard pile, then may look once at: the cards in one rival's hand, the top card of any deck, or any animal's cards. What they see may not be shown to others — the others have not attained insight yet.",
   },
   soaring: {
     name: "Soaring Mushroom",
@@ -302,7 +302,7 @@ export const MARK_EN: Record<string, TermEn> = {
   },
   madness: {
     name: "Madness",
-    desc: "At the start of the next round of the feeding phase the owner removes the mark from one of their animals. A bot controls their animals for that round; the neighbor does not participate — control by the right-hand neighbor is not yet implemented in the online version.",
+    desc: "At the start of the next round of the feeding phase the owner removes the mark from one of their animals, then the neighbor on the right plays that round instead of them — commanding their animals without seeing their hand.",
   },
   rage: {
     name: "Rage",

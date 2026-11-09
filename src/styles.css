@@ -322,6 +322,25 @@
   background-blend-mode: normal, normal, soft-light, normal;
 }
 
+/* ── Аватары и рубашки: скины рубашки карт (каталог cosmetics.ts) ───────
+   База .cardback-chip кладёт текстуру card-back.jpg; скины перекрашивают
+   подложку через background-blend. Классика — родная рубашка без тона. */
+.cardback-chip {
+  background-image: url("/img/meta/card-back.jpg");
+  background-size: cover;
+  background-position: center;
+}
+.cardback-skin-malachite {
+  background-color: #1d5c44;
+  background-blend-mode: luminosity;
+  box-shadow: inset 0 0 0 1px #0e3d2c;
+}
+.cardback-skin-crimson {
+  background-color: #6d1a1a;
+  background-blend-mode: luminosity;
+  box-shadow: inset 0 0 0 1px #41100f;
+}
+
 /* ── Волна 1: моментная библиотека (дизайн-пакет §2) ─────────────────── */
 
 /* Режим анимаций (дизайн-пакет §2.3): data-anim на <html> ставит game-store

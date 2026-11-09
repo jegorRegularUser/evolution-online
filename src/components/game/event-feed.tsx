@@ -1,6 +1,7 @@
 import { ArrowDown, ChevronLeft, ChevronRight, Dices, Send, SmilePlus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
+import { AvatarChip } from "./avatar";
 import { REACTION_EMOJI, type ReactionEmoji, type ReactionMessage } from "@/lib/net/shared";
 import { useGameStore, type ReactionFailure } from "@/store/game-store";
 import { translate, useLang, useT, type Lang } from "@/lib/i18n";
@@ -28,6 +29,8 @@ export interface FeedItem {
   playerName?: string;
   /** CSS-цвет игрока (опционально). */
   color?: string;
+  /** Ключ аватара автора (sci.* / item_id каталога): чип перед именем. */
+  avatar?: string;
   /** Время события в миллисекундах. */
   at?: number;
   /** Место автора в сетевом столе: 0..7 — игроки, -1 — ожидающие, -2 — зрители.
@@ -485,6 +488,13 @@ function FeedRow({
           ) : null}
           {!grouped && item.playerName ? (
             <span className="font-medium" style={item.color ? { color: item.color } : undefined}>
+              {item.avatar ? (
+                <AvatarChip
+                  avatarKey={item.avatar}
+                  name={item.playerName}
+                  className="mr-1 inline-block size-4 align-[-3px]"
+                />
+              ) : null}
               {item.playerName}
               {isChat ? ": " : " — "}
             </span>

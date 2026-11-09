@@ -12,7 +12,6 @@ import {
   AI_NAMES,
   applyAction,
   createGame,
-  currentActor,
   legalDefenseActions,
   legalDevActions,
   legalFeedActions,
@@ -36,6 +35,7 @@ import type {
   GameEvent,
   GameState,
   ModuleId,
+  Player,
 } from "../../game/types.ts";
 import type {
   ChatMessage,
@@ -58,6 +58,7 @@ import type {
   WaiterInfo,
 } from "./shared.ts";
 import { PLAYER_COLORS, PACE, ROOM_PASSWORD_LEN, CODE_ALPHABET, colorForSeat } from "./shared.ts";
+import { defaultAvatarForSeat, defaultItemForSlot, cosmeticById, isScientistAvatarKey } from "../cosmetics.ts";
 import { redactEvents, viewFor } from "./views.ts";
 
 /**
@@ -103,6 +104,10 @@ export type NetErrorCode =
   | "color-taken"
   | "color-seat"
   | "bot-color"
+  | "bad-cosmetics"
+  | "cosmetics-not-owned"
+  | "cosmetics-seat"
+  | "bot-cosmetics"
   | "host-human"
   | "waiter-gone"
   | "no-free-seats"
@@ -206,6 +211,10 @@ interface SeatRow {
   typing_at: unknown;
   /** Цвет места (hex из PLAYER_COLORS); null у строк до миграции 0007. */
   color: string | null;
+  /** Аватар места («sci.*» / item_id каталога); null — дефолт по имени. */
+  avatar: string | null;
+  /** Рубашка карт места (item_id каталога); null — классика слота. */
+  cardback: string | null;
   /** Внутреннее поле: нужно для evo_kicks. Наружу не отдаётся (seatsInfo и т.п.). */
   token: string;
 }
@@ -446,7 +455,7 @@ async function readRoom(sql: SqlLike, code: string): Promise<RoomRow | null> {
 
 async function readSeats(sql: SqlLike, code: string): Promise<SeatRow[]> {
   return sql.query<SeatRow>(
-    `select seat, name, is_ai, resigned, last_seen_at, typing_at, color, token
+    `select seat, name, is_ai, resigned, last_seen_at, typing_at, color, avatar, cardback, token
        from evo_seats where room_code = $1 order by seat`,
     [code],
   );
@@ -523,6 +532,11 @@ function seatsInfo(seats: SeatRow[], now: () => number): SeatInfo[] {
       resigned: s.resigned,
       // Старые строки без цвета получают детерминированный из палитры.
       color: colorForSeat(s.seat, s.color),
+      // Аватар: пустое место получает дефолт — боту портрет его учёного,
+      // человеку детерминированный по имени («по умолчанию разные»).
+      avatar: s.avatar ?? defaultAvatarForSeat(s.name, s.is_ai),
+      // Рубашка: пусто — бесплатная классика слота.
+      cardback: s.cardback ?? defaultItemForSlot("cardback")?.id ?? "cardback.classic",
       typing: now() - toMs(s.typing_at) < TYPING_FRESH_MS,
     };
   });
@@ -856,7 +870,20 @@ async function janitor(sql: SqlLike): Promise<void> {
 // endTurnStepFor / noChoicesLeft / nextAutoStep переехали в чистый модуль
 // src/game/auto-step.ts: тот же автопилот нужен локальному хосту кампании,
 // а чистым функциям место не в сетевом серверном модуле. Здесь —
-// реэкспорт для совместимости (server.test.ts и внешний код).
+// реэкспорт для совместимости (server.test.ts и внешний код). Ветка безумия
+// (контролёр раунда, madPick, AFK-бешенство) живёт в самом auto-step.ts.
+
+/**
+ * Кто реально действует сейчас: жертва защиты, контролёр раунда безумия
+ * («Безумная шляпка») или текущий игрок. Для дедлайнов и подсказок хода.
+ */
+function actingActor(state: GameState): Player | null {
+  if (state.phase === "gameOver") return null;
+  if (state.pendingAttack) return state.players[state.pendingAttack.waitingFor] ?? null;
+  if (state.phase === "foodBank" || state.phase === "extinction" || state.phase === "growth") return null;
+  const id = state.madController ?? state.currentPlayerId;
+  return state.players[id] ?? null;
+}
 
 /**
  * Дедлайн текущего хода человека (epoch ms): idleTurnMs для хода без
@@ -864,7 +891,7 @@ async function janitor(sql: SqlLike): Promise<void> {
  */
 function turnDeadlineOf(room: RoomRow): number | null {
   if (room.status !== "playing" || !room.state || room.turn_deadline_at === null) return null;
-  const actor = currentActor(room.state);
+  const actor = actingActor(room.state);
   if (!actor || actor.isAI || actor.resigned) return null;
   return toMs(room.turn_deadline_at);
 }
@@ -877,7 +904,7 @@ function turnDeadlineOf(room: RoomRow): number | null {
  */
 function botStepAtOf(room: RoomRow): number | null {
   if (room.status !== "playing" || !room.state || room.auto_step_at === null) return null;
-  const actor = currentActor(room.state);
+  const actor = actingActor(room.state);
   if (!actor || !actor.isAI) return null;
   return toMs(room.auto_step_at);
 }
@@ -901,7 +928,8 @@ export function turnTimeoutMs(settings: RoomSettings | null | undefined, idle: b
 
 // Реэкспорт чистого автопилота: следующая самостоятельная шага сервера
 // (боты/автофазы). Тело живёт в src/game/auto-step.ts — там же его берёт
-// локальный хост кампании.
+// локальный хост кампании. Ветки безумия (контролёр, madPick, бешенство)
+// внутри auto-step.ts.
 import { endTurnStepFor, noChoicesLeft, nextAutoStep } from "../../game/auto-step.ts";
 export { endTurnStepFor, noChoicesLeft, nextAutoStep };
 
@@ -1017,6 +1045,17 @@ export interface RoomService {
   setPassword(code: string, token: string, password: string): Promise<{ password: string }>;
   /** Своё имя на столе: цвет — из PLAYER_COLORS, пока идёт лобби. */
   setColor(code: string, token: string, color: string): Promise<{ color: string }>;
+  /**
+   * Косметика своего места (аватар/рубашка): до старта партии, не ботам.
+   * owned — item_id, которыми вызывающий владеет (проверка собственности —
+   * в server-функции api.ts по профилю; сервис остаётся без контекста auth).
+   */
+  setSeatCosmetics(
+    code: string,
+    token: string,
+    patch: { avatar?: string | null; cardback?: string | null },
+    owned: string[],
+  ): Promise<{ avatar: string; cardback: string }>;
   transferHost(code: string, token: string, seat: number): Promise<void>;
   /** Убрать ожидающего по индексу в очереди (см. RoomInfo.waiters). */
   kickWaiter(code: string, token: string, index: number): Promise<void>;
@@ -1507,13 +1546,14 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       const before = room.state;
       const step = nextAutoStep(before);
       if (!step) {
-        // Ход человека: «ход» — полный ход игрока в текущей фазе. Паузу до
-        // авто-конца задаёт настройка стола «Таймер хода» (turnTimerMs);
-        // у столов без ключа — прежние idleTurnMs/afkTurnMs. «Выкл» (0)
-        // означает: сервер ход не заканчивает вовсе — игрок завершает его сам.
-        // Оба значения абсолютны и не зависят от интервала поллинга; watchdog
-        // держит их даже без браузера.
-        const actor = currentActor(before);
+        // Ход человека: «ход» — полный ход игрока в текущей фазе. В раунде
+        // безумия актор — контролёр (сосед справа), его и ждём по дедлайну.
+        // Паузу до авто-конца задаёт настройка стола «Таймер хода»
+        // (turnTimerMs); у столов без ключа — прежние idleTurnMs/afkTurnMs.
+        // «Выкл» (0) означает: сервер ход не заканчивает вовсе — игрок
+        // завершает его сам. Оба значения абсолютны и не зависят от интервала
+        // поллинга; watchdog держит их даже без браузера.
+        const actor = actingActor(before);
         if (!actor) return;
         const idle = noChoicesLeft(before, actor);
         const timeoutMs = turnTimeoutMs(room.settings, idle);
@@ -2186,6 +2226,79 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       return { color };
     },
 
+    async setSeatCosmetics(code, token, patch, owned) {
+      const room = await requireRoom(code);
+      const rows = await sql.query<{
+        seat: number;
+        name: string;
+        is_ai: boolean;
+        avatar: string | null;
+        cardback: string | null;
+      }>(`select seat, name, is_ai, avatar, cardback from evo_seats where room_code = $1 and token = $2`, [
+        code,
+        token,
+      ]);
+      const me = rows[0];
+      // Косметика — свойство места: у ожидающего в очереди и зрителя места нет.
+      if (!me) {
+        const waiter = await sql.query(`select 1 from evo_waiters where room_code = $1 and token = $2`, [
+          code,
+          token,
+        ]);
+        if (waiter.length) {
+          throw new NetError("Косметику места выбирают за столом, а не в очереди", "cosmetics-seat");
+        }
+        return goneReason(code, token);
+      }
+      if (me.is_ai) throw new NetError("Ботам аватар назначает стол — портрет его учёного", "bot-cosmetics");
+      if (room.status !== "lobby") throw new NetError("Косметику места меняют до начала партии", "lobby-only");
+
+      // Владение платными предметами уже проверено вызывающим (api.ts по
+      // профилю); здесь — белые списки формы и слота.
+      const ownedSet = new Set(owned);
+      const next = { avatar: me.avatar, cardback: me.cardback };
+      if (patch.avatar !== undefined) {
+        if (patch.avatar === null) {
+          next.avatar = null;
+        } else if (isScientistAvatarKey(patch.avatar)) {
+          next.avatar = patch.avatar; // учёные бесплатны для всех
+        } else {
+          const item = cosmeticById(patch.avatar);
+          if (!item || item.slot !== "avatar") {
+            throw new NetError("Такого аватара нет", "bad-cosmetics");
+          }
+          if (item.price > 0 && !ownedSet.has(item.id)) {
+            throw new NetError("Этот аватар не куплен", "cosmetics-not-owned");
+          }
+          next.avatar = item.id;
+        }
+      }
+      if (patch.cardback !== undefined) {
+        if (patch.cardback === null) {
+          next.cardback = null;
+        } else {
+          const item = cosmeticById(patch.cardback);
+          if (!item || item.slot !== "cardback") {
+            throw new NetError("Такой рубашки нет", "bad-cosmetics");
+          }
+          if (item.price > 0 && !ownedSet.has(item.id)) {
+            throw new NetError("Эта рубашка не куплена", "cosmetics-not-owned");
+          }
+          next.cardback = item.id;
+        }
+      }
+      await sql.query(`update evo_seats set avatar = $3, cardback = $4 where room_code = $1 and seat = $2`, [
+        code,
+        me.seat,
+        next.avatar,
+        next.cardback,
+      ]);
+      return {
+        avatar: next.avatar ?? defaultAvatarForSeat(me.name, me.is_ai),
+        cardback: next.cardback ?? defaultItemForSlot("cardback")?.id ?? "cardback.classic",
+      };
+    },
+
     async transferHost(code, token, seatNo) {
       const { room, seats } = await requireHost(code, token, "Передавать хоста может только хост", "host-only");
       if (room.status !== "lobby") throw new NetError("Хоста передают до начала партии", "lobby-only");
@@ -2816,6 +2929,7 @@ const SERVICE_METHODS = [
   "replaceWithBot",
   "setName",
   "setColor",
+  "setSeatCosmetics",
   "setRoomPrivacy",
   "setPassword",
   "poll",
@@ -2880,6 +2994,9 @@ create table if not exists evo_seats (
 );
 alter table evo_seats add column if not exists resigned boolean not null default false;
 alter table evo_seats add column if not exists color text;
+-- Косметика места (миграция 0015): аватар и рубашка — селектятся в каждом кадре.
+alter table evo_seats add column if not exists avatar text;
+alter table evo_seats add column if not exists cardback text;
 alter table evo_rooms add column if not exists modules jsonb not null default '{}';
 alter table evo_rooms add column if not exists host_seat int;
 alter table evo_rooms add column if not exists settings jsonb not null default '{}';

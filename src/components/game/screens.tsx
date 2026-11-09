@@ -23,6 +23,8 @@ import { CONTINENTS_TRAIT_IDS, FUNGI_TRAIT_IDS, MUTATIONS_TRAIT_IDS, PLANTS_TRAI
 import { TERRITORIES } from "@/game/types";
 import type { FloraKind, MarkKind, ModuleId, MutatorId, PlantKind, ScoreBreakdown, TerritoryId, TraitId } from "@/game/types";
 import type { CosmeticSlot } from "@/lib/profile/shared";
+import { AvatarChip, CardBackChip } from "./avatar";
+import { defaultAvatarForSeat } from "@/lib/cosmetics";
 import { CHALLENGES } from "@/game/challenges";
 import { COSMETIC_ITEMS, cosmeticById, type CosmeticItem } from "@/lib/cosmetics";
 import { CAMPAIGN_ERAS } from "@/game/campaign";
@@ -1327,6 +1329,14 @@ function ScoreRow({
 }) {
   const tt = useT();
   const lang = useLang();
+  // Аватар строки финала: в сети — с места, в соло — дефолт по имени
+  // (ботам — портрет их учёного). playerId -1 — это флора, аватара нет.
+  const netSeats = useGameStore((s) => s.net?.seats);
+  const isAI = useGameStore((s) => Boolean(s.state?.players[row.playerId]?.isAI));
+  const avatar =
+    row.playerId >= 0
+      ? netSeats?.find((x) => x.seat === row.playerId)?.avatar ?? defaultAvatarForSeat(row.name, isAI)
+      : undefined;
   const labels = sourceLabels(row, lang);
   const parts: Array<{ key: "animals" | "traits" | "extras"; label: string; value: number; hint: string }> = [
     { key: "animals", label: labels.animals, value: row.animals, hint: labels.animalsHint },
@@ -1347,8 +1357,9 @@ function ScoreRow({
       )}
     >
       <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate font-medium">
+        <div className="flex min-w-0 items-center gap-2">
+          {avatar ? <AvatarChip avatarKey={avatar} name={scoreRowName(row, lang)} className="size-7 shrink-0" /> : null}
+          <p className="min-w-0 truncate font-medium">
             {place}. {scoreRowName(row, lang)}
           </p>
           {winner ? <p className="mt-0.5 text-[10px] uppercase tracking-wide text-accent">{tt("final.best")}</p> : null}
@@ -1768,7 +1779,7 @@ export function ShopContent() {
   };
 
   const previewItem = previewId ? cosmeticById(previewId) : undefined;
-  const slots: CosmeticSlot[] = ["felt", "dice"];
+  const slots: CosmeticSlot[] = ["felt", "dice", "cardback", "avatar"];
   return (
     <>
       {/* Заголовок страницы; счётчик ископаемых — справа от названия. */}
@@ -1793,7 +1804,7 @@ export function ShopContent() {
         return (
           <section key={slot} className="mb-7">
             <h3 className="mb-2 text-xs uppercase tracking-[0.18em] text-muted">
-              {tt(slot === "felt" ? "shop.slot.felt" : "shop.slot.dice")}
+              {tt(`shop.slot.${slot}` as never)}
             </h3>
             <div className="grid items-start gap-3 sm:grid-cols-2">
               {COSMETIC_ITEMS.filter((item) => item.slot === slot).map((item) => (
@@ -1830,6 +1841,13 @@ const SHOP_ITEM_DESC_KEYS: Record<string, TKey> = {
   "dice.bone": "shop.desc.dice.bone",
   "dice.amber": "shop.desc.dice.amber",
   "dice.obsidian": "shop.desc.dice.obsidian",
+  "cardback.classic": "shop.desc.cardback.classic",
+  "cardback.malachite": "shop.desc.cardback.malachite",
+  "cardback.crimson": "shop.desc.cardback.crimson",
+  "avatar.aquatic": "shop.desc.avatar.aquatic",
+  "avatar.herbLarge": "shop.desc.avatar.herbLarge",
+  "avatar.carnMedium": "shop.desc.avatar.carnMedium",
+  "avatar.carnLarge": "shop.desc.avatar.carnLarge",
 };
 
 /**
@@ -1873,6 +1891,27 @@ function ShopItemCard({
       <div className="relative aspect-[16/10] w-full border-b border-ink/10">
         {item.slot === "felt" ? (
           <span aria-hidden className={cn("absolute inset-0", item.cssClass)} />
+        ) : item.slot === "cardback" ? (
+          // Рубашка: веер из трёх карт со скином поверх классической текстуры.
+          <span aria-hidden className="felt absolute inset-0">
+            <span className="absolute inset-0 flex items-center justify-center gap-1">
+              <CardBackChip itemId={item.id} className="h-20 w-14 -rotate-6" />
+              <CardBackChip itemId={item.id} className="h-24 w-[68px]" />
+              <CardBackChip itemId={item.id} className="h-20 w-14 rotate-6" />
+            </span>
+          </span>
+        ) : item.slot === "avatar" ? (
+          // Аватар-существо: круглый портрет на сукне, как за столом.
+          <span aria-hidden className="felt absolute inset-0">
+            <span className="absolute inset-0 flex items-center justify-center">
+              <img
+                src={item.imageSrc}
+                alt=""
+                loading="lazy"
+                className="size-24 rounded-full border-2 border-ink/30 object-cover shadow-[var(--shadow-card)]"
+              />
+            </span>
+          </span>
         ) : (
           <>
             <span aria-hidden className="felt absolute inset-0" />
@@ -1982,13 +2021,21 @@ function ShopPreview({ item, onClose }: { item: CosmeticItem; onClose: () => voi
             isFelt && item.cssClass,
           )}
         >
-          {/* Образцы со стола: карта в руке и карточка свойства читаются на любом сукне. */}
-          <img
-            src={BG.cardBack}
-            alt=""
-            aria-hidden
-            className="aspect-[2/3] w-16 rounded-[var(--radius-sm)] border border-ink/40 object-cover shadow-md sm:w-20"
-          />
+          {/* Образцы со стола: карта в руке и карточка свойства читаются на любом сукне.
+              Для рубашки классический образец заменяется веером со скином. */}
+          {item.slot === "cardback" ? (
+            <>
+              <CardBackChip itemId={item.id} className="aspect-[2/3] w-16 rounded-[var(--radius-sm)] border border-ink/40 shadow-md sm:w-20" />
+              <CardBackChip itemId={item.id} className="aspect-[2/3] w-14 rotate-6 rounded-[var(--radius-sm)] border border-ink/40 shadow-md sm:w-16" />
+            </>
+          ) : (
+            <img
+              src={BG.cardBack}
+              alt=""
+              aria-hidden
+              className="aspect-[2/3] w-16 rounded-[var(--radius-sm)] border border-ink/40 object-cover shadow-md sm:w-20"
+            />
+          )}
           <img
             src={TRAIT_ART.carnivore!}
             alt=""

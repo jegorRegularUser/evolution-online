@@ -704,10 +704,24 @@ export interface GameState {
    */
   marksPool?: Partial<Record<MarkKind, number>>;
   /**
-   * «Трава и грибы»: раунд этого игрока вместо него проводит сосед справа —
-   * в онлайн-версии ход играется логикой ботов (руку сосед не видит).
+   * «Трава и грибы»: раунд этого игрока вместо него проводит сосед справа
+   * (madController) — по правилам «Безумной шляпки», руку безумца сосед не видит.
    */
   madTurn?: number;
+  /** Кто реально распоряжается раундом безумца — сосед справа. undefined — обычный ход. */
+  madController?: number;
+  /** Ожидание выбора владельцем животного, с которого снимается «Безумие» (меток 2+). */
+  madPick?: boolean;
+  /**
+   * «Гриб прозрения»: разовый подгляд после сброса руки. target undefined —
+   * цель ещё не выбрана (право можно и не использовать до конца раунда).
+   */
+  peek?: { viewerId: number; target?: PeekTarget } | null;
+  /**
+   * Только в персональном виде (views.ts) и соло-клиенте: содержание
+   * подгляда для сидящего за экраном. В полном состоянии движком не заполняется.
+   */
+  peekContent?: PeekContent;
   /** «Трава и грибы»: обязательная атака бешеного животного в текущем ходу. */
   rageTurn?: { animalId: string } | null;
   /**
@@ -719,6 +733,23 @@ export interface GameState {
 
 export type Difficulty = "easy" | "normal" | "hard";
 export type GameSpeed = "slow" | "normal" | "fast";
+
+/**
+ * Цель разового подгляда «Гриба прозрения»: рука одного соперника, верхняя
+ * карта любой колоды (общая / флоры / личная слепая) или животное целиком
+ * (включая его скрытые свойства).
+ */
+export type PeekTarget =
+  | { kind: "hand"; playerId: number }
+  | { kind: "deckTop"; deck: "deck" | "floraDeck" | "blind"; playerId?: number }
+  | { kind: "animal"; animalId: string };
+
+/** Содержание подгляда: собирается только для смотрящего (views.ts / соло). */
+export type PeekContent =
+  | { kind: "hand"; playerId: number; cards: Card[] }
+  | { kind: "card"; card: Card }
+  | { kind: "floraCard"; flora: FloraKind }
+  | { kind: "animal"; animal: Animal };
 
 export type GameAction =
   | { type: "devPlayAnimal"; cardId: string; /** «Континенты»: континент размещения (не океан). */ zoneId?: TerritoryId }
@@ -793,6 +824,16 @@ export type GameAction =
       type: "renameAnimal";
       animalId: string;
       name: string;
+    }
+  | {
+      /** «Трава и грибы»: владелец снимает метку «Безумие» с выбранного животного (меток 2+). */
+      type: "chooseMadMark";
+      animalId: string;
+    }
+  | {
+      /** «Гриб прозрения»: зафиксировать цель разового подгляда. */
+      type: "choosePeek";
+      target: PeekTarget;
     }
   | {
       type: "chooseDefense";

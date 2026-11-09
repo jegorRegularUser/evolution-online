@@ -96,6 +96,17 @@ export interface SeatInfo {
   /** CSS-цвет места (hex): публичный, клиент красит имена и чат. */
   color: string;
   /**
+   * Аватар места: «sci.<учёный>» или item_id каталога avatar.*. Пустым не
+   * бывает — сервер подставляет дефолт (боту — его учёного, человеку — по
+   * хэшу имени). Публичный: виден всем за столом и в чате.
+   */
+  avatar: string;
+  /**
+   * Рубашка карт места (item_id каталога cardback.*): видна соперникам на
+   * мини-строке руки. Пусто — классика слота.
+   */
+  cardback: string;
+  /**
    * Свежая отметка набора текста (netTyping, окно ~4 с): клиент поллингом
    * сам показывает «печатает…» без отдельного канала. Публично, как online.
    */
@@ -587,6 +598,16 @@ export const setPasswordInput = codeTokenInput.extend({
 });
 /** Смена цвета своего места — только из палитры PLAYER_COLORS. */
 export const setColorInput = codeTokenInput.extend({ color: z.enum(PLAYER_COLORS) });
+/**
+ * Косметика своего места: avatar — «sci.<учёный>» или item_id каталога
+ * avatar.*; cardback — item_id каталога cardback.*. null — вернуть дефолт.
+ * Владение платными предметами проверяет серверный вызов (по профилю), здесь
+ * только форма.
+ */
+export const setCosmeticsInput = codeTokenInput.extend({
+  avatar: z.string().trim().max(64).nullable().optional(),
+  cardback: z.string().trim().max(64).nullable().optional(),
+});
 /** Пустой валидатор листинга: createServerFn требует схему даже без полей. */
 export const listRoomsInput = z.object({});
 export const transferHostInput = codeTokenInput.extend({ seat: z.number().int().min(0).max(7) });

@@ -37,6 +37,7 @@ import type {
   WaiterInfo,
 } from "@/lib/net/shared";
 import { colorForSeat } from "@/lib/net/shared";
+import { defaultAvatarForSeat } from "@/lib/cosmetics";
 
 export type UiIntent =
   | { kind: "none" }
@@ -523,6 +524,8 @@ interface GameStore {
   netSetPassword: (password: string) => Promise<{ ok: boolean; error?: string }>;
   /** Смена цвета своего места в лобби (цвет из PLAYER_COLORS). */
   netSetColor: (color: PlayerColor) => Promise<void>;
+  /** Косметика своего места (аватар/рубашка, только лобби); null — дефолт. */
+  netSetCosmetics: (patch: { avatar?: string | null; cardback?: string | null }) => Promise<void>;
   netTransferHost: (seat: number) => Promise<void>;
   /** Убрать ожидающего по индексу в очереди. */
   netKickWaiter: (index: number) => Promise<void>;
@@ -603,7 +606,7 @@ function campaignNetShim(run: CampaignRun, name: string): NetUiState {
       ...(b?.wildWorld ? { wildWorld: true } : {}),
     },
     seats: [
-      { seat: 0, name, isAI: false, online: true, disconnected: false, resigned: false, color: colorForSeat(0), typing: false },
+      { seat: 0, name, isAI: false, online: true, disconnected: false, resigned: false, color: colorForSeat(0), avatar: defaultAvatarForSeat(name, false), cardback: "cardback.classic", typing: false },
       {
         seat: 1,
         name: b ? t(b.nameKey) : "Evo",
@@ -612,6 +615,8 @@ function campaignNetShim(run: CampaignRun, name: string): NetUiState {
         disconnected: false,
         resigned: false,
         color: colorForSeat(1),
+        avatar: defaultAvatarForSeat(b ? t(b.nameKey) : "Evo", true),
+        cardback: "cardback.classic",
         typing: false,
       },
     ],
@@ -1392,6 +1397,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
     try {
       await s.setColor(color);
       // Свежие места придут первым же кадром после refresh() в NetSession.
+    } catch (e) {
+      const cur = get().net;
+      const { text, code } = caughtNetError(e);
+      if (cur) set({ net: { ...cur, error: text, errorCode: code } });
+    }
+  },
+
+  netSetCosmetics: async (patch) => {
+    const s = netSession;
+    if (!s) return;
+    try {
+      await s.setSeatCosmetics(patch);
     } catch (e) {
       const cur = get().net;
       const { text, code } = caughtNetError(e);

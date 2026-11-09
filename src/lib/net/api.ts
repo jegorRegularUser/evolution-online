@@ -21,6 +21,7 @@ import {
   reactionInput,
   replaceWithBotInput,
   roomInfoInput,
+  setCosmeticsInput,
   setColorInput,
   setPasswordInput,
   setRoomPrivacyInput,
@@ -32,6 +33,9 @@ import {
   typingInput,
 } from "./shared";
 import { getRoomService, NetError } from "./server";
+import { authMiddleware } from "../auth/middleware";
+import { getSql } from "../db";
+import { createProfileService } from "../profile/service.server";
 
 /**
  * Похоже ли это на NetError. instanceof в dev ненадёжен: serverFn собирается
@@ -259,6 +263,35 @@ export const netSetColor = createServerFn({ method: "POST" })
     try {
       const s = await getRoomService();
       return { ok: true as const, ...(await s.setColor(data.code, data.token, data.color)) };
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+/**
+ * Косметика своего места (аватар/рубашка). Владение платными предметами
+ * проверяется ЗДЕСЬ по профилю вызывающего (authMiddleware с dev-фолбэком
+ * 'dev-user'); room-сервис остаётся без контекста auth и принимает готовый
+ * белый список. Учёные (sci.*) и бесплатная классика слота доступны всем.
+ */
+export const netSetCosmetics = createServerFn({ method: "POST" })
+  .middleware([sameSiteGuard, authMiddleware])
+  .validator(setCosmeticsInput)
+  .handler(async ({ data, context }) => {
+    try {
+      const s = await getRoomService();
+      const patch: { avatar?: string | null; cardback?: string | null } = {};
+      if (data.avatar !== undefined) patch.avatar = data.avatar;
+      if (data.cardback !== undefined) patch.cardback = data.cardback;
+      if (!("avatar" in patch) && !("cardback" in patch)) {
+        return { ok: true as const, avatar: "", cardback: "" };
+      }
+      let owned: string[] = [];
+      if ("cardback" in patch || ("avatar" in patch && !String(patch.avatar ?? "").startsWith("sci."))) {
+        const profile = createProfileService(await getSql());
+        owned = (await profile.getProfile(context.userId)).owned.map((o) => o.itemId);
+      }
+      return { ok: true as const, ...(await s.setSeatCosmetics(data.code, data.token, patch, owned)) };
     } catch (e) {
       return fail(e);
     }
