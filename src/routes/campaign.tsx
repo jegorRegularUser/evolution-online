@@ -4,10 +4,10 @@ import { CampaignContent, FeaturePage } from "@/components/game/screens";
 export const Route = createFileRoute("/campaign")({ component: CampaignPage });
 
 /**
- * /campaign — кампания «Эры» как страница (раньше была модалкой меню).
- * Каркас — FeaturePage: фон и шапка меню + кнопка «Назад». Успешный старт
- * миссии уводит в меню (/): сетевую сессию подхватывает GameApp и открывает
- * лобби — ровно то, что раньше делало закрытие модалки.
+ * /campaign — кампания-рогалик как страница (фундамент: забег за эпоху
+ * вместо списка миссий). Каркас — FeaturePage. Успешный старт забега уводит
+ * в меню (/): локальную партию подхватывает GameApp и открывает стол без
+ * лобби — кампания живёт на чистом движке, без серверных комнат.
  */
 function CampaignPage() {
   const navigate = useNavigate();

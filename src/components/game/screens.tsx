@@ -25,7 +25,8 @@ import type { FloraKind, MarkKind, ModuleId, MutatorId, PlantKind, ScoreBreakdow
 import type { CosmeticSlot } from "@/lib/profile/shared";
 import { CHALLENGES } from "@/game/challenges";
 import { COSMETIC_ITEMS, cosmeticById, type CosmeticItem } from "@/lib/cosmetics";
-import { CAMPAIGN_ERAS, CAMPAIGN_MISSIONS, type CampaignMissionId } from "@/game/campaign";
+import { CAMPAIGN_ERAS } from "@/game/campaign";
+import type { RunReward } from "@/game/campaign-run";
 import { flushPendingSpecimens, type BestiariumEntry } from "@/game/bestiarium";
 import { challengesGet, cosmeticsBuy, cosmeticsEquip, profileGet } from "@/lib/profile/api";
 import { sfx } from "@/lib/sfx";
@@ -2071,98 +2072,171 @@ function traitTitleKey(t: TraitId): TKey {
  * (FeaturePage). После успешного старта миссии вызывается onStarted —
  * страница уводит в меню, где лобби партии открывает GameApp.
  */
+/**
+ * Страница кампании (фундамент рогалик-переработки «Эр»): путь эпохи вместо
+ * списка миссий. Забег — локальная партия на чистом движке, вход свободный
+ * (ни профиля, ни пройденных уровней), проигрыш не отнимает ничего вне
+ * забега. Текущий узел: бой → «В бой», награда → выбор усиления.
+ */
 export function CampaignContent({ onStarted }: { onStarted?: () => void }) {
   const tt = useT();
-  const name = "Evo";
-  const progress = useGameStore((s) => s.campaignProgress);
-  const startCampaign = useGameStore((s) => s.startCampaign);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const start = async (id: CampaignMissionId, hard: boolean) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await startCampaign(id, hard, name);
-      onStarted?.();
-    } catch {
-      setError(tt("tutorial.startError"));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const run = useGameStore((s) => s.campaignRun);
+  const startCampaignRun = useGameStore((s) => s.startCampaignRun);
+  const continueCampaignRun = useGameStore((s) => s.continueCampaignRun);
+  const campaignStartBattle = useGameStore((s) => s.campaignStartBattle);
+  const campaignApplyReward = useGameStore((s) => s.campaignApplyReward);
+  const abandonCampaignRun = useGameStore((s) => s.abandonCampaignRun);
+
+  const header = (
+    <header className="mb-4">
+      <h1 className="font-display text-2xl tracking-[0.08em] text-fg sm:text-3xl">{tt("campaign.title")}</h1>
+      <p className="mt-1 text-xs text-muted">{tt("campaign.run.subtitle")}</p>
+    </header>
+  );
+
+  // Нет активного забега (или он завершён): выбор эпохи — все открыты.
+  if (!run || run.status !== "active") {
+    const finished = run && (run.status === "won" || run.status === "lost");
+    return (
+      <>
+        {header}
+        {finished ? (
+          <div
+            className={cn(
+              "mb-4 rounded-[var(--radius-md)] border p-3",
+              run.status === "won" ? "border-good/45 bg-good/10" : "border-border bg-bg/60",
+            )}
+          >
+            <p className="text-sm font-medium text-fg">
+              {tt(run.status === "won" ? "campaign.run.wonTitle" : "campaign.run.lostTitle")}
+            </p>
+            <p className="mt-1 text-xs leading-snug text-muted">
+              {tt(run.status === "won" ? "campaign.run.wonText" : "campaign.run.lostText")}
+            </p>
+          </div>
+        ) : null}
+        <div className="grid gap-2">
+          {CAMPAIGN_ERAS.map((era) => (
+            <div
+              key={era.id}
+              className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 rounded-[var(--radius-md)] border border-border bg-bg/60 p-3"
+            >
+              <p className="text-sm text-fg">{tt(era.titleKey)}</p>
+              <Button
+                size="sm"
+                onClick={() => {
+                  startCampaignRun(era.id, "Evo");
+                  onStarted?.();
+                }}
+              >
+                {tt("campaign.run.new")}
+              </Button>
+            </div>
+          ))}
+        </div>
+      </>
+    );
+  }
+
+  // Активный забег: путь эпохи + действие текущего узла.
+  const nodes = Object.values(run.nodes);
+  const node = run.nodes[run.currentNodeId];
+  const total = nodes.length;
   return (
     <>
-      <header className="mb-4">
-        <h1 className="font-display text-2xl tracking-[0.08em] text-fg sm:text-3xl">{tt("campaign.title")}</h1>
-        <p className="mt-1 text-xs text-muted">{tt("campaign.subtitle")}</p>
-      </header>
-      {error ? (
-        <p role="alert" className="mb-3 rounded-[var(--radius-sm)] border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-clay">{error}</p>
-      ) : null}
-      {CAMPAIGN_ERAS.map((era) => {
-        const missions = Object.values(CAMPAIGN_MISSIONS).filter((m) => m.era === era.id);
-        return (
-          <section key={era.id} className="mb-5">
-            <h3 className="mb-2 font-display text-sm uppercase tracking-[0.18em] text-muted">{tt(era.titleKey)}</h3>
-            <div className="grid gap-2">
-              {missions.map((m) => {
-                const done = progress.done.includes(m.id);
-                const hardDone = progress.hard.includes(m.id);
-                // Лесенка (§4.1А): миссия открыта, если выполнена предыдущая
-                // миссия ЭТОЙ ЖЕ эпохи (первая миссия эпохи — всегда открыта).
-                const eraMissions = Object.values(CAMPAIGN_MISSIONS).filter((x) => x.era === m.era);
-                const index = eraMissions.findIndex((x) => x.id === m.id);
-                const prevDone =
-                  index <= 0 ||
-                  progress.done.includes(eraMissions[index - 1]!.id) ||
-                  done;
-                return (
-                  <div
-                    key={m.id}
-                    className={cn(
-                      "rounded-[var(--radius-md)] border p-3",
-                      done ? "border-good/45 bg-good/10" : "border-border bg-bg/60",
-                    )}
-                  >
-                    {/* flex-wrap: на телефоне кнопки переносятся под название —
-                        nowrap-кнопка «Пройди предыдущую миссию» иначе распирает
-                        карточку и даёт странице горизонтальный скролл. */}
-                    <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
-                      <p className="flex min-w-0 items-center gap-2 text-sm text-fg">
-                        {done ? <CheckCircle2 className="size-4 shrink-0 text-good" aria-hidden /> : null}
-                        <span className="truncate">{tt(m.titleKey)}</span>
-                        {m.boss ? (
-                          <span className="inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] border border-danger/40 bg-danger/10 px-1.5 py-0.5 text-[10px] text-clay">
-                            {m.boss.scenario.doubleHunt ? <Swords className="size-3" aria-hidden /> : <Lock className="size-3" aria-hidden />}
-                            {tt(m.boss.nameKey)}
-                          </span>
-                        ) : null}
-                      </p>
-                      <div className="flex shrink-0 gap-1.5">
-                        <Button
-                          variant={done ? "secondary" : "default"}
-                          size="sm"
-                          disabled={busy || !prevDone}
-                          title={prevDone ? undefined : tt("campaign.locked")}
-                          onClick={() => start(m.id, false)}
-                        >
-                          {prevDone ? tt("campaign.start") : tt("campaign.locked")}
-                        </Button>
-                        {done ? (
-                          <Button variant="secondary" size="sm" disabled={busy} onClick={() => start(m.id, true)}>
-                            {hardDone ? tt("campaign.hard.done") : tt("campaign.hard")}
-                          </Button>
-                        ) : null}
-                      </div>
-                    </div>
-                    <p className="mt-1.5 text-xs leading-snug text-muted">{tt(m.diaryKey)}</p>
-                  </div>
-                );
-              })}
+      {header}
+      <section aria-label={tt("campaign.title")} className="mb-4 grid gap-1.5">
+        {nodes.map((n, i) => {
+          const cleared = run.cleared.includes(n.id);
+          const current = n.id === run.currentNodeId;
+          return (
+            <div
+              key={n.id}
+              className={cn(
+                "flex items-center gap-2 rounded-[var(--radius-sm)] border px-3 py-2 text-sm",
+                current ? "border-accent/50 bg-accent/10" : cleared ? "border-good/40 bg-good/10" : "border-border bg-bg/60 opacity-75",
+              )}
+            >
+              {cleared ? (
+                <CheckCircle2 className="size-4 shrink-0 text-good" aria-hidden />
+              ) : current ? (
+                <Compass className="size-4 shrink-0 text-accent" aria-hidden />
+              ) : (
+                <span className="size-2 shrink-0 rounded-full bg-muted" aria-hidden />
+              )}
+              <span className={cn("truncate", current ? "font-medium text-fg" : "text-fg")}>{tt(n.titleKey)}</span>
+              {n.kind === "boss" ? (
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] border border-danger/40 bg-danger/10 px-1.5 py-0.5 text-[10px] text-clay">
+                  <Swords className="size-3" aria-hidden />
+                  {tt("campaign.run.hud.boss")}
+                </span>
+              ) : null}
+              <span className="ml-auto shrink-0 text-xs text-muted">
+                {i + 1}/{total}
+              </span>
             </div>
-          </section>
-        );
-      })}
+          );
+        })}
+      </section>
+
+      {run.match ? (
+        // Матч приостановлен (ушли со стола): вернуться или сдать забег.
+        <section className="rounded-[var(--radius-md)] border border-accent/40 bg-accent/5 p-3">
+          <p className="text-sm text-fg">{tt("campaign.run.continueHint")}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              onClick={() => {
+                continueCampaignRun();
+                onStarted?.();
+              }}
+            >
+              {tt("campaign.run.continue")}
+            </Button>
+            <Button size="sm" variant="ghost" className="text-danger hover:bg-danger/10 hover:text-danger" onClick={abandonCampaignRun}>
+              {tt("campaign.run.abandon")}
+            </Button>
+          </div>
+        </section>
+      ) : node?.kind === "reward" && node.rewards ? (
+        // Узел награды: выбор одного усиления, курсор переходит к следующему бою.
+        <section>
+          <p className="mb-2 text-sm font-medium text-fg">{tt("campaign.run.pickReward")}</p>
+          <div className="grid gap-2">
+            {node.rewards.map((r: RunReward) => (
+              <button
+                key={r.id}
+                type="button"
+                className="rounded-[var(--radius-md)] border border-border bg-bg/60 p-3 text-left transition-colors hover:border-accent/50 hover:bg-accent/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => campaignApplyReward(r)}
+              >
+                <p className="text-sm font-medium text-fg">{tt(r.nameKey)}</p>
+                <p className="mt-0.5 text-xs leading-snug text-muted">{tt(r.descKey)}</p>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : node?.battle ? (
+        <section className="rounded-[var(--radius-md)] border border-border bg-bg/60 p-3">
+          <p className="text-xs text-muted">{tt("campaign.run.nextBattle")}</p>
+          <p className="mt-0.5 flex items-center gap-1.5 text-sm font-medium text-fg">
+            {node.kind === "boss" ? <Swords className="size-4 shrink-0 text-danger" aria-hidden /> : null}
+            <span className="truncate">{tt(node.battle.nameKey)}</span>
+            <span className="text-muted">·</span>
+            <span className="truncate text-muted">{tt(node.titleKey)}</span>
+          </p>
+          <Button
+            className="mt-2"
+            size="sm"
+            onClick={() => {
+              campaignStartBattle();
+              onStarted?.();
+            }}
+          >
+            {tt("campaign.run.startBattle")}
+          </Button>
+        </section>
+      ) : null}
     </>
   );
 }

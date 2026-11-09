@@ -31,9 +31,9 @@ const PAGES = [
     url: "/campaign",
     title: "Кампания",
     button: "Кампания",
-    // Первая миссия эпохи всегда открыта — кнопка «Начать» доступна.
+    // Рогалик-забег: эпохи открыты все — кнопка «Новый забег» доступна.
     probe: (page) =>
-      page.getByRole("button", { name: "Начать", exact: true }).first().isVisible().catch(() => false),
+      page.getByRole("button", { name: "Новый забег", exact: true }).first().isVisible().catch(() => false),
     shot: "page-campaign.png",
   },
   {
@@ -166,22 +166,28 @@ else fail(`/: menu=${home} cols=${cols} menuActive=${menuActive}; экран: ${
 await page.screenshot({ path: `${SHOTS}/page-menu.png`, fullPage: true });
 await ctx.close().catch(() => {});
 
-// ── 5. старт миссии из кампании уводит в меню → лобби партии ────────────────
-// (поведение, которое раньше давало закрытие модалки; создаёт реальный стол)
+// ── 5. старт забега из кампании уводит в меню → стол локальной партии ───────
+// (кампания-рогалик: без лобби и серверной комнаты, стейт появляется сразу)
 {
   const run = await newRuPage(browser, { viewport: { width: 1280, height: 900 } });
   const p2 = run.page;
   const problems2 = trackPage(p2, "campaign-start");
   await gotoUrl(p2, base + "/campaign");
-  const start = p2.getByRole("button", { name: "Начать", exact: true }).first();
+  const start = p2.getByRole("button", { name: "Новый забег", exact: true }).first();
   if (await waitUntil(() => start.isVisible().catch(() => false), 20000, 400)) {
     await start.click();
     const urlOk = await waitUntil(() => new URL(p2.url()).pathname === "/", 20000, 300);
-    const lobby = await waitUntil(async () => Boolean(await roomCode(p2)), 30000, 400);
-    if (urlOk && lobby) ok("/campaign: «Начать» → / и лобби с кодом стола");
-    else fail(`/campaign: «Начать» → url=${urlOk}(${p2.url()}) lobby=${lobby}; экран: ${await bodyOf(p2)}`);
+    const table = await waitUntil(
+      async () => Boolean(await p2.evaluate(() => globalThis.__evoStore?.getState?.().state)),
+      30000,
+      400,
+    );
+    const local = await p2.evaluate(() => Boolean(localStorage.getItem("evo-campaign-run")));
+    if (urlOk && table && local) ok("/campaign: «Новый забег» → / и стол локальной партии без лобби");
+    else fail(`/campaign: «Новый забег» → url=${urlOk}(${p2.url()}) table=${table} local=${local}; экран: ${await bodyOf(p2)}`);
+    await p2.evaluate(() => globalThis.__evoStore.getState().abandonCampaignRun());
   } else {
-    fail("/campaign: кнопка «Начать» не появилась; экран: " + (await bodyOf(p2)));
+    fail("/campaign: кнопка «Новый забег» не появилась; экран: " + (await bodyOf(p2)));
   }
   if (problems2.length) fail("campaign-start: " + problems2.join(" | "));
   await run.ctx.close().catch(() => {});

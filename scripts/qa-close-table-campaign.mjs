@@ -1,5 +1,5 @@
 /**
- * QA #3/#4/#5: закрытие стола из одних ботов.
+ * QA #3/#4/#5: закрытие стола из одних ботов + кампания-забег.
  *
  *   a. Соло-стол (человек + бот): уход через верхнюю панель закрывает комнату
  *      НА СЕРВЕРЕ (списка столов больше нет, rejoin отказывает), клиент не
@@ -7,9 +7,9 @@
  *   b. Кнопка «Закрыть стол»: видна в соло-столе, диалог подтверждения работает
  *      (и «Отмена» тоже), комната удаляется; за столом с другим человеком
  *      кнопки нет, сервер отклоняет close-people.
- *   c. Кампания «Камбрийский рост»: HUD показывает НОВЫЕ цели (не клон
- *      «Первых шагов»), завершение через стор-экшен сохраняется в localStorage,
- *      следующая миссия открывается, уход закрывает стол миссии.
+ *   c. Кампания-рогалик: забег стартует без лобби и без серверной комнаты,
+ *      HUD показывает путь эпохи, матч с полным стейтом живёт в localStorage,
+ *      F5 возобновляет матч, «Продолжить» и «Сдать забег» работают.
  *
  * Запуск при живом dev-сервере: EVO_URL=http://127.0.0.1:8099 node scripts/qa-close-table-campaign.mjs
  */
@@ -254,105 +254,110 @@ ok("прогрев сервера выполнен");
   await guest.close().catch(() => {});
 }
 
-// ══ c. Кампания: «Камбрийский рост» — новый сценарий ═════════════════════════
+// ══ c. Кампания-рогалик: забег за эпоху на чистом движке ════════════════════
 {
   const { page } = await newRuPage(browser, { viewport: { width: 1440, height: 900 } });
-  // Гидратация /campaign: SSR рендерит прогресс без localStorage, клиент — с ним.
-  // Давнее свойство CampaignContent (любая пройденная миссия даёт mismatch),
-  // к закрытию столов отношения не имеет — глушим.
+  // /campaign читает сохранённый забег из localStorage: SSR рендерит «нет
+  // забега», клиент — активный. К закрытию столов отношения не имеет — глушим.
   const errs = trackPage(page, "c", { ignore: [/Hydration failed/] });
   await gotoUrl(page, `${BASE}/campaign`);
   assert(
-    await waitUntil(async () => (await page.getByText("Камбрийский рост").count()) > 0, 20_000, 400),
-    "c: экран кампании открыт, миссия называется «Камбрийский рост»",
+    await waitUntil(async () => (await page.getByText("Кембрий").count()) > 0, 20_000, 400),
+    "c: страница кампании показывает эпохи",
   );
 
-  const startBtn = page.getByRole("button", { name: "Начать", exact: true }).first();
-  assert(await isEnabled(startBtn), "c: первая миссия открыта");
+  // Старт забега: первая эпоха «Кембрий» → бой первого узла без лобби.
+  const startBtn = page.getByRole("button", { name: "Новый забег", exact: true }).first();
   await safeClick(startBtn, 5000);
-
-  // Старт уводит в меню → лобби партии → «Начать год».
-  assert(await waitUntil(async () => (await roomCode(page)) !== null, 30_000, 500), "c: лобби миссии открылось");
-  const startYear = page.getByRole("button", { name: "Начать год" });
-  assert(await waitUntil(() => isEnabled(startYear), 20_000, 500), "c: «Начать год» доступна");
-  await safeClick(startYear, 5000);
-  assert(await waitPhase(page, ["development", "foodBank"], 60_000), "c: партия миссии началась");
+  assert(
+    await waitUntil(
+      async () => (await page.evaluate(() => globalThis.__evoStore?.getState?.().state)) !== null,
+      30_000,
+      500,
+    ),
+    "c: локальная партия открылась без лобби",
+  );
+  assert(await waitPhase(page, ["development", "foodBank"], 60_000), "c: партия забега началась");
   await dismissSpotlight(page);
 
-  // HUD: НОВЫЕ цели (не «выложите животное/свойства» из «Первых шагов»).
-  const hudText = await page.evaluate(() => {
-    const aside = document.querySelector('aside[aria-label="Обучение"]');
-    return aside ? aside.textContent : null;
-  });
-  assert(Boolean(hudText), "c: HUD миссии виден за столом");
-  assert(hudText?.includes("Камбрийский рост"), "c: HUD показывает новый заголовок миссии");
-  assert(hudText?.includes("Накорми трёх своих животных одновременно"), "c: цель «прокорми стадо» в HUD");
+  // Кампания живёт локально: серверных комнат за ней нет.
+  const rooms = await roomsOf(page);
   assert(
-    hudText?.includes("Собери двух животных с разными наборами свойств"),
-    "c: цель «разнородное стадо» в HUD",
+    rooms !== null && !rooms.some((c) => String(c).startsWith("CAMP")),
+    "c: забег не создаёт комнат на сервере",
   );
-  assert(!hudText?.includes("Выложите животное на стол"), "c: клон «Первых шагов» исчез из HUD");
+
+  // HUD забега: путь эпохи, первый узел «Молодое море», прогресс 1 из 5.
+  // Поллинг, а не мгновенная проверка: роутерный переход «/campaign → /»
+  // отстаёт от стора, стол с HUD монтируется на кадр позже state.
+  const hudText = await waitUntil(async () => {
+    const txt = await page.evaluate(
+      () => document.querySelector('aside[aria-label="Кембрий"]')?.textContent ?? null,
+    );
+    return txt && txt.includes("Молодое море") && txt.includes("из 5") ? txt : null;
+  }, 20_000, 400);
+  assert(Boolean(hudText), "c: HUD забега виден: узел и прогресс пути");
   await sleep(600);
-  await shot(page, "c-campaign-hud.png");
+  await shot(page, "c-campaign-run.png");
 
-  // Принудительное завершение тем же экшеном, что вызывает HUD (стор-манипуляция),
-  // затем проверка persistence и разблокировки следующей миссии.
-  const stored = await page.evaluate(() => {
-    globalThis.__evoStore.getState().completeCampaignMission("cambrian-growth", false);
-    return localStorage.getItem("evo-campaign");
-  });
-  let progress = null;
-  try {
-    progress = JSON.parse(stored ?? "null");
-  } catch {
-    progress = null;
-  }
-  assert(
-    Array.isArray(progress?.done) && progress.done.includes("cambrian-growth"),
-    `c: завершение сохранено в localStorage evo-campaign (${stored})`,
-  );
-
-  // Уход со стола миссии (пока партия ещё жива в сторе вкладки): флаги гасятся,
-  // соло-стол закрывается сервером. До переходов по страницам: полный reload
-  // стёр бы стор, и проверять было бы нечего.
-  const afterLeave = await page.evaluate(async () => {
-    const s = globalThis.__evoStore.getState();
-    const code = s.net?.code ?? null;
-    s.leaveNet();
-    const st = globalThis.__evoStore.getState();
-    const api = await import("/src/lib/net/api.ts");
-    const r = await api.netListRooms({ data: {} });
+  // Персист: полный стейт матча (с рукой) в localStorage.
+  const runSaved = await page.evaluate(() => {
+    const raw = localStorage.getItem("evo-campaign-run");
+    const run = raw ? JSON.parse(raw) : null;
     return {
-      code,
-      campaign: st.campaignMission,
-      tutorial: st.tutorialMission,
-      net: st.net,
-      rooms: r.ok ? r.rooms.map((x) => x.code) : null,
+      status: run?.status ?? null,
+      match: Boolean(run?.match),
+      hand: run?.match?.state?.players?.[0]?.hand?.length ?? null,
     };
   });
-  assert(afterLeave.campaign === null, "c: campaignMission погашен уходом");
-  assert(afterLeave.net === null, "c: клиент в меню после ухода со стола миссии");
   assert(
-    afterLeave.code && afterLeave.rooms && !afterLeave.rooms.includes(afterLeave.code),
-    "c: стол миссии закрыт на сервере",
+    runSaved.status === "active" && runSaved.match && typeof runSaved.hand === "number",
+    `c: забег с матчем сохранён (${JSON.stringify(runSaved)})`,
   );
 
-  // Разблокировка следующей миссии (после ухода, полный reload /campaign).
-  await gotoUrl(page, `${BASE}/campaign`);
-  await waitUntil(async () => (await page.getByText("Камбрийский рост").count()) > 0, 20_000, 400);
-  const unlock = await page.evaluate(() => {
-    const rows = [...document.querySelectorAll("div")].filter(
-      (d) => d.querySelector("button") && d.textContent.includes("Первый хищник"),
-    );
-    const row = rows.sort((a, b) => a.textContent.length - b.textContent.length)[0];
-    const btn = row?.querySelector("button");
-    return { label: btn?.textContent.trim() ?? null, disabled: btn?.disabled ?? true };
-  });
+  // Уход со стола: матч приостановлен, забег жив, ?room не появился.
+  await page.evaluate(() => globalThis.__evoStore.getState().leaveNet());
   assert(
-    unlock.label === "Начать" && unlock.disabled === false,
-    `c: «Первый хищник» разблокирована (кнопка: ${unlock.label}, disabled=${unlock.disabled})`,
+    await waitUntil(
+      async () => (await page.evaluate(() => globalThis.__evoStore?.getState?.().net)) === null,
+      15_000,
+      300,
+    ),
+    "c: стол закрыт, клиент в меню",
   );
-  await shot(page, "c-campaign-done.png");
+  const kept = await page.evaluate(() => Boolean(localStorage.getItem("evo-campaign-run")));
+  assert(kept, "c: забег пережил уход со стола");
+
+  // F5 на «/» возобновляет матч автоматически (эффект GameApp).
+  await gotoUrl(page, `${BASE}/`);
+  assert(
+    await waitUntil(
+      async () => (await page.evaluate(() => globalThis.__evoStore?.getState?.().state)) !== null,
+      30_000,
+      500,
+    ),
+    "c: F5 вернул в матч забега",
+  );
+  await dismissSpotlight(page);
+  await shot(page, "c-campaign-resumed.png");
+
+  // Страница кампании после ухода: «Продолжить матч» и «Сдать забег».
+  await page.evaluate(() => globalThis.__evoStore.getState().leaveNet());
+  await gotoUrl(page, `${BASE}/campaign`);
+  assert(
+    await waitUntil(async () => (await page.getByText("Продолжить матч").count()) > 0, 20_000, 400),
+    "c: страница кампании предлагает продолжить матч",
+  );
+  await shot(page, "c-campaign-page.png");
+
+  // Сдать забег: сохранение снято, страница снова показывает эпохи.
+  await safeClick(page.getByRole("button", { name: "Сдать забег", exact: true }), 5000);
+  const cleared = await page.evaluate(() => localStorage.getItem("evo-campaign-run"));
+  assert(cleared === null, "c: сдача забега снимает сохранение");
+  assert(
+    await waitUntil(async () => (await page.getByText("Новый забег").count()) > 0, 20_000, 400),
+    "c: после сдачи страница показывает выбор эпохи",
+  );
   if (errs.length) fail(`c: ошибки вкладки: ${errs.join(" | ")}`);
   await page.close();
 }

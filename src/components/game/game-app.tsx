@@ -64,6 +64,7 @@ import { EventSpotlight } from "./spotlight";
 import { SoundToggle } from "./sound-toggle";
 import { TopBar } from "./top-bar";
 import { TutorialHud } from "./tutorial-missions";
+import { CampaignGameOver, CampaignHud } from "./campaign-hud";
 import { CHALLENGES } from "@/game/challenges";
 import { challengesReport, profileGet } from "@/lib/profile/api";
 import { readStats } from "@/lib/stats";
@@ -1507,6 +1508,7 @@ export function GameApp() {
   const rulesOpen = useGameStore((s) => s.rulesOpen);
   const setRulesOpen = useGameStore((s) => s.setRulesOpen);
   const net = useGameStore((s) => s.net);
+  const campaignRun = useGameStore((s) => s.campaignRun);
   const netAgain = useGameStore((s) => s.netAgain);
   const leaveNet = useGameStore((s) => s.leaveNet);
   const animMode = useGameStore((s) => s.animMode);
@@ -1526,6 +1528,12 @@ export function GameApp() {
     // хит-стоп/оверлеи в useActionFx — dataset напрямую.
     document.documentElement.dataset.anim = animMode;
   }, [animMode]);
+  // Кампания (фундамент рогалика): F5 на «/» возобновляет сохранённый матч
+  // забега — стола в сторе ещё нет, а матч в localStorage жив. Действие
+  // идемпотентно: без матча/с шимом ничего не делает.
+  useEffect(() => {
+    useGameStore.getState().continueCampaignRun();
+  }, []);
   // Экипированная косметика (волна 3б): один запрос на сессию; сукно и кубик
   // применяются по item id из каталога. Тихо при оффлайне — косметика не критична.
   useEffect(() => {
@@ -1693,7 +1701,11 @@ export function GameApp() {
       ) : null}
       <Table />
       {state.phase === "gameOver" && state.scores ? (
-        spectator ? (
+        campaignRun ? (
+          // Финал забега: победа двигает путь, поражение завершает забег —
+          // повторов и сетевого «ждём хоста» здесь не бывает.
+          <CampaignGameOver />
+        ) : spectator ? (
           <SpectatorGameOver state={state} onMenu={leaveNet} />
         ) : (
           <GameOverScreen
@@ -1706,7 +1718,7 @@ export function GameApp() {
           />
         )
       ) : null}
-      {!spectator && state.phase === "gameOver" && state.scores && !isHost ? (
+      {!campaignRun && !spectator && state.phase === "gameOver" && state.scores && !isHost ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-5 z-50 flex justify-center px-4">
           <HintNote compact className="max-w-sm shadow-[var(--shadow-card)]">
             {waitingForHost}
@@ -1994,6 +2006,7 @@ function PendingActionHint({ pending }: { pending: PendingNetItem | null }) {
 function Table() {
   const state = useGameStore((s) => s.state)!;
   const equippedCosmetics = useGameStore((s) => s.equippedCosmetics);
+  const campaignRun = useGameStore((s) => s.campaignRun);
   const intent = useGameStore((s) => s.intent);
   const logOpen = useGameStore((s) => s.logOpen);
   const logUnread = useGameStore((s) => s.logUnread);
@@ -3243,14 +3256,12 @@ function Table() {
           state.phase === "extinction" ? "extinction-glow" : "",
         )}
       >
-        {/* Обучение (волна 1.5): цели миссии первым блоком в потоке стола.
-            Раньше HUD висел fixed в левом верхнем углу и накрывал плашку
-            соперника с медальонами животных; в потоке ничто никого не
-            перекрывает ни на десктопе, ни на телефоне, а свернутый вид —
-            компактная пилюля в том же слоте. Порядок (order-first на самом
-            блоке, как у сукна) выводит цели на телефоне сразу под строкой
-            реакций. */}
-        <TutorialHud />
+        {/* Обучение (волна 1.5) и кампания (фундамент рогалика): HUD первым
+            блоком в потоке стола. Раньше HUD висел fixed в левом верхнем углу
+            и накрывал плашку соперника с медальонами животных; в потоке ничто
+            никого не перекрывает ни на десктопе, ни на телефоне. У кампании
+            свой HUD: путь эпохи и узел вместо целей-предикатов. */}
+        {campaignRun ? <CampaignHud /> : <TutorialHud />}
         {/* «Растения»/«Трава и грибы»: общий стол растений и флоры; с «Континентами» — по континентам. */}
         {plantsOn || fungiOn ? (
           // Полоса растений — цель броска для свойств растений (найти само

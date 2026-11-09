@@ -423,29 +423,29 @@ export const en: Record<keyof RuDict, string> = {
   "rules.fossils.where":
     "Goal progress and your balance live on the \"Challenges\" (/challenges) and \"Shop\" (/shop) pages.",
 
-  // ── rules: "Campaign" tab (registry — src/game/campaign.ts, boss
+  // ── rules: "Campaign" tab (registry — src/game/campaign-run.ts, boss
   //    scenarios — src/game/types.ts GameScenario) ───────────────────────────
   "rules.campaign.intro":
-    "The \"Eras\" campaign is a single-player ladder against bots: three eras, and at the end of each a boss with a rule-breaking twist that isn't in the box. A mission is a regular game with AI: the table is created for you, and objectives show up in the HUD.",
-  "rules.campaign.eras": "Eras.",
+    "The \"Eras\" campaign is runs against bots on the pure engine, with no network and no lobby: pick an era and you're at the table. Nothing required to enter, a run fits one sitting, and losing takes nothing away outside the run.",
+  "rules.campaign.eras": "The era path.",
   "rules.campaign.eras.text":
-    "Cambrian — first herds and the first carnivore; Devonian — meeting \"Plants\"; Ice Age — the finale with \"Wild World\". Within an era, missions unlock in order: the next one after the previous, the first is open right away.",
-  "rules.campaign.goals": "Objectives.",
+    "Cambrian — first herds and the first carnivore; Devonian — meeting \"Plants\"; Ice Age — the finale with \"Wild World\". An era's path: battle → reward → battle → reward → a boss with a rule-breaking twist.",
+  "rules.campaign.goals": "Rewards.",
   "rules.campaign.goals.text":
-    "A mission counts as done when all of its objectives are met: for example, \"Feed three of your animals at once\" or \"Lose no more than two animals\". Progress survives a page reload.",
+    "After each victory on the path you pick a boon: an extra starting-hand card or a guaranteed trait card in it. Boons accumulate until the end of the run and apply to every following battle.",
   "rules.campaign.diary": "The naturalist's diary.",
   "rules.campaign.diary.text":
-    "A paragraph before each mission — it doubles as the mission's HUD description: a short hint on how to survive the era.",
-  "rules.campaign.hard": "Hard.",
+    "A paragraph before each path node — it doubles as the HUD description: a short hint on how to survive the era.",
+  "rules.campaign.hard": "Persistence.",
   "rules.campaign.hard.text":
-    "A win unlocks a replay of the same mission at higher difficulty; the normal completion and the hard one are tracked separately.",
+    "The match saves itself: closed the tab — come back via \"/\" or the \"Campaign\" page (\"Continue the match\"). Lost — the diary remains, and a new run starts right away.",
   "rules.campaign.bosses.title": "Bosses",
   "rules.campaign.boss.trilobite":
     "hunts twice: after a successful hunt, its carnivore attacks a second time in the same turn.",
   "rules.campaign.boss.bonecrusher":
     "its pack eats first: at the start of each feeding phase the boss's animals gain +1 food.",
   "rules.campaign.boss.atroxabilis":
-    "the campaign finale: double hunting, \"Wild World\" and \"Hard\" difficulty.",
+    "the Ice Age path finale: double hunting, \"Wild World\" and \"Hard\" difficulty.",
   "rules.campaign.bosses.note":
     "The rule-breaking twist applies only to the boss's seat; scoring is untouched.",
   "rules.campaign.where":
@@ -1478,7 +1478,54 @@ export const en: Record<keyof RuDict, string> = {
   "campaign.obj.fedHerd": "Have three of your animals fed at the same time",
   "campaign.obj.distinctHerd": "Have two animals with different trait sets",
 
+  // ── campaign roguelike: era run (foundation) ─────────────────────────────
+  "campaign.run.subtitle":
+    "An era run: battle, reward, battle again — and the boss at the end. Nothing required to enter, and losing takes nothing away outside the run.",
+  "campaign.run.new": "New run",
+  "campaign.run.continue": "Continue the match",
+  "campaign.run.continueHint": "The match is paused — the table is waiting.",
+  "campaign.run.abandon": "Abandon run",
+  "campaign.run.startBattle": "To battle",
+  "campaign.run.nextBattle": "Next node",
+  "campaign.run.pickReward": "The path rewards you — pick one",
+  "campaign.run.progress": "Node {done} of {total}",
+  "campaign.run.wonTitle": "Run complete!",
+  "campaign.run.wonText": "The era is conquered: the path from the first sea to the boss is in the diary.",
+  "campaign.run.lostTitle": "Run lost",
+  "campaign.run.lostText": "The herd didn't make it to the end of the path — but the diary remains, and a new run starts right away.",
+  "campaign.run.toPath": "To the path",
+  "campaign.run.hud.boss": "Boss",
+  "campaign.node.reward.title": "Path reward",
+  "campaign.node.reward.diary": "The path marks persistence. Choose what strengthens your herd.",
+  "campaign.node.cambrian1.title": "The Young Sea",
+  "campaign.node.cambrian1.diary": "Warm waters, first herds. Your rival is learning the same lessons you are.",
+  "campaign.node.cambrian1.opp": "Darwin",
+  "campaign.node.cambrian3.title": "First Fangs",
+  "campaign.node.cambrian3.diary": "Scavengers already circle over others' meals: food is rarely given for free.",
+  "campaign.node.cambrian3.opp": "Wallace",
+  "campaign.node.devon1.title": "Green Devon",
+  "campaign.node.devon1.diary": "Food grows from the ground: plants lend it, and everyone bites them.",
+  "campaign.node.devon1.opp": "Mendel",
+  "campaign.node.devon3.title": "The Marsh Thicket",
+  "campaign.node.devon3.diary": "Rapid evolution: two development actions per turn, if your hand allows.",
+  "campaign.node.devon3.opp": "Linnaeus",
+  "campaign.node.glacier1.title": "Skirmish on Ice",
+  "campaign.node.glacier1.diary": "Wild world: each year's event is announced in advance — build for the forecast.",
+  "campaign.node.glacier1.opp": "Cuvier",
+  "campaign.node.glacier3.title": "The Blizzard",
+  "campaign.node.glacier3.diary": "Cold, scavengers and Wild world events. The last exam before the boss.",
+  "campaign.node.glacier3.opp": "Lamarck",
+  "campaign.reward.hand.name": "Memory of Kin",
+  "campaign.reward.hand.desc": "+1 card in your starting hand for the following battles.",
+  "campaign.reward.burrow.name": "Gift of Burrows",
+  "campaign.reward.burrow.desc": "A \"Burrowing\" card already waits in the next battle's starting hand.",
+  "campaign.reward.tail.name": "Gift of the Tail",
+  "campaign.reward.tail.desc": "A \"Tail Loss\" card already waits in the next battle's starting hand.",
+  "campaign.reward.swim.name": "Gift of Water",
+  "campaign.reward.swim.desc": "A \"Swimming\" card already waits in the next battle's starting hand.",
+
   "log.bossFeedsExtra": "Bonecrusher: the boss's animals get +1 food at the start of feeding.",
+  "log.campaignBoons": "Path rewards strengthen the starting hand.",
 
   // ── app error screen (error-component) ───────────────────────────────────
   "error.title": "Something went wrong",
