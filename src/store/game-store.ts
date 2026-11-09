@@ -512,6 +512,8 @@ interface GameStore {
   netSetPassword: (password: string) => Promise<{ ok: boolean; error?: string }>;
   /** Смена цвета своего места в лобби (цвет из PLAYER_COLORS). */
   netSetColor: (color: PlayerColor) => Promise<void>;
+  /** Косметика своего места (аватар/рубашка, только лобби); null — дефолт. */
+  netSetCosmetics: (patch: { avatar?: string | null; cardback?: string | null }) => Promise<void>;
   netTransferHost: (seat: number) => Promise<void>;
   /** Убрать ожидающего по индексу в очереди. */
   netKickWaiter: (index: number) => Promise<void>;
@@ -1244,6 +1246,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
     try {
       await s.setColor(color);
       // Свежие места придут первым же кадром после refresh() в NetSession.
+    } catch (e) {
+      const cur = get().net;
+      const { text, code } = caughtNetError(e);
+      if (cur) set({ net: { ...cur, error: text, errorCode: code } });
+    }
+  },
+
+  netSetCosmetics: async (patch) => {
+    const s = netSession;
+    if (!s) return;
+    try {
+      await s.setSeatCosmetics(patch);
     } catch (e) {
       const cur = get().net;
       const { text, code } = caughtNetError(e);

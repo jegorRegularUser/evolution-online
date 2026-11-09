@@ -34,6 +34,8 @@ export interface CosmeticItem {
    * тот там не экспортируется, менять надо синхронно в обоих местах.
    */
   diceTint?: string;
+  /** Путь к картинке предмета (аватары-существа: public/img/species/*). */
+  imageSrc?: string;
 }
 
 export const COSMETIC_ITEMS: CosmeticItem[] = [
@@ -101,7 +103,139 @@ export const COSMETIC_ITEMS: CosmeticItem[] = [
     diceMaterial: "obsidian",
     diceTint: "#4a4452",
   },
+  // ── рубашки карт (слот cardback) — CSS-скины поверх текстур ──
+  {
+    id: "cardback.classic",
+    slot: "cardback",
+    rarity: "common",
+    price: 0,
+    titleKey: "shop.cardback.classic",
+    cssClass: "cardback-skin-classic",
+  },
+  {
+    id: "cardback.malachite",
+    slot: "cardback",
+    rarity: "common",
+    price: 150,
+    titleKey: "shop.cardback.malachite",
+    cssClass: "cardback-skin-malachite",
+  },
+  {
+    id: "cardback.crimson",
+    slot: "cardback",
+    rarity: "rare",
+    price: 400,
+    titleKey: "shop.cardback.crimson",
+    cssClass: "cardback-skin-crimson",
+  },
+  // ── аватары-существа (слот avatar) — готовые арты видов, без нового арта ──
+  {
+    id: "avatar.aquatic",
+    slot: "avatar",
+    rarity: "common",
+    price: 150,
+    titleKey: "shop.avatar.aquatic",
+    cssClass: "avatar-skin-aquatic",
+    imageSrc: "/img/species/aquatic.jpg",
+  },
+  {
+    id: "avatar.herb-large",
+    slot: "avatar",
+    rarity: "common",
+    price: 150,
+    titleKey: "shop.avatar.herbLarge",
+    cssClass: "avatar-skin-herbLarge",
+    imageSrc: "/img/species/herb-large.jpg",
+  },
+  {
+    id: "avatar.carn-medium",
+    slot: "avatar",
+    rarity: "common",
+    price: 150,
+    titleKey: "shop.avatar.carnMedium",
+    cssClass: "avatar-skin-carnMedium",
+    imageSrc: "/img/species/carn-medium.jpg",
+  },
+  {
+    id: "avatar.carn-large",
+    slot: "avatar",
+    rarity: "rare",
+    price: 400,
+    titleKey: "shop.avatar.carnLarge",
+    cssClass: "avatar-skin-carnLarge",
+    imageSrc: "/img/species/carn-large.jpg",
+  },
 ];
+
+// ── Учёные: встроенный бесплатный набор аватаров (вне магазина) ──
+// Ключи совпадают с AI_NAMES (engine.ts) в нижнем регистре латиницей; арты —
+// public/img/avatar/<key>.svg|jpg (реестр AVATAR_ART в lib/art.ts). Портрет
+// бота подбирается по имени, человеку без выбора — детерминированный по хэшу
+// имени: «по умолчанию разные», как решил владелец.
+export const SCIENTIST_AVATARS = [
+  "darwin",
+  "wallace",
+  "mendel",
+  "linnaeus",
+  "cuvier",
+  "lamarck",
+  "haeckel",
+  "baer",
+] as const;
+
+export type ScientistAvatar = (typeof SCIENTIST_AVATARS)[number];
+
+/** Форма ключа аватара места: встроенный учёный или предмет каталога. */
+export type SeatAvatar = `sci.${ScientistAvatar}` | string;
+
+export function isScientistAvatarKey(key: string): key is `sci.${ScientistAvatar}` {
+  if (!key.startsWith("sci.")) return false;
+  return (SCIENTIST_AVATARS as readonly string[]).includes(key.slice(4));
+}
+
+/** FNV-1a по имени: стабильный выбор учёного «по умолчанию». */
+function nameHash(name: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < name.length; i++) {
+    h ^= name.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/**
+ * Аватар по умолчанию: боту — портрет его учёного (имя совпадает), человеку
+ * без выбора — детерминированный по хэшу имени, чтобы за столом учёные
+ * не повторялись у всех подряд.
+ */
+export function defaultAvatarForSeat(name: string, isAI: boolean): SeatAvatar {
+  if (isAI) {
+    const base = name.replace(/\s+\d+$/, "").toLowerCase();
+    // Латинские имена локализации не совпадают с русскими AI_NAMES, поэтому
+    // маппим по словарю; неизвестное имя (переименованный бот) — по хэшу.
+    const map: Record<string, ScientistAvatar> = {
+      "дарвин": "darwin",
+      "уоллес": "wallace",
+      "мендель": "mendel",
+      "линней": "linnaeus",
+      "кювье": "cuvier",
+      "ламарк": "lamarck",
+      "геккель": "haeckel",
+      "darwin": "darwin",
+      "wallace": "wallace",
+      "mendel": "mendel",
+      "linnaeus": "linnaeus",
+      "cuvier": "cuvier",
+      "lamarck": "lamarck",
+      "haeckel": "haeckel",
+      "baer": "baer",
+    };
+    const hit = map[base];
+    if (hit) return `sci.${hit}`;
+  }
+  const idx = nameHash(name) % SCIENTIST_AVATARS.length;
+  return `sci.${SCIENTIST_AVATARS[idx]}`;
+}
 
 /** «Классика» каждого слота — бесплатна и экипирована по умолчанию. */
 export function defaultItemForSlot(slot: CosmeticSlot): CosmeticItem | undefined {

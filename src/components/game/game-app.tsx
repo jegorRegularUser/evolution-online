@@ -49,6 +49,8 @@ import { cn } from "@/lib/utils";
 import { sfx, type AmbientMood, type SfxId } from "@/lib/sfx";
 import { emptySession, recordGame, type SessionCounters } from "@/lib/stats";
 import { BG, MUTATION_ART, PHASE_ICON, TERRITORY_ART } from "@/lib/art";
+import { AvatarChip, CardBackChip } from "./avatar";
+import { defaultAvatarForSeat } from "@/lib/cosmetics";
 import { isSoloBotTable, useGameStore, typingNamesOf, type NetUiState, type UiIntent } from "@/store/game-store";
 import { AnimalCard, CardPreview, HandCard, PAIR_COLORS, PairPlate, TraitChip, type PairMark } from "./cards";
 import { FloraStrip } from "./cards-flora";
@@ -2029,13 +2031,21 @@ function useFeedItems(state: GameState, net: NetUiState | null): FeedItem[] {
     // Цвет автора: у сетевых реплик — по месту (net.seats), у остальных —
     // по имени игрока за столом (соло и ожидающие места).
     const colorOfSeat = new Map<number, string>();
+    const avatarOfSeat = new Map<number, string>();
     for (const s of seats ?? []) {
       colorOfSeat.set(s.seat, s.color);
+      avatarOfSeat.set(s.seat, s.avatar);
     }
     const colorOfName = (name: string): string | undefined => {
       const i = state.players.findIndex((p) => p.name === name);
       // Соло и ожидающие места: цвет по индексу места — как у стола.
       return i >= 0 ? colorForSeat(i) : undefined;
+    };
+    // Аватар по имени для мест без строки в seats (соло): ботам — портрет их
+    // учёного, людям — детерминированный по имени.
+    const avatarOfName = (name: string): string | undefined => {
+      const p = state.players.find((x) => x.name === name);
+      return defaultAvatarForSeat(name, Boolean(p?.isAI));
     };
 
     for (const e of state.log) {
@@ -2053,6 +2063,7 @@ function useFeedItems(state: GameState, net: NetUiState | null): FeedItem[] {
       // Ожидающие (-1) и зрители (-2) места не занимают: своего цвета у них
       // нет, но ник должен читаться — тот же нейтральный тон, что в лобби.
       const color = colorOfSeat.get(m.seat) ?? colorOfName(m.name) ?? NEUTRAL_AUTHOR_COLOR;
+      const avatar = m.key ? undefined : avatarOfSeat.get(m.seat) ?? avatarOfName(m.name);
       const rs = byChat.get(m.id);
       // Системная реплика «Стола» (key+params от сервера): текст собирается
       // по ключу на языке рендера, русский text — фолбэк для старых строк;
@@ -2073,6 +2084,7 @@ function useFeedItems(state: GameState, net: NetUiState | null): FeedItem[] {
           // Реплика-адресат реакции: по нему чипы ложатся под сообщение.
           chatId: m.id,
           color,
+          ...(avatar ? { avatar } : {}),
           ...(rs ? { reactions: rs } : {}),
         },
       });
@@ -4580,11 +4592,15 @@ const PlayerSection = memo(function PlayerSection({
     >
       <div className="mb-2 flex items-center justify-between text-sm lg:mb-1">
         <span className="flex items-center gap-2 font-medium">
-          <span
-            aria-hidden
-            title={t("game.seatColor")}
-            className="size-2.5 shrink-0 rounded-full border border-ink/25"
-            style={{ background: seatTintColor }}
+          {/* Аватар места вместо безликой точки: портрет учёного (ботам — свой,
+              людям без выбора — детерминированный) или существо из магазина.
+              Цвет места остаётся на рамке аватара — привязка к цвету никуда
+              с экрана не уходит. */}
+          <AvatarChip
+            avatarKey={seatInfo?.avatar ?? defaultAvatarForSeat(p.name, Boolean(p.isAI))}
+            name={p.name}
+            className="size-7"
+            style={{ borderColor: seatTintColor }}
           />
           {isHuman ? t("game.yourPopulation") : scientistName(p.name, lang)}
           {currentTurn ? <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-accent" /> : null}
@@ -4637,7 +4653,11 @@ const PlayerSection = memo(function PlayerSection({
               title={t("game.blindDeckTitle", { n: p.blindDeckCount ?? p.blindDeck?.length ?? 0 })}
               className="h-5 w-3.5 rounded-[2px] border border-border object-cover"
             />
-          ) : null}
+          ) : (
+            // Рубашка карт места: у соперника рука лежит «рубашкой вверх» —
+            // чип показывает, чьи это карты (косметика cardback).
+            <CardBackChip itemId={seatInfo?.cardback} className="h-5 w-3.5" />
+          )}
           {randomMutations
             ? t("game.deckCount", { n: p.blindDeckCount ?? p.blindDeck?.length ?? 0 })
             : t("game.handCount", { n: p.handCount ?? p.hand.length })}{" "}
