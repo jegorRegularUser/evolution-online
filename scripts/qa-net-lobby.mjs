@@ -862,6 +862,11 @@ try {
     // Хост после жребия мог смениться — возвращаем его Ане, иначе сценарии
     // ниже (передача хоста, кик) опираются на другого хоста, чем ожидают.
     if (hostName !== "Аня") {
+      // Передача теперь живёт под короной на строке хоста: сначала раскрываем
+      // её, затем — чип игрока и подтверждение.
+      if (!(await safeClick(hostPage.locator("[data-host-crown]"), 5000))) {
+        throw new Error(`у хоста «${hostName}» не нашлась корона передачи`);
+      }
       const transfer = hostPage.getByRole("button", { name: "Передать хост игроку Аня" });
       const confirm = hostPage.getByRole("button", { name: "Передать", exact: true });
       if (!(await openAndConfirm(hostPage, transfer, confirm))) {
@@ -909,6 +914,11 @@ try {
     const confirmTransfer = host.getByRole("button", { name: "Передать", exact: true });
     let sent = false;
     for (let attempt = 0; attempt < 2 && !sent; attempt++) {
+      // Панель передачи раскрывает корона на строке хоста; при ретрае панель
+      // могла закрыться — кликаем корону только если чипов не видно.
+      if (!(await isVisible(transfer))) {
+        await safeClick(host.locator("[data-host-crown]"), 5000);
+      }
       if (!(await openAndConfirm(host, transfer, confirmTransfer))) continue;
       sent = await waitUntil(() => guest.getByRole("button", { name: "Добавить бота" }).count(), 20_000);
     }

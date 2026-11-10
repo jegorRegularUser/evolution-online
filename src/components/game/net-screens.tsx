@@ -1,14 +1,13 @@
 import {
-  ArrowLeftRight,
   BarChart3,
   BookOpen,
   Bot,
   Check,
   Clock,
   Copy,
+  Crown,
   Eye,
   GraduationCap,
-  Image,
   Lock,
   LockOpen,
   LogOut,
@@ -24,8 +23,8 @@ import {
   X,
 } from "lucide-react";
 import { AvatarChip, CardBackChip } from "./avatar";
-import { COSMETIC_ITEMS, SCIENTIST_AVATARS, defaultAvatarForSeat } from "@/lib/cosmetics";
-import { profileGet } from "@/lib/profile/api";
+import { COSMETIC_ITEMS, SCIENTIST_AVATARS, cosmeticById, defaultAvatarForSeat } from "@/lib/cosmetics";
+import { cosmeticsEquip, profileGet } from "@/lib/profile/api";
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { DialogShell } from "@/components/ui/dialog-shell";
@@ -38,6 +37,7 @@ import { PLAYER_COLORS, TURN_TIMER_DEFAULT_MS, type PlayerColor, type ReactionEm
 import { EventFeed, reactionsByChatId, type FeedItem } from "./event-feed";
 import { loadLastNetConfig, typingNamesOf } from "@/store/game-store";
 import { loadName, saveName } from "@/lib/net/session";
+import { sfx } from "@/lib/sfx";
 import { SoundToggle } from "./sound-toggle";
 import { RulesPanel, StatsScreen } from "./screens";
 import { TutorialScreen } from "./tutorial";
@@ -794,95 +794,202 @@ function seatTint(color: string | undefined): CSSProperties | undefined {
 
 /**
  * Список мест стола: занятые игроки, боты и свободные места. Хост может
- * убрать человека, передать ему хост или увидеть, что место пока пусто.
+ * убрать человека, передать ему хост (корона на его строке) или увидеть,
+ * что место пока пусто.
  */
 /**
- * Пикер косметики места: три вкладки — учёные (бесплатный встроенный набор),
- * существа из магазина (владение проверяет сервер, здесь только подсказка)
- * и рубашка карт. Выбор уходит патчем в setSeatCosmetics.
+ * Панель внешности места — одна на всё: цвет, аватар (учёные + существа),
+ * рубашка карт и сукно стола. Раньше это были две кнопки с двумя панелями;
+ * объединил в одну, потому что это один смысл — «как я выгляжу за столом».
+ *
+ * Цвет/аватар/рубашка — свойства МЕСТА (публичные, сервер принимает только
+ * до старта партии). Сукно — личная экипировка профиля (уходит в
+ * cosmeticsEquip, видно только самому игроку); вкладка появляется, только
+ * когда передан onEquipItem (лобби), и скрыта в ожидающем столе.
  */
-function SeatCosmeticsPicker({
+function SeatAppearancePicker({
   seat,
+  seats,
   ownedItems,
-  onPick,
+  feltItem,
+  onColor,
+  onCosmetics,
+  onEquipItem,
+  onDone,
 }: {
   seat: SeatInfo;
+  /** Все места стола: занятые цвета помечаются владельцем и блокируются. */
+  seats: SeatInfo[];
   ownedItems: string[];
-  onPick: (patch: { avatar?: string | null; cardback?: string | null }) => void;
+  /** Текущее сукно профиля (item_id из equippedCosmetics.felt). */
+  feltItem?: string;
+  onColor?: (color: PlayerColor) => void;
+  onCosmetics?: (patch: { avatar?: string | null; cardback?: string | null }) => void;
+  onEquipItem?: (itemId: string) => void;
+  /** Закрыть панель после выбора цвета (косметика закрывается сама). */
+  onDone: () => void;
 }) {
   const tt = useT();
   const lang = useLang();
-  const [tab, setTab] = useState<"sci" | "creatures" | "cardback">("sci");
+  const [tab, setTab] = useState<"color" | "avatar" | "cardback" | "felt">(onColor ? "color" : "avatar");
   const owned = new Set(ownedItems);
   const creatures = COSMETIC_ITEMS.filter((i) => i.slot === "avatar");
   const cardbacks = COSMETIC_ITEMS.filter((i) => i.slot === "cardback");
+  const felts = COSMETIC_ITEMS.filter((i) => i.slot === "felt");
+  const tabs: Array<["color" | "avatar" | "cardback" | "felt", string]> = [
+    ...(onColor ? ([["color", tt("avatar.pick.color")]] as Array<["color" | "avatar" | "cardback" | "felt", string]>) : []),
+    ["avatar", tt("avatar.pick")],
+    ["cardback", tt("avatar.pick.cardback")],
+    ...(onEquipItem ? ([["felt", tt("avatar.pick.felt")]] as Array<["color" | "avatar" | "cardback" | "felt", string]>) : []),
+  ];
   return (
     <div
-      data-cosmetics-picker
+      data-appearance-picker
       className="flex w-full flex-col gap-2 rounded-[var(--radius-sm)] border border-border bg-bg px-2 py-1.5"
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[10px] uppercase tracking-wide text-muted">{tt("avatar.pick")}</span>
+        <span className="text-[10px] uppercase tracking-wide text-muted">{tt("seat.appearanceTitle")}</span>
         <span className="text-[10px] text-subtle">{tt("avatar.pick.lobbyOnly")}</span>
       </div>
-      <div className="flex gap-1">
-        {(
-          [
-            ["sci", tt("avatar.pick.scientists")],
-            ["creatures", tt("avatar.pick.creatures")],
-            ["cardback", tt("avatar.pick.cardback")],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setTab(id)}
-            aria-pressed={tab === id}
-            className={cn(
-              "flex-1 rounded-full border px-2 py-1 text-xs font-medium",
-              tab === id ? "border-accent bg-accent/15 text-fg" : "border-ink/15 text-muted hover:bg-ink/5",
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <div className="flex flex-wrap items-start gap-1.5">
-        {tab === "sci"
-          ? SCIENTIST_AVATARS.map((key) => {
-              const id = `sci.${key}`;
-              const active = seat.avatar === id;
-              return (
+      {tabs.length > 1 ? (
+        <div className="flex gap-1">
+          {tabs.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              aria-pressed={tab === id}
+              className={cn(
+                "flex-1 rounded-full border px-2 py-1 text-xs font-medium",
+                tab === id ? "border-accent bg-accent/15 text-fg" : "border-ink/15 text-muted hover:bg-ink/5",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {tab === "color" && onColor ? (
+        // Палитра цветов места: эксклюзивна в пределах стола — занятые другими
+        // (включая ботов) цвета приглушены и не кликаются, под кружком — имя владельца.
+        <div data-color-grid className="flex flex-wrap items-center gap-1.5">
+          {PLAYER_COLORS.map((c) => {
+            const active = seat.color.toLowerCase() === c.toLowerCase();
+            const owner = seats.find(
+              (s) => s.seat !== seat.seat && typeof s.color === "string" && s.color.toLowerCase() === c.toLowerCase(),
+            );
+            return (
+              <span key={c} className="flex w-8 shrink-0 flex-col items-center gap-0.5">
                 <button
-                  key={key}
                   type="button"
+                  disabled={Boolean(owner)}
                   aria-pressed={active}
-                  title={translate(lang, `avatar.sci.${key}` as never)}
-                  onClick={() => onPick({ avatar: id })}
+                  aria-label={tt("seat.colorAria", { color: c })}
+                  title={owner ? `${c} — ${scientistName(owner.name, lang)}` : c}
+                  onClick={() => {
+                    // Текущий цвет повторно не отправляем: сервер всё равно
+                    // ответит тем же, а лишний запрос ни к чему.
+                    if (!active) onColor(c);
+                    onDone();
+                  }}
                   className={cn(
-                    "rounded-full border p-0.5 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    active ? "scale-110 border-fg ring-2 ring-accent/60" : "border-ink/20 hover:scale-110",
+                    "size-6 rounded-full border transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
+                    active
+                      ? "scale-110 border-fg ring-2 ring-accent/60"
+                      : owner
+                        ? "cursor-not-allowed border-ink/20 opacity-40"
+                        : "border-ink/20 hover:scale-110",
                   )}
+                  style={{ background: c }}
+                />
+                {/* Метка владельца под занятым цветом; пустой spacer держит
+                    все кружки на одной линии. */}
+                <span
+                  className="max-w-full truncate text-[9px] leading-tight text-muted"
+                  title={owner ? scientistName(owner.name, lang) : undefined}
                 >
-                  <AvatarChip avatarKey={id} className="size-8" />
-                </button>
-              );
-            })
-          : null}
-        {tab === "creatures"
-          ? creatures.map((item) => {
-              const allowed = item.price === 0 || owned.has(item.id);
-              const active = seat.avatar === item.id;
-              return (
+                  {owner ? scientistName(owner.name, lang) : "\u00A0"}
+                </span>
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
+      {tab === "avatar" ? (
+        <div className="flex flex-wrap items-start gap-1.5">
+          {/* Учёные — бесплатный встроенный набор, существа — из магазина
+              (владение проверяет сервер; не купленные видны, но не кликаются). */}
+          <p className="w-full text-[10px] uppercase tracking-wide text-subtle">{tt("avatar.pick.scientists")}</p>
+          {SCIENTIST_AVATARS.map((key) => {
+            const id = `sci.${key}`;
+            const active = seat.avatar === id;
+            return (
+              <button
+                key={key}
+                type="button"
+                aria-pressed={active}
+                title={translate(lang, `avatar.sci.${key}` as never)}
+                onClick={() => {
+                  onCosmetics?.({ avatar: id });
+                  onDone();
+                }}
+                className={cn(
+                  "rounded-full border p-0.5 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  active ? "scale-110 border-fg ring-2 ring-accent/60" : "border-ink/20 hover:scale-110",
+                )}
+              >
+                <AvatarChip avatarKey={id} className="size-8" />
+              </button>
+            );
+          })}
+          <p className="w-full text-[10px] uppercase tracking-wide text-subtle">{tt("avatar.pick.creatures")}</p>
+          {creatures.map((item) => {
+            const allowed = item.price === 0 || owned.has(item.id);
+            const active = seat.avatar === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                disabled={!allowed}
+                aria-pressed={active}
+                title={allowed ? translate(lang, item.titleKey) : tt("avatar.pick.notOwned")}
+                onClick={() => {
+                  onCosmetics?.({ avatar: item.id });
+                  onDone();
+                }}
+                className={cn(
+                  "rounded-full border p-0.5 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  active
+                    ? "scale-110 border-fg ring-2 ring-accent/60"
+                    : allowed
+                      ? "border-ink/20 hover:scale-110"
+                      : "cursor-not-allowed border-ink/20 opacity-40",
+                )}
+              >
+                <AvatarChip avatarKey={item.id} className="size-8" />
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+      {tab === "cardback" ? (
+        <div className="flex flex-wrap items-start gap-1.5">
+          {cardbacks.map((item) => {
+            const allowed = item.price === 0 || owned.has(item.id);
+            const active = seat.cardback === item.id;
+            return (
+              <span key={item.id} className="flex w-12 shrink-0 flex-col items-center gap-0.5">
                 <button
-                  key={item.id}
                   type="button"
                   disabled={!allowed}
                   aria-pressed={active}
                   title={allowed ? translate(lang, item.titleKey) : tt("avatar.pick.notOwned")}
-                  onClick={() => onPick({ avatar: item.id })}
+                  onClick={() => {
+                    onCosmetics?.({ cardback: item.id });
+                    onDone();
+                  }}
                   className={cn(
-                    "rounded-full border p-0.5 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    "rounded-[var(--radius-sm)] border p-0.5 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     active
                       ? "scale-110 border-fg ring-2 ring-accent/60"
                       : allowed
@@ -890,43 +997,98 @@ function SeatCosmeticsPicker({
                         : "cursor-not-allowed border-ink/20 opacity-40",
                   )}
                 >
-                  <AvatarChip avatarKey={item.id} className="size-8" />
+                  <CardBackChip itemId={item.id} className="h-10 w-7" />
                 </button>
-              );
-            })
-          : null}
-        {tab === "cardback"
-          ? cardbacks.map((item) => {
-              const allowed = item.price === 0 || owned.has(item.id);
-              const active = seat.cardback === item.id;
-              return (
-                <span key={item.id} className="flex w-12 shrink-0 flex-col items-center gap-0.5">
-                  <button
-                    type="button"
-                    disabled={!allowed}
-                    aria-pressed={active}
-                    title={allowed ? translate(lang, item.titleKey) : tt("avatar.pick.notOwned")}
-                    onClick={() => onPick({ cardback: item.id })}
-                    className={cn(
-                      "rounded-[var(--radius-sm)] border p-0.5 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                      active
-                        ? "scale-110 border-fg ring-2 ring-accent/60"
-                        : allowed
-                          ? "border-ink/20 hover:scale-110"
-                          : "cursor-not-allowed border-ink/20 opacity-40",
-                    )}
-                  >
-                    <CardBackChip itemId={item.id} className="h-10 w-7" />
-                  </button>
-                  <span className="max-w-full truncate text-[9px] leading-tight text-muted">
-                    {translate(lang, item.titleKey)}
-                  </span>
+                <span className="max-w-full truncate text-[9px] leading-tight text-muted">
+                  {translate(lang, item.titleKey)}
                 </span>
-              );
-            })
-          : null}
-      </div>
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
+      {tab === "felt" && onEquipItem ? (
+        <div className="flex flex-wrap items-start gap-1.5">
+          {felts.map((item) => {
+            const allowed = item.price === 0 || owned.has(item.id);
+            const active = feltItem === item.id;
+            return (
+              <span key={item.id} className="flex w-14 shrink-0 flex-col items-center gap-0.5">
+                <button
+                  type="button"
+                  disabled={!allowed}
+                  aria-pressed={active}
+                  title={allowed ? translate(lang, item.titleKey) : tt("avatar.pick.notOwned")}
+                  onClick={() => {
+                    if (!active) onEquipItem(item.id);
+                  }}
+                  className={cn(
+                    "overflow-hidden rounded-[var(--radius-sm)] border p-0.5 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    active
+                      ? "scale-110 border-fg ring-2 ring-accent/60"
+                      : allowed
+                        ? "border-ink/20 hover:scale-110"
+                        : "cursor-not-allowed border-ink/20 opacity-40",
+                  )}
+                >
+                  <span aria-hidden className={cn("felt block h-8 w-12", item.cssClass)} />
+                </button>
+                <span className="max-w-full truncate text-[9px] leading-tight text-muted">
+                  {translate(lang, item.titleKey)}
+                </span>
+              </span>
+            );
+          })}
+          <p className="w-full text-[10px] leading-snug text-subtle">{tt("avatar.pick.feltHint")}</p>
+        </div>
+      ) : null}
       <p className="text-[10px] leading-snug text-subtle">{tt("avatar.pick.hint")}</p>
+    </div>
+  );
+}
+
+/**
+ * Панель передачи хоста — раскрывается под короной на строке хоста.
+ * Кандидаты — те же места из списка (не дублируем состав): только люди,
+ * кроме самого хоста; боты хостом быть не могут на сервере.
+ */
+function HostTransferPanel({
+  seats,
+  hostSeat,
+  onPick,
+}: {
+  seats: SeatInfo[];
+  hostSeat: number;
+  onPick: (seat: SeatInfo) => void;
+}) {
+  const tt = useT();
+  const lang = useLang();
+  const candidates = seats.filter((s) => !s.isAI && s.seat !== hostSeat);
+  return (
+    <div
+      data-host-transfer
+      className="flex w-full flex-col gap-1.5 rounded-[var(--radius-sm)] border border-border bg-bg px-2 py-1.5"
+    >
+      <span className="text-[10px] uppercase tracking-wide text-muted">{tt("seat.transferPanel")}</span>
+      {candidates.length ? (
+        <div className="flex flex-wrap gap-1.5">
+          {candidates.map((s) => (
+            <button
+              key={s.seat}
+              type="button"
+              aria-label={tt("seat.transferAria", { name: s.name })}
+              title={tt("seat.transferAria", { name: s.name })}
+              onClick={() => onPick(s)}
+              className="flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-ink/15 bg-surface px-2 py-1 text-xs font-medium text-fg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring hover:border-accent hover:bg-accent/10"
+            >
+              <AvatarChip avatarKey={s.avatar} name={s.name} className="size-5" />
+              <span className="min-w-0 truncate">{scientistName(s.name, lang)}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-muted">{tt("seat.transferNone")}</p>
+      )}
     </div>
   );
 }
@@ -942,6 +1104,8 @@ function SeatList({
   onRename,
   onColor,
   onCosmetics,
+  onEquipItem,
+  equippedFelt,
   ownedItems = [],
 }: {
   seats: SeatInfo[];
@@ -960,10 +1124,19 @@ function SeatList({
   onColor?: (color: PlayerColor) => void;
   /**
    * Косметика своего места (аватар/рубашка): как и цвет — только из лобби.
+   */
+  onCosmetics?: (patch: { avatar?: string | null; cardback?: string | null }) => void;
+  /**
+   * Личная экипировка профиля (сукно): уходит в cosmeticsEquip мимо стола.
+   * Не передана — вкладки сукна в пикере внешности не будет.
+   */
+  onEquipItem?: (itemId: string) => void;
+  /** Текущее сукно профиля — подсветка активного в пикере. */
+  equippedFelt?: string;
+  /**
    * ownedItems — item_id, которыми игрок владеет (магазин); учёт нужен,
    * чтобы существа без владения были видны, но не кликались.
    */
-  onCosmetics?: (patch: { avatar?: string | null; cardback?: string | null }) => void;
   ownedItems?: string[] | undefined;
 }) {
   const tt = useT();
@@ -972,10 +1145,10 @@ function SeatList({
   // Правка имени: карандаш у своей строки, Enter — сохранить, Esc — отменить.
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
-  // Палитра цветов открыта у одного места; закрывается по выбору/повтору.
-  const [palette, setPalette] = useState<number | null>(null);
-  // Пикер косметики (аватар/рубашка) открыт у одного места.
-  const [cosmo, setCosmo] = useState<number | null>(null);
+  // Панель внешности открыта у одного места; закрывается по выбору/повтору.
+  const [appearance, setAppearance] = useState<number | null>(null);
+  // Панель передачи хоста — под короной на своей строке; одна на список.
+  const [transferOpen, setTransferOpen] = useState(false);
 
   const startEdit = (seat: SeatInfo) => {
     setEditing(seat.seat);
@@ -994,18 +1167,24 @@ function SeatList({
         const isHostSeat = seat?.seat === hostSeat;
         const canKick = canManage && seat && !seat.isAI && !isMe;
         const editingMe = isMe && seat && editing === seatNo;
-        const pickColor = isMe && seat && onColor && !seat.isAI;
-        const pickCosmetics = isMe && seat && onCosmetics && !seat.isAI;
+        const pickStyle = isMe && seat && (onColor || onCosmetics) && !seat.isAI;
+        const canPassHost = isMe && isHostSeat && Boolean(onTransfer) && Boolean(seat) && !seat.isAI;
+        // Офлайн-человек: строка целиком серая (filter), статус — в подсказке.
+        // Боты не «офлайн» — они всегда при деле.
+        const dimmed = Boolean(seat && !seat.isAI && !seat.online);
         return (
           <li
             key={seatNo}
             // Фон = цвет места (как секция игрока в партии) + та же бумажная
             // текстура paper-sheet, что у табло игрока: строка места в лобби
             // и в ожидающем столе выглядит как в игре. Цвет места — публичный,
-            // приходит с сервера; у пустого места подложки нет.
-            style={seatTint(seat?.color)}
+            // приходит с сервера; у пустого места подложки нет. Офлайн —
+            // серым через filter: отдельная плашка «не в сети» отъедала
+            // ширину имени, а так статус читается и без неё.
+            style={dimmed ? { ...seatTint(seat?.color), filter: "grayscale(1) opacity(0.55)" } : seatTint(seat?.color)}
+            title={dimmed ? tt("seat.offline") : undefined}
             className={cn(
-              // flex-wrap: раскрытая палитра (w-full) переносится на свою строку.
+              // flex-wrap: раскрытая панель (w-full) переносится на свою строку.
               "flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-md)] border px-3 py-2.5",
               seat ? "paper-sheet border-border" : "border-dashed border-border bg-bg/40",
               isMe && "ring-1 ring-accent/50",
@@ -1041,26 +1220,19 @@ function SeatList({
             ) : (
               <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-fg">
                 {seat ? (
-                  // Аватар места: портрет учёного/существа вместо иконки бота
-                  // и безликой точки. Онлайн-точка остаётся рядом — статус
-                  // важнее декора, а портрет теперь «по умолчанию разный».
-                  <>
-                    <AvatarChip avatarKey={seat.avatar} name={seat.name} className="size-7" />
-                    {!seat.isAI ? (
-                      <span
-                        className={cn("size-2 shrink-0 rounded-full", seat.online ? "bg-good" : "bg-ink/25")}
-                        title={seat.online ? tt("seat.online") : tt("seat.offline")}
-                      />
-                    ) : null}
-                  </>
+                  // Аватар места: портрет учёного/существа. Отдельной точки
+                  // «в сети» больше нет: офлайн виден по серой строке целиком,
+                  // а у живой строки имя занимает всю освободившуюся ширину.
+                  <AvatarChip avatarKey={seat.avatar} name={seat.name} className="size-7" />
                 ) : (
                   <span className="size-2 shrink-0 rounded-full bg-ink/15" />
                 )}
                 {/* Имя места: боты-учёные показываются на языке интерфейса,
                     люди — как назвались. Черновик правки хранит серверное имя. */}
                 <span className="min-w-0 truncate">{seat ? scientistName(seat.name, lang) : tt("seat.free")}</span>
-                {/* Действия своего места — сразу за именем (просил владелец),
-                    бейджи идут после: карандаш не прячется за «хост»/«это вы». */}
+                {/* Действия своего места — сразу за именем (просил владелец):
+                    карандаш, затем внешность. Корона-хост стоит после них —
+                    к ней передают хост, она не должна мешать правке себя. */}
                 {isMe && seat && onRename ? (
                   <Button
                     variant="ghost"
@@ -1073,69 +1245,67 @@ function SeatList({
                     <Pencil className="size-4" />
                   </Button>
                 ) : null}
-                {/* Цвет — рядом с карандашом имени: фон строки уже показывает
-                    текущий цвет, поэтому кнопка-палитра без второго кружка. */}
-                {pickColor ? (
+                {/* Внешность места: цвет, аватар, рубашка и сукно — в одной
+                    кнопке вместо двух (цвет и аватар жили по отдельности). */}
+                {pickStyle ? (
                   <Button
                     variant="ghost"
                     size="iconSm"
                     className="max-xl:size-11"
-                    aria-label={tt("seat.colorAria", { color: seat.color })}
-                    aria-expanded={palette === seatNo}
-                    title={tt("seat.colorTitle")}
-                    onClick={() => setPalette((v) => (v === seatNo ? null : seatNo))}
+                    aria-label={tt("seat.appearanceTitle")}
+                    aria-expanded={appearance === seatNo}
+                    title={tt("seat.appearanceTitle")}
+                    onClick={() => {
+                      // Панели под строкой взаимоисключающие: две раскрытые
+                      // рядом — шум, а смысла в этом нет.
+                      setTransferOpen(false);
+                      setAppearance((v) => (v === seatNo ? null : seatNo));
+                    }}
                   >
                     <Palette className="size-4" />
                   </Button>
                 ) : null}
-                {/* Косметика места: аватар и рубашка — рядом с палитрой. */}
-                {pickCosmetics ? (
-                  <Button
-                    variant="ghost"
-                    size="iconSm"
-                    className="max-xl:size-11"
-                    aria-label={tt("avatar.pick")}
-                    aria-expanded={cosmo === seatNo}
-                    title={tt("avatar.pick")}
-                    onClick={() => setCosmo((v) => (v === seatNo ? null : seatNo))}
-                  >
-                    <Image className="size-4" />
-                  </Button>
-                ) : null}
-                {seat && !seat.isAI && !seat.online ? (
-                  <span className="shrink-0 rounded-full bg-ink/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
-                    {tt("seat.offline")}
-                  </span>
+                {/* Хост — корона вместо надписи: тот же смысл, но места
+                    занимает втрое меньше. У хоста это ещё и кнопка передачи:
+                    раскрывает под строкой выбор игрока из тех же мест списка.
+                    У остальных корона — просто значок хоста. */}
+                {seat && isHostSeat ? (
+                  canPassHost ? (
+                    <Button
+                      variant="ghost"
+                      size="iconSm"
+                      className="max-xl:size-11 text-accent"
+                      data-host-crown
+                      aria-label={tt("seat.transferTitle")}
+                      aria-expanded={transferOpen}
+                      title={tt("seat.transferTitle")}
+                      onClick={() => {
+                        setAppearance(null);
+                        setTransferOpen((v) => !v);
+                      }}
+                    >
+                      <Crown className="size-4" />
+                    </Button>
+                  ) : (
+                    <span
+                      role="img"
+                      aria-label={tt("seat.hostTitle")}
+                      title={tt("seat.hostTitle")}
+                      className="flex shrink-0 text-accent"
+                    >
+                      <Crown className="size-4" aria-hidden />
+                    </span>
+                  )
                 ) : null}
                 {seat?.resigned ? (
                   <span className="shrink-0 rounded-full bg-clay/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-clay">
                     {tt("seat.resigned")}
                   </span>
                 ) : null}
-                {isHostSeat ? (
-                  <span className="shrink-0 rounded-full bg-accent/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-accent">
-                    {tt("seat.host")}
-                  </span>
-                ) : null}
-                {isMe ? (
-                  <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted">{tt("seat.you")}</span>
-                ) : null}
               </span>
             )}
             {canKick && seat ? (
               <span className="flex shrink-0 items-center gap-0.5">
-                {onTransfer && !isHostSeat ? (
-                  <Button
-                    variant="ghost"
-                    size="iconSm"
-                    className="max-xl:size-11"
-                    aria-label={tt("seat.transferAria", { name: seat.name })}
-                    title={tt("seat.transferTitle")}
-                    onClick={() => onTransfer(seat)}
-                  >
-                    <ArrowLeftRight className="size-4" />
-                  </Button>
-                ) : null}
                 {onKick ? (
                   <Button
                     variant="ghost"
@@ -1152,67 +1322,32 @@ function SeatList({
             ) : !seat && canManage ? (
               <span className="shrink-0 text-[10px] uppercase tracking-wide text-subtle">{tt("seat.waiting")}</span>
             ) : null}
-            {/* Палитра своего места: выбор цвета в ожидании партии. Цвет
-                эксклюзивен в пределах стола: занятые другими (включая ботов)
-                цвета приглушены и не кликаются, под кружком — имя владельца. */}
-            {pickColor && palette === seatNo ? (
-              <div className="flex w-full flex-wrap items-center gap-1.5 rounded-[var(--radius-sm)] border border-border bg-bg px-2 py-1.5">
-                <span className="mr-1 text-[10px] uppercase tracking-wide text-muted">{tt("seat.colorLabel")}</span>
-                {PLAYER_COLORS.map((c) => {
-                  const active = seat.color.toLowerCase() === c.toLowerCase();
-                  const owner = seats.find(
-                    (s) =>
-                      s.seat !== seatNo &&
-                      typeof s.color === "string" &&
-                      s.color.toLowerCase() === c.toLowerCase(),
-                  );
-                  return (
-                    <span key={c} className="flex w-8 shrink-0 flex-col items-center gap-0.5">
-                      <button
-                        type="button"
-                        disabled={Boolean(owner)}
-                        aria-pressed={active}
-                        aria-label={tt("seat.colorAria", { color: c })}
-                        title={owner ? `${c} — ${scientistName(owner.name, lang)}` : c}
-                        onClick={() => {
-                          setPalette(null);
-                          // Текущий цвет повторно не отправляем: сервер всё равно
-                          // ответит тем же, а лишний запрос ни к чему.
-                          if (!active) onColor(c);
-                        }}
-                        className={cn(
-                          "size-6 rounded-full border transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
-                          active
-                            ? "scale-110 border-fg ring-2 ring-accent/60"
-                            : owner
-                              ? "cursor-not-allowed border-ink/20 opacity-40"
-                              : "border-ink/20 hover:scale-110",
-                        )}
-                        style={{ background: c }}
-                      />
-                      {/* Метка владельца под занятым цветом; пустой spacer
-                          держит все кружки на одной линии. */}
-                      <span
-                        className="max-w-full truncate text-[9px] leading-tight text-muted"
-                        title={owner ? scientistName(owner.name, lang) : undefined}
-                      >
-                        {owner ? scientistName(owner.name, lang) : "\u00A0"}
-                      </span>
-                    </span>
-                  );
-                })}
-              </div>
+            {/* Панель передачи хоста: раскрывается по короне на своей строке.
+                Кандидаты берутся из того же списка мест — состав не дублится. */}
+            {canPassHost && transferOpen ? (
+              <HostTransferPanel
+                seats={seats}
+                hostSeat={hostSeat}
+                onPick={(target) => {
+                  setTransferOpen(false);
+                  onTransfer?.(target);
+                }}
+              />
             ) : null}
-            {/* Пикер косметики места: учёные (все бесплатны), существа из
-                магазина (не купленные видны, но не кликаются) и рубашка. */}
-            {pickCosmetics && cosmo === seatNo ? (
-              <SeatCosmeticsPicker
+            {/* Панель внешности своего места: цвет, аватар, рубашка и сукно. */}
+            {pickStyle && appearance === seatNo ? (
+              <SeatAppearancePicker
                 seat={seat!}
+                seats={seats}
                 ownedItems={ownedItems}
-                onPick={(patch) => {
-                  setCosmo(null);
+                feltItem={equippedFelt}
+                onColor={onColor}
+                onCosmetics={(patch) => {
+                  setAppearance(null);
                   onCosmetics?.(patch);
                 }}
+                onEquipItem={onEquipItem}
+                onDone={() => setAppearance(null)}
               />
             ) : null}
           </li>
@@ -1385,6 +1520,23 @@ export function LobbyScreen() {
   const netSetColor = useGameStore((s) => s.netSetColor);
   const netSetCosmetics = useGameStore((s) => s.netSetCosmetics);
   const netTransferHost = useGameStore((s) => s.netTransferHost);
+  // Личная экипировка (сукно) из пикера внешности: тот же cosmeticsEquip,
+  // что в магазине, но без похода на его страницу.
+  const equippedCosmetics = useGameStore((s) => s.equippedCosmetics);
+  const setEquippedCosmetics = useGameStore((s) => s.setEquippedCosmetics);
+  const equipItem = async (itemId: string) => {
+    const item = cosmeticById(itemId);
+    if (!item) return;
+    try {
+      const res = await cosmeticsEquip({ data: { slot: item.slot, itemId } });
+      if (res.ok) {
+        setEquippedCosmetics({ ...useGameStore.getState().equippedCosmetics, [item.slot]: itemId });
+        sfx.play("click");
+      }
+    } catch {
+      // нет сети — сукно просто не применится, ошибка стола не нужна
+    }
+  };
   const netKickWaiter = useGameStore((s) => s.netKickWaiter);
   const netSetName = useGameStore((s) => s.netSetName);
   const sendChat = useGameStore((s) => s.sendChat);
@@ -1771,6 +1923,10 @@ export function LobbyScreen() {
           // Косметика места — так же только в лобби; владение платными
           // предметами перепроверяет сервер по профилю.
           onCosmetics={(patch) => void netSetCosmetics(patch)}
+          // Сукно — личная экипировка профиля (тот же cosmeticsEquip, что в
+          // магазине), поэтому в пикере внешности у неё своя вкладка.
+          onEquipItem={(itemId) => void equipItem(itemId)}
+          equippedFelt={equippedCosmetics.felt}
           ownedItems={ownedItems}
         />
 

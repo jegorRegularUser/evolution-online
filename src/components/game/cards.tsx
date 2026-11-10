@@ -192,6 +192,15 @@ export const TraitChip = memo(function TraitChip({
 });
 
 /**
+ * Ширина карточки животного в пикселях: растёт с числом свойств (максимум
+ * три ступени по 38px). Экспортирована, потому что группы пар раскладывают
+ * «буквой Г» под ширину карточки-родителя — ширина должна совпадать точь-в-точь.
+ */
+export function animalCardWidth(traitCount: number): number {
+  return 168 + Math.min(Math.max(traitCount - 3, 0), 3) * 38;
+}
+
+/**
  * Карточка животного. Клик обрабатывается делегированием на контейнере
  * (data-animal-id), поэтому компонент можно мемоизировать: он перерисовывается
  * только при смене своих примитивных пропсов или самого объекта животного.
@@ -284,7 +293,7 @@ export const AnimalCard = memo(function AnimalCard({
     onRename?.(animal.id, draft.trim());
   };
   // Много свойств — карточка растёт в ширину, а не только в высоту.
-  const width = 168 + Math.min(Math.max(animal.traits.length - 3, 0), 3) * 38;
+  const width = animalCardWidth(animal.traits.length);
   return (
     <div
       ref={dragRef}
@@ -506,7 +515,15 @@ export const AnimalCard = memo(function AnimalCard({
  * в настольной игре: на узком экране животные стоят столбиком, поэтому плашка
  * становится горизонтальной полосой между ними, а на широком — вертикальной
  * карточкой в ряду. На плашке рисуется арт свойства и цвет своей пары.
- * Состояния — как у карт: одно кольцо на выбор, приглушение прозрачностью.
+ *
+ * Стилистика связи: сплошная рамка в цвете пары вместо прежнего пунктира —
+ * пунктир читался как «черновая» карточка и терялся на столе; цветная
+ * сплошная рамка плюс проводники-стабы (их рисует группа пары в game-app)
+ * собирают связь в читаемую «проволоку» между зверями.
+ *
+ * hang — плашка на вертикальной ветви «Г»-раскладки: всегда горизонтальная
+ * полоса (висит между верхним животным и тем, что ушло вниз), ширина задаёт
+ * обёртка. Состояния — как у карт: одно кольцо на выбор, приглушение.
  */
 export function PairPlate({
   type,
@@ -515,6 +532,7 @@ export function PairPlate({
   selected,
   highlight,
   dimmed,
+  hang,
 }: {
   type: TraitId;
   color?: string;
@@ -522,6 +540,8 @@ export function PairPlate({
   selected?: boolean;
   highlight?: boolean;
   dimmed?: boolean;
+  /** На вертикальной ветви «Г»: остаётся полосой на любой ширине. */
+  hang?: boolean;
 }) {
   const t = useT();
   const lang = useLang();
@@ -539,7 +559,12 @@ export function PairPlate({
       title={`${traitShort(type, lang)}${note ? ` · ${note}` : ""} — ${traitDesc(type, lang)}`}
       style={color ? { borderColor: color, backgroundColor: `${color}14` } : undefined}
       className={cn(
-        "relative flex w-full shrink-0 cursor-help items-center gap-2 self-center rounded-[var(--radius-sm)] border border-dashed border-ink/30 bg-parchment-2/80 px-2 py-1 text-ink shadow-[var(--shadow-card)] sm:w-[58px] sm:flex-col sm:justify-center sm:gap-1 sm:px-1 sm:py-2",
+        "relative flex w-full shrink-0 cursor-help items-center gap-2 self-center rounded-[var(--radius-sm)] border px-2 py-1 text-ink shadow-[var(--shadow-card)]",
+        // Без цвета пары (старые сейвы) — прежний нейтральный вид.
+        !color && "border-ink/25 bg-parchment-2/80",
+        // Вертикальная карточка в ряду — только на широкой раскладке и не на
+        // вертикальной ветви: там плашка обязана остаться полосой.
+        !hang && "sm:w-[72px] sm:flex-col sm:justify-center sm:gap-1 sm:px-1 sm:py-2",
         selected ? "evo-picked-flat" : highlight ? "ring-2 ring-accent" : "",
         dimmed ? "opacity-45" : "",
       )}
@@ -550,12 +575,18 @@ export function PairPlate({
           alt=""
           loading="lazy"
           className={cn(
-            "size-8 shrink-0 rounded-[4px] border border-ink/20 object-cover object-top sm:h-12 sm:w-full",
+            "size-8 shrink-0 rounded-[4px] border border-ink/20 object-cover object-top",
+            !hang && "sm:h-10 sm:w-full",
             dark && "bg-ink object-contain p-0.5",
           )}
         />
       ) : (
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-[4px] border border-ink/20 bg-parchment sm:h-12 sm:w-full">
+        <span
+          className={cn(
+            "flex size-8 shrink-0 items-center justify-center rounded-[4px] border border-ink/20 bg-parchment",
+            !hang && "sm:h-10 sm:w-full",
+          )}
+        >
           <TraitGlyph id={type} className="size-5 text-ink-soft" />
         </span>
       )}
@@ -565,7 +596,7 @@ export function PairPlate({
           {traitShort(type, lang)}
         </span>
         <span
-          className="truncate text-[10px] leading-tight text-ink-soft sm:max-w-full sm:text-center"
+          className="overflow-hidden text-ellipsis whitespace-nowrap text-[10px] font-medium leading-tight sm:overflow-visible sm:whitespace-normal sm:text-center"
           style={color ? { color } : undefined}
         >
           {note ?? t("card.pair")}

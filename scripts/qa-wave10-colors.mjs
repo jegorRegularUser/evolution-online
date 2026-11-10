@@ -113,15 +113,16 @@ try {
   );
 
   // ── Пикер гостя: 16 цветов, цвет хоста заблокирован и подписан ───────────
-  // Кнопка-палитра у своей строки места: title «Выбрать цвет».
+  // Кнопка внешности у своей строки места: открывает панель с вкладками,
+  // палитра — первая из них (data-color-grid).
   const paletteBtn = guest
     .locator("[data-seat-list] li")
     .filter({ hasText: "Боря" })
-    .getByRole("button", { name: /^Цвет игрока: / });
-  check((await paletteBtn.count()) > 0, "гость: кнопка-палитра у своей строки места");
+    .getByRole("button", { name: "Внешность места" });
+  check((await paletteBtn.count()) > 0, "гость: кнопка внешности у своей строки места");
   await safeClick(paletteBtn.first(), 5000);
   await sleep(600);
-  const swatches = guest.locator('[data-seat-list] button[aria-pressed]');
+  const swatches = guest.locator('[data-color-grid] button[aria-pressed]');
   const swatchCount = await swatches.count();
   check(swatchCount === 16, `пикер показывает 16 цветов (нашёл ${swatchCount})`);
 
@@ -181,11 +182,11 @@ try {
 
   // ── Смена на свободный цвет через пикер: успех и перекраска строки ────────
   // Открываем пикер заново (мог закрыться) и берём любой enabled-кружок.
-  if (!(await guest.locator('[data-seat-list] button[aria-pressed]').count())) {
+  if (!(await guest.locator('[data-color-grid] button[aria-pressed]').count())) {
     await safeClick(paletteBtn.first(), 5000);
     await sleep(400);
   }
-  const all = guest.locator('[data-seat-list] button[aria-pressed]');
+  const all = guest.locator('[data-color-grid] button[aria-pressed]');
   let freeSwatch = null;
   const n = await all.count();
   for (let i = 0; i < n; i++) {

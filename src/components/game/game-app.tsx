@@ -16,7 +16,7 @@ import {
   type DragStartEvent,
   type Over,
 } from "@dnd-kit/core";
-import { BookOpen, Eye, LayoutGrid, List, Minimize2, Trash2 } from "lucide-react";
+import { BookOpen, ChevronLeft, Eye, LayoutGrid, List, Minimize2, Smile, Trash2 } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Toaster, toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -52,7 +52,7 @@ import { BG, MUTATION_ART, PHASE_ICON, TERRITORY_ART } from "@/lib/art";
 import { AvatarChip, CardBackChip } from "./avatar";
 import { defaultAvatarForSeat } from "@/lib/cosmetics";
 import { isSoloBotTable, useGameStore, typingNamesOf, type NetUiState, type UiIntent } from "@/store/game-store";
-import { AnimalCard, CardPreview, HandCard, PAIR_COLORS, PairPlate, TraitChip, type PairMark } from "./cards";
+import { AnimalCard, CardPreview, HandCard, PAIR_COLORS, PairPlate, TraitChip, animalCardWidth, type PairMark } from "./cards";
 import { FloraStrip } from "./cards-flora";
 import { PlantStrip } from "./cards-plants";
 import { ConfirmDialog } from "./confirm-dialog";
@@ -1701,7 +1701,7 @@ function WaitingPlayerNotice({ actor, net }: { actor: Player | null; net: NetUiS
       role="status"
       aria-live="polite"
       data-waiting-player={actor.id}
-      className="pointer-events-none mr-auto flex min-w-0 flex-1 items-center gap-2 rounded-full border border-border bg-surface/90 px-3 py-1.5 text-xs text-muted shadow-[var(--shadow-card)] sm:flex-none sm:w-fit"
+      className="pointer-events-none flex w-fit min-w-0 items-center gap-2 rounded-full border border-border bg-surface/90 px-3 py-1.5 text-xs text-muted shadow-[var(--shadow-card)] sm:ml-auto"
     >
       <span className="size-1.5 shrink-0 rounded-full bg-muted/70" aria-hidden />
       {/* Полный текст — с sm; на телефоне короткий, чтобы строка реакций
@@ -3480,13 +3480,18 @@ function Table() {
         </div>
       ) : null}
 
-      {/* Реакции — сетевая забава: в кампании соперник-изверг нем и панель
-          реакций над столом не нужна (и верстку она распирала). */}
-      {net && !campaignRun ? <ReactionsLayer net={net} phase={state.phase} actor={actor} /> : null}
-
       {/* Стол: узкое центральное поле-сукно, соперники по бокам без прокрутки, игрок снизу. */}
       {/* Журнал-док на xl+ живёт рядом с полем и сдвигает его раскрытием. */}
       <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
+      {/* Колонка стола: полоса реакций живёт внутри неё, а не сиблингом над
+          всей строкой «стол + журнал». Раньше полоса тянулась на всю ширину —
+          вплывала над журналом, и журнал с полем начинались ниже неё: на xl
+          это съедало высоту вьюпорта и отъезжало от шапки. Теперь журнал
+          занимает полную высоту до шапки, а полоса реакций принадлежит
+          только столу. Реакции — сетевая забава: в кампании соперник-изверг
+          нем и панель реакций не нужна (и верстку она распирала). */}
+      <div className="flex min-h-0 flex-1 flex-col xl:min-w-0">
+      {net && !campaignRun ? <ReactionsLayer net={net} phase={state.phase} actor={actor} /> : null}
       <main
         onClick={onBoardClick}
         className={cn(
@@ -3683,6 +3688,7 @@ function Table() {
           style={wideSeats ? { gridArea: "human" } : undefined}
         />
       </main>
+      </div>
       <EventFeed
         items={feed}
         open={logOpen}
@@ -4417,6 +4423,32 @@ const TurnTimer = memo(function TurnTimer({
   );
 });
 
+/**
+ * Проводник связи: короткий цветной отрезок «проволоки» между карточкой
+ * животного и плашкой пары. axis="auto" — вертикальный на узком экране и
+ * горизонтальный с sm (связь в ряду пары); axis="v" — всегда вертикальный
+ * (ветвь «Г»). Цвет — цвет своей пары, поэтому двойные пары не путаются.
+ */
+function PairWire({ color, axis = "auto" }: { color: string; axis?: "auto" | "v" }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "shrink-0 rounded-full",
+        axis === "v" ? "h-2.5 w-[3px]" : "h-2.5 w-[3px] sm:h-[3px] sm:w-2.5",
+      )}
+      style={{ backgroundColor: color }}
+    />
+  );
+}
+
+/**
+ * Ширина связи в ряду (sm+): проводник + зазор + плашка (66px) + зазор +
+ * проводник + зазоры до карточек. По ней цепочка решает, влезает ли она
+ * одной строкой в ряд табло или её надо согнуть «буквой Г».
+ */
+const PAIR_LINK_ROW_W = 114;
+
 /** Табло игрока со его животными; парные карты кладутся между животными. */
 const PlayerSection = memo(function PlayerSection({
   p,
@@ -4500,6 +4532,23 @@ const PlayerSection = memo(function PlayerSection({
   /** Карта, ожидающая выбора континента (интент «выставить животное»). */
   const placingAnimal =
     isHuman && active && intent.kind === "placeAnimal" ? (intent.cardId as string) : undefined;
+
+  // Ширина ряда животных: по ней цепочка пар решает, идти одной строкой или
+  // согнуться «буквой Г». Ширина табло меняется постоянно — ресайз окна,
+  // колонки соперников, раскрытый журнал, — поэтому ResizeObserver, а не
+  // единожды снятый matchMedia.
+  const rowBoxRef = useRef<HTMLDivElement | null>(null);
+  const [rowWidth, setRowWidth] = useState(0);
+  useEffect(() => {
+    const el = rowBoxRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = Math.round(entries[0]?.contentRect.width ?? 0);
+      setRowWidth((prev) => (prev === w ? prev : w));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [continents]);
 
   /**
    * Разметка пар этого табло. У животного бывает две пары плюс симбионт,
@@ -4587,48 +4636,130 @@ const PlayerSection = memo(function PlayerSection({
       </p>,
     );
   } else {
-    // Между связанными животными лежит их парная карта: цепочку пар собираем
-    // в одну группу — на узком экране она идёт столбиком (плашка — полосой
-    // между карточками), на широком — рядом. Группировка идёт по связям, а не
-    // по соседству в массиве: перестановка животных не рвёт цепочку и не
-    // теряет плашку. Номера берём из стабильного pairs.numberOf.
-    const linkBetween = (x: Animal, y: Animal) =>
-      x.traits.find((t) => t.pairWith === y.id) ?? y.traits.find((t) => t.pairWith === x.id);
+    // Связи пар: цепочка связанных животных идёт одной строкой (на узком
+    // экране — столбиком), пока влезает в ширину табло. Двойная пара — одно
+    // животное связано с двумя — раньше всегда шла строкой и на телефонах в
+    // альбомной ориентации выталкивала третье животное за экран. Теперь
+    // цепочка, которой не хватает ширины, сгибается «буквой Г»: первые два
+    // звена остаются в ряду, а каждое следующее сползает вниз под своего
+    // напарника (обход цепочки гарантирует, что звено связано с предыдущим):
+    //
+    //   зверь ─ плашка ─ зверь
+    //                       │
+    //                     плашка
+    //                       │
+    //                     зверь
+    //
+    // Группировка идёт по связям (pairChains), а не по соседству в массиве:
+    // перестановка животных не рвёт цепочку и не теряет плашку. Номера — из
+    // стабильного pairs.numberOf.
+    const wireColor = (cardId: string) => pairs.colorOf.get(cardId) ?? "var(--color-border-strong)";
+    const linkOf = (x: Animal, y: Animal) => {
+      const link = x.traits.find((tr) => tr.pairWith === y.id) ?? y.traits.find((tr) => tr.pairWith === x.id);
+      if (!link) return null;
+      // Плашка приглушается, только если приглушены обе её стороны.
+      return {
+        link,
+        color: pairs.colorOf.get(link.cardId),
+        dimmed: interactions(x).dimmed && interactions(y).dimmed,
+      };
+    };
+    // Связь в строке: проводники торчат из плашки в обе стороны — связь
+    // читается как проволока, а не как лишняя карточка в ряду.
+    const linkUnit = (l: NonNullable<ReturnType<typeof linkOf>>, key: string) => (
+      <span key={key} className="flex shrink-0 flex-col items-center gap-1 self-center sm:flex-row sm:gap-1">
+        <PairWire color={wireColor(l.link.cardId)} />
+        <PairPlate
+          type={l.link.type}
+          color={l.color}
+          note={pairs.plateNote.get(l.link.cardId)}
+          dimmed={l.dimmed}
+        />
+        <PairWire color={wireColor(l.link.cardId)} />
+      </span>
+    );
     for (const chain of pairChains(p.animals)) {
-      const items: React.ReactNode[] = [];
-      chain.forEach((a, k) => {
-        if (k > 0) {
-          const prev = chain[k - 1]!;
-          const link = linkBetween(prev, a);
-          if (link) {
-            // Плашка приглушается, только если приглушены обе её стороны.
-            const here = interactions(prev);
-            const there = interactions(a);
-            items.push(
-              <PairPlate
-                key={`pair-${link.cardId}`}
-                type={link.type}
-                color={pairs.colorOf.get(link.cardId)}
-                note={pairs.plateNote.get(link.cardId)}
-                dimmed={here.dimmed && there.dimmed}
-              />,
-            );
+      if (chain.length === 1) {
+        rows.push(renderCard(chain[0]!, pairs.numberOf.get(chain[0]!.id) ?? 1));
+        continue;
+      }
+      // Сколько нужно ширины, чтобы вся цепочка шла одной строкой: карточки
+      // плюс связь между соседями. До первого замера (SSR, первый кадр) —
+      // старое поведение: строка.
+      const cardW = (a: Animal) => animalCardWidth(a.traits.length);
+      const rowNeeded =
+        chain.reduce((sum, a) => sum + cardW(a), 0) + (chain.length - 1) * PAIR_LINK_ROW_W;
+      const asRow = rowWidth === 0 || rowNeeded <= rowWidth;
+      if (asRow) {
+        const items: React.ReactNode[] = [];
+        chain.forEach((a, k) => {
+          if (k > 0) {
+            const l = linkOf(chain[k - 1]!, a);
+            if (l) items.push(linkUnit(l, `pair-${l.link.cardId}`));
           }
-        }
-        items.push(renderCard(a, pairs.numberOf.get(a.id) ?? k + 1));
-      });
-      if (items.length === 1) {
-        rows.push(items[0]);
-      } else {
+          items.push(renderCard(a, pairs.numberOf.get(a.id) ?? k + 1));
+        });
         rows.push(
           <div
             key={`pair-group-${chain[0]!.id}`}
-            className="flex shrink-0 flex-col items-stretch gap-2 sm:flex-row sm:items-stretch"
+            data-pair-group="row"
+            className="flex shrink-0 flex-col items-stretch gap-2 sm:flex-row sm:gap-1.5"
           >
             {items}
           </div>,
         );
+        continue;
       }
+      // Гнём «буквой Г» — но только если сами первые два звена с их связью
+      // влезают в строку; иначе верхним звеном остаётся одно первое животное,
+      // и вся цепочка идёт вертикальным рельсом вниз (пара из двух «толстых»
+      // карточек тоже может не влезать в строку).
+      const headFits = cardW(chain[0]!) + PAIR_LINK_ROW_W + cardW(chain[1]!) <= rowWidth;
+      const headFrom = headFits ? 2 : 1;
+      const headLink = headFrom === 2 ? linkOf(chain[0]!, chain[1]!) : null;
+      const head = (
+        <>
+          {renderCard(chain[0]!, pairs.numberOf.get(chain[0]!.id) ?? 1)}
+          {headLink ? linkUnit(headLink, `pair-${headLink.link.cardId}`) : null}
+          {headFrom === 2 ? renderCard(chain[1]!, pairs.numberOf.get(chain[1]!.id) ?? 2) : null}
+        </>
+      );
+      // ...и хвост: полоса-плашка шириной с карточку напарника
+      // (animalCardWidth держит ширину точь-в-точь), проводник по центру.
+      const hangItems: React.ReactNode[] = [];
+      for (let k = headFrom; k < chain.length; k++) {
+        const up = chain[k - 1]!;
+        const cur = chain[k]!;
+        const down = linkOf(up, cur);
+        if (down) {
+          hangItems.push(
+            <span
+              key={`hang-${down.link.cardId}`}
+              className="flex w-full flex-col items-center gap-1 sm:w-[var(--hang-w)] sm:self-end"
+              style={{ "--hang-w": `${cardW(up)}px` } as React.CSSProperties}
+            >
+              <PairWire color={wireColor(down.link.cardId)} axis="v" />
+              <PairPlate
+                type={down.link.type}
+                color={down.color}
+                note={pairs.plateNote.get(down.link.cardId)}
+                dimmed={down.dimmed}
+                hang
+              />
+              <PairWire color={wireColor(down.link.cardId)} axis="v" />
+            </span>
+          );
+        }
+        hangItems.push(renderCard(cur, pairs.numberOf.get(cur.id) ?? k + 1));
+      }
+      rows.push(
+        <div key={`pair-group-${chain[0]!.id}`} data-pair-group="bent" className="flex shrink-0 flex-col gap-2 sm:gap-1.5">
+          <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:gap-1.5">{head}</div>
+          {/* Ветвь вниз: на sm+ прижата к правому краю — под правое животное
+              верхнего ряда (с ним и связь); на узком — обычный столбик. */}
+          <div className="flex flex-col items-stretch gap-2 sm:items-end sm:self-end sm:gap-1.5">{hangItems}</div>
+        </div>,
+      );
     }
   }
 
@@ -4781,9 +4912,12 @@ const PlayerSection = memo(function PlayerSection({
       ) : (
         // Ряд без «Континентов» — цель броска карты (новое животное);
         // перестановка своих идёт по карточкам, бросок мимо зверя ничего не меняет.
-        <DndRow playerId={p.id} className="flex flex-wrap items-stretch gap-2">
-          {rows}
-        </DndRow>
+        // Обёртка с ref — замер ширины для решения «строка или Г» (см. rows).
+        <div ref={rowBoxRef} className="min-w-0">
+          <DndRow playerId={p.id} className="flex flex-wrap items-stretch gap-2">
+            {rows}
+          </DndRow>
+        </div>
       )}
     </section>
   );
@@ -5369,6 +5503,16 @@ function ReactionsLayer({
 }) {
   const sendReaction = useGameStore((s) => s.sendReaction);
   const t = useT();
+  // Свернутость панели реакций — настройка пользователя, а не состояние
+  // партии: переживает перезагрузку (localStorage, ключ evo-reactions-open).
+  const [reactionsOpen, setReactionsOpen] = useState(() => {
+    try {
+      return localStorage.getItem("evo-reactions-open") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const panelId = useId();
   const [bubbles, setBubbles] = useState<Array<{ key: number; emoji: string; name: string; cheer: boolean }>>([]);
   const seenRef = useRef(new Set<number>());
   const counter = useRef(0);
@@ -5417,47 +5561,84 @@ function ReactionsLayer({
         ))}
       </div>
 
-      {/* Панель реакций — одна компактная полоса на любой ширине. Плашка
-          «Ждём игрока…» и бейдж зрителя (только телефон) стоят в этой же
-          строке слева, панель — справа; строка не переносится, тесный текст
-          обрезается. Так на телефоне это одна полоска вместо нагромождения
-          из двух-трёх строк, а на десктопе прежняя однострочная схема. */}
-      <div className="flex flex-nowrap items-center justify-end gap-1.5 px-2 py-1 sm:gap-2 sm:px-5">
+      {/* Панель реакций — одна компактная полоса на любой ширине, прижата
+          к ЛЕВОМУ краю колонки стола: журнал справа занимает полную высоту,
+          и его голова больше не отъезжает от полосы. Плашка «Ждём игрока…»
+          уезжает на правый край (на телефоне бейдж зрителя прижимается к
+          правому краю той же строки); строка не переносится, тесный текст
+          обрезается. Панель сворачивается до одной кнопки-смайла: полоска
+          не висит у тех, кто реакциями не пользуется, выбор сохраняется
+          в localStorage (evo-reactions-open). */}
+      <div className="flex flex-nowrap items-center justify-start gap-1.5 px-2 py-1 sm:gap-2 sm:px-5">
+        <div
+          data-reactions
+          role="group"
+          aria-label={t("game.reactions")}
+          className="flex w-fit shrink-0 flex-row items-center gap-0.5 rounded-full border border-border bg-surface p-1 shadow-[var(--shadow-card)] sm:gap-1"
+        >
+          {/* Сворачивание: шеврон прячет эмодзи, смайл возвращает панель.
+              Сама свёрнутость — не состояние партии, поэтому живёт только
+              в localStorage и не попадает на сервер. */}
+          <button
+            type="button"
+            aria-label={reactionsOpen ? t("game.reactionsHide") : t("game.reactionsShow")}
+            aria-expanded={reactionsOpen}
+            aria-controls={panelId}
+            title={reactionsOpen ? t("game.reactionsHide") : t("game.reactionsShow")}
+            className="grid size-9 shrink-0 place-items-center rounded-full text-muted transition-colors duration-[var(--motion-fast)] hover:bg-surface-2 hover:text-fg sm:size-11 xl:size-8"
+            onClick={(e) => {
+              e.currentTarget.blur();
+              sfx.play("click");
+              setReactionsOpen((prev) => {
+                const next = !prev;
+                try {
+                  localStorage.setItem("evo-reactions-open", next ? "1" : "0");
+                } catch {
+                  // приватный режим — просто не сохранится
+                }
+                return next;
+              });
+            }}
+          >
+            {reactionsOpen ? (
+              <ChevronLeft className="size-4" />
+            ) : (
+              <Smile className="size-4 sm:size-5 xl:size-4" />
+            )}
+          </button>
+          {reactionsOpen ? (
+            <div id={panelId} className="contents">
+              {REACTION_EMOJI.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  aria-label={t("game.reactionOf", { emoji })}
+                  title={emoji === "👏" ? t("game.cheerTitle") : t("game.reactionOf", { emoji })}
+                  // Палец (до sm): 36px как у иконок шапки; с sm до xl — 44px,
+                  // на широком экране с мышью — компактные 32px.
+                  className="grid size-9 place-items-center rounded-full text-lg leading-none transition-transform duration-[var(--motion-fast)] hover:scale-110 hover:bg-surface-2 sm:size-11 xl:size-8"
+                  onClick={(e) => {
+                    e.currentTarget.blur();
+                    void sendReaction(emoji, emoji === "👏" ? "cheer" : "reaction");
+                  }}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        <WaitingPlayerNotice actor={actor} net={net} />
         {net.spectating ? (
           <div
             role="status"
             aria-label={t("game.spectBadge")}
-            className="mr-auto flex min-w-0 shrink items-center gap-1 rounded-full border border-border bg-surface/95 px-2.5 py-1 text-xs text-muted shadow-[var(--shadow-card)] sm:hidden"
+            className="ml-auto flex min-w-0 shrink items-center gap-1 rounded-full border border-border bg-surface/95 px-2.5 py-1 text-xs text-muted shadow-[var(--shadow-card)] sm:hidden"
           >
             <Eye className="size-3.5 shrink-0" aria-hidden />
             <span className="truncate">{t("game.spectBadgeShort")}</span>
           </div>
         ) : null}
-        <WaitingPlayerNotice actor={actor} net={net} />
-        <div
-          data-reactions
-          role="group"
-          aria-label={t("game.reactions")}
-          className="flex w-fit shrink-0 flex-row gap-0.5 rounded-full border border-border bg-surface p-1 shadow-[var(--shadow-card)] sm:gap-1"
-        >
-          {REACTION_EMOJI.map((emoji) => (
-            <button
-              key={emoji}
-              type="button"
-              aria-label={t("game.reactionOf", { emoji })}
-              title={emoji === "👏" ? t("game.cheerTitle") : t("game.reactionOf", { emoji })}
-              // Палец (до sm): 36px как у иконок шапки; с sm до xl — 44px,
-              // на широком экране с мышью — компактные 32px.
-              className="grid size-9 place-items-center rounded-full text-lg leading-none transition-transform duration-[var(--motion-fast)] hover:scale-110 hover:bg-surface-2 sm:size-11 xl:size-8"
-              onClick={(e) => {
-                e.currentTarget.blur();
-                void sendReaction(emoji, emoji === "👏" ? "cheer" : "reaction");
-              }}
-            >
-              {emoji}
-            </button>
-          ))}
-        </div>
       </div>
     </>
   );
