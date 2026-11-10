@@ -402,6 +402,17 @@ function isUniqueViolation(e: unknown): boolean {
   return String((e as { code?: string }).code) === "23505";
 }
 
+/**
+ * Сквозной счётчик журнала (контракт PollResult.logSeq). Тот же фолбэк, что
+ * в движке (engine.ts log()): старый сейв без поля logSeq самовосстанавливается
+ * от id последней записи, поэтому здесь повторяем его логику, чтобы клиентский
+ * курсор сравнивался с тем же числом, которое двинет следующая запись в журнал.
+ */
+function logSeqOf(state: GameState): number {
+  const prev = state.logSeq ?? state.log.at(-1)?.id ?? 0;
+  return Number.isFinite(prev) ? prev : 0;
+}
+
 interface RoomRowRaw {
   code: string;
   status: string;
@@ -812,6 +823,23 @@ async function casUpdate(
 type CasFields = Parameters<typeof casUpdate>[3];
 
 /**
+ * Срез комнаты после успешного CAS-записи state: версия +1, состояние —
+ * post-шаговое, статус мог уйти в finished, запись state снимает дедлайн
+ * (то же правило, что в casUpdate). Это НЕ запись в БД, а актуализация
+ * in-memory среза для реплик ботов (flushBotEventLines) — свежий readRoom
+ * делает следующая итерация цикла advance или следующий запрос.
+ */
+function afterWrite(room: RoomRow, after: GameState, finished: boolean): RoomRow {
+  return {
+    ...room,
+    version: room.version + 1,
+    state: after,
+    status: finished ? "finished" : room.status,
+    turn_deadline_at: null,
+  };
+}
+
+/**
  * Повторяет casUpdate на свежей версии; бросает при исчерпании попыток.
  * Если payload зависит от state, повтор без rebase недопустим: старый next
  * затёр бы чужое состояние. Владелец такого payload обязан передать rebase
@@ -840,10 +868,9 @@ async function casUpdateStrict(
 }
 
 async function janitor(sql: SqlLike): Promise<void> {
-  // Идущая партия не имеет TTL: даже давно созданный playing-стол нельзя
-  // удалить посреди хода. Для lobby/finished считаем последнюю активность:
-  // CAS обновляет updated_at, heartbeat — last_seen_at, а зритель — свой
-  // last_seen_at. Каскад сам уносит места/события/чат комнаты.
+  // lobby/finished считаем последнюю активность: CAS обновляет updated_at,
+  // heartbeat — last_seen_at, а зритель — свой last_seen_at. Каскад (FK on
+  // delete cascade у всех дочерних таблиц) сам уносит места/события/чат.
   await sql.query(
     `delete from evo_rooms as r
       where r.status <> 'playing'
@@ -856,6 +883,28 @@ async function janitor(sql: SqlLike): Promise<void> {
                      where s.room_code = r.code), r.updated_at)
         ) < now() - ($1::int * interval '1 hour')`,
     [PACE.roomTtlHours],
+  );
+  // Идущая партия теперь тоже смертна: раньше playing-стол не имел TTL и
+  // брошенный посреди хода стол (все закрыли вкладку, никто не голосовал)
+  // висел в БД вечно вместе с распухшим jsonb состояния. Признак жизни —
+  // ТОЛЬКО свежие heartbeat'ы участников (last_seen_at мест) и зрителей
+  // (evo_spectators.last_seen_at, его ведёт spectatorPoll): updated_at здесь
+  // не учитываем — он бы продлевал жизнь столу, который никто не покидает
+  // сознательно, но его уже никто и не опрашивает. У зрителей last_seen_at
+  // есть (миграция 0005), поэтому присутствие смотрящих защищает стол от
+  // удаления наравне с игроками. Дочерние строки (места, чат, реакции,
+  // ожидающие, зрители, кики) уезжают FK-каскадом — тот же механизм, что и
+  // в branch выше и в closeTable.
+  await sql.query(
+    `delete from evo_rooms as r
+      where r.status = 'playing'
+        and greatest(
+          coalesce((select max(s.last_seen_at) from evo_seats s
+                     where s.room_code = r.code), r.created_at),
+          coalesce((select max(s.last_seen_at) from evo_spectators s
+                     where s.room_code = r.code), r.created_at)
+        ) < now() - ($1::int * interval '1 hour')`,
+    [PACE.playingTtlHours],
   );
   // Ожидающие и следы киков не должны переживать свои комнаты и TTL.
   await sql.query(
@@ -1114,6 +1163,8 @@ export interface RoomService {
     sinceVersion?: number,
     sinceChatId?: number,
     sinceReactionId?: number,
+    /** Дельта журнала: logSeq копии клиента; совпадает — кадр без state.log. */
+    logSeq?: number,
   ): Promise<PollResult | UnchangedPoll>;
   again(input: { code: string; token: string }): Promise<void>;
   /**
@@ -1412,12 +1463,22 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
    * chat() — те защищают людей от спама, у ботов темп держит bot-chat.ts
    * (кулдауны, кап на год). Стол мог закрыться, пока реплика выбиралась:
    * пишем только в живую комнату (playing; finished — сразу после финального
-   * шага, реплика о победе/поражении дожна доехать), никогда не воскрешаем
+   * шага, реплика о победе/поражении должна доехать), никогда не воскрешаем
    * закрытый стол и не трогаем чужие ограничения чата.
+   *
+   * Проверка живости — лёгкий SELECT статуса вместо readRoom: здесь нужен
+   * только факт «стол ещё жив и партия идёт/только что кончилась», а полный
+   * readRoom тащит и парсит jsonb state/events на каждую реплику (N+1 при
+   * серии шагов advance). Гонка «стол удалён между проверкой и INSERT»
+   * остаётся и ловится FK evo_chat.room_code — окно то же, что и раньше.
    */
   async function insertBotLine(code: string, line: BotLine): Promise<void> {
-    const room = await readRoom(sql, code);
-    if (!room || (room.status !== "playing" && room.status !== "finished")) return;
+    const rows = await sql.query<{ status: RoomStatus }>(
+      `select status from evo_rooms where code = $1`,
+      [code],
+    );
+    const status = rows[0]?.status;
+    if (status !== "playing" && status !== "finished") return;
     await sql.query(`insert into evo_chat (room_code, seat, name, text) values ($1, $2, $3, $4)`, [
       code,
       line.speaker.seat,
@@ -1460,14 +1521,21 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
    * Реплики по событиям выполненных шагов (охоты, смерти, вымирание, финал).
    * Если события промолчали — редкий «фоновый» комментарий бота, только пока
    * партия идёт (шаги выполнялись) и только при живых ботах.
+   *
+   * Комнату передаёт вызывающий: и advance, и action держат СВЕЖИЙ срез
+   * (после успешного CAS — с post-шаговым state и версией), поэтому перечитывать
+   * readRoom ради статуса/state было чистым N+1. Пишем только в evo_chat
+   * (без CAS) — устаревание версии между шагом и репликой тут не страшно:
+   * из среза нужны статус, состав ботов и год, а они за эти миллисекунды
+   * меняются только вместе с самой партией.
    */
   async function flushBotEventLines(
     code: string,
+    room: RoomRow,
     steps: Array<{ before: GameState; events: GameEvent[] }>,
   ): Promise<void> {
     if (!steps.length) return;
-    const room = await readRoom(sql, code);
-    if (!room?.state || (room.status !== "playing" && room.status !== "finished")) return;
+    if (!room.state || (room.status !== "playing" && room.status !== "finished")) return;
     for (const step of steps) {
       if (await sayBotLineForTriggers(code, room, eventTriggers(step.before, step.events))) return;
     }
@@ -1501,11 +1569,15 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
     botReplyQueue.set(code, queue.slice(-2));
   }
 
-  /** Отложить ответ нельзя (сервер без таймеров): первая попытка — на следующем advance. */
-  async function flushQueuedBotReply(code: string): Promise<void> {
+  /**
+   * Отложить ответ нельзя (сервер без таймеров): первая попытка — на следующем
+   * advance. Срез комнаты передаёт advance (его первый readRoom): перечитывать
+   * здесь было N+1, а нужен только статус и состав ботов для кандидатов.
+   * room === null — стол только что исчез: очередь не воскрешает его.
+   */
+  async function flushQueuedBotReply(code: string, room: RoomRow | null): Promise<void> {
     const queue = botReplyQueue.get(code);
     if (!queue?.length) return;
-    const room = await readRoom(sql, code);
     if (!room?.state || room.status !== "playing") {
       // Стол закрыт/закончился — очередь не должна его воскрешать.
       botReplyQueue.delete(code);
@@ -1531,24 +1603,32 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
   }
 
   async function advance(code: string): Promise<void> {
+    // Первый срез комнаты — общий для отложенного ответа и первой итерации:
+    // flushQueuedBotReply раньше перечитывал комнату сам (лишний тяжёлый
+    // readRoom jsonb на каждый advance). CAS и так защищает каждую запись:
+    // устареть срез может только между здесь и первой итерацией — окно в
+    // миллисекунды, максимум один бесполезный CAS-проигрыш до следующего poll.
+    let latest = await readRoom(sql, code);
     // Отложенный ответ на сообщение человека — до шагов: реплика догоняет
     // реплику игрока с задержкой в один поллинг.
-    await flushQueuedBotReply(code);
+    await flushQueuedBotReply(code, latest);
     // События выполненных шагов — для реплик ботов. Проход почти всегда
     // кончается ранним return (темп шага, ход человека), поэтому flush —
     // в finally: не больше одной реплики ботов на advance, где бы цикл
-    // ни кончился.
+    // ни кончился. latest держит самый свежий известный срез (после
+    // успешного CAS — уже с post-шаговым state/версией): его и отдаём.
     const botSteps: Array<{ before: GameState; events: GameEvent[] }> = [];
     try {
       for (let i = 0; i < PACE.maxStepsPerTick; i++) {
-      const room = await readRoom(sql, code);
+      const room = i === 0 ? latest : await readRoom(sql, code);
       if (!room?.state || room.status !== "playing") return;
+      latest = room;
       const before = room.state;
       const step = nextAutoStep(before);
       if (!step) {
         // Ход человека: «ход» — полный ход игрока в текущей фазе. В раунде
         // безумия актор — контролёр (сосед справа), его и ждём по дедлайну.
-        // Паузу до авто-конца задаёт настройка стола «Таймер хода»
+        // Пауза до авто-конца задаёт настройка стола «Таймер хода»
         // (turnTimerMs); у столов без ключа — прежние idleTurnMs/afkTurnMs.
         // «Выкл» (0) означает: сервер ход не заканчивает вовсе — игрок
         // завершает его сам. Оба значения абсолютны и не зависят от интервала
@@ -1594,6 +1674,7 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
           eventsAppend: after.lastEvents.length ? after.lastEvents : undefined,
         });
         if (!ok) return; // обогнали — следующий запрос доведёт
+        latest = afterWrite(room, after, finished);
         botSteps.push({ before, events: after.lastEvents });
         if (finished) break;
         continue;
@@ -1609,11 +1690,12 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         eventsAppend: after.lastEvents.length ? after.lastEvents : undefined,
       });
       if (!ok) return; // обогнали — следующий запрос доведёт
+      latest = afterWrite(room, after, finished);
       botSteps.push({ before, events: after.lastEvents });
       if (finished) break;
     }
     } finally {
-      if (botSteps.length) await flushBotEventLines(code, botSteps);
+      if (botSteps.length) await flushBotEventLines(code, latest!, botSteps);
     }
   }
 
@@ -1625,6 +1707,13 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       sinceChatId?: number;
       sinceReactionId?: number;
       actionId?: string;
+      /**
+       * Дельта журнала: true — отдать state без log (клиент заявил тот же
+       * logSeq и хранит свою копию). Ставится ТОЛЬКО в poll: rejoin/action/
+       * resign/start обязаны везти полный журнал (восстановление после F5,
+       * свой ход с новыми строками).
+       */
+      omitLog?: boolean;
     } = {},
   ): Promise<PollResult> {
     const [room, seats, waiters, spectators, reactions] = await Promise.all([
@@ -1645,13 +1734,20 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
       ? viewEventBatches(eventWin.batches, seat, full!)
       : [];
     const chat = await readChat(sql, code, opts.sinceChatId);
+    const view = full && room.status !== "lobby" ? viewFor(full, seat) : null;
+    if (view && opts.omitLog) {
+      // Журнал не менялся с прошлого кадра клиента — до 80 записей с текстом
+      // не едут по проводу зря: клиент склеит свою копию (game-store).
+      view.log = [];
+    }
     return {
       version: room.version,
       // viewerSeat = seat: пароль приватного стола видит только хост.
       room: metaOf(room, seats, now, seat),
       seats: seatsInfo(seats, now),
       seat,
-      state: full && room.status !== "lobby" ? viewFor(full, seat) : null,
+      state: view,
+      logSeq: full ? logSeqOf(full) : 0,
       events,
       ...(eventWin
         ? {
@@ -2774,20 +2870,25 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
         if (actionId) fields.actionId = actionId;
         if (await casUpdate(sql, code, room.version, fields)) {
           // Реплика бота на ход человека (его охоту, смерть зверя, финал).
-          // actionFields уже бросил бы «Партия не идёт» без state — тут он точно есть.
-          await flushBotEventLines(
-            code,
-            fields.eventsAppend
-              ? [{ before: room.state as GameState, events: fields.eventsAppend }]
-              : [],
-          );
+          // actionFields уже бросил бы «Партия не идёт» без state — тут он
+          // точно есть. Срез после CAS актуализируем руками (afterWrite):
+          // перечитывать комнату ради реплики было N+1, а state/version уже
+          // уехали в БД этим же CAS.
+          if (fields.eventsAppend?.length) {
+            await flushBotEventLines(
+              code,
+              // actionFields всегда кладёт state (иначе бросил not-playing).
+              afterWrite(room, fields.state as GameState, fields.status === "finished"),
+              [{ before: room.state as GameState, events: fields.eventsAppend }],
+            );
+          }
           return snapshot(code, me.seat, actionId ? { actionId } : {});
         }
       }
       throw new NetError("Стол изменился, попробуйте ещё раз", "retry");
     },
 
-    async poll(code, token, sinceVersion, sinceChatId, sinceReactionId) {
+    async poll(code, token, sinceVersion, sinceChatId, sinceReactionId, logSeq) {
       if (Math.random() < 0.05) await janitor(sql).catch(() => {});
       const me = await seatByToken(code, token);
       // Метка присутствия до advance: свои же авточаги видят свежий онлайн.
@@ -2827,7 +2928,14 @@ export function createRoomService(sql: SqlLike, opts: { now?: () => number } = {
           chat: await readChat(sql, code, sinceChatId),
         };
       }
-      return snapshot(code, me.seat, { sinceVersion, sinceChatId, sinceReactionId });
+      // Дельта журнала: клиент заявляет logSeq своей копии; совпадает с текущим
+      // (журнал не менялся с его прошлого кадра) — до 80 записей с текстом не
+      // едут по проводу зря. Не задан (первый poll / старый клиент) или любой
+      // другой номер — полный журнал, как раньше. logSeqOf, а не state.logSeq
+      // напрямую: старые сейвы без поля восстанавливаются от последнего id.
+      const omitLog =
+        logSeq !== undefined && room.state !== null && logSeq === logSeqOf(room.state);
+      return snapshot(code, me.seat, { sinceVersion, sinceChatId, sinceReactionId, omitLog });
     },
 
     async again({ code, token }) {

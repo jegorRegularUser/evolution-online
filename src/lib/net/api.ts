@@ -533,6 +533,7 @@ export const netPoll = createServerFn({ method: "POST" })
         data.sinceVersion,
         data.sinceChatId,
         data.sinceReactionId,
+        data.logSeq,
       );
       return { ok: true as const, ...r };
     } catch (e) {

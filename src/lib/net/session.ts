@@ -55,7 +55,7 @@ import type {
   SpectatorSnapshot,
   WaiterInfo,
 } from "./shared";
-import type { GameAction } from "@/game/types";
+import type { GameAction, GameState } from "@/game/types";
 import { cosmeticsPatchNeedsOwnership } from "@/lib/cosmetics";
 
 export type NetStatus = "connecting" | "lobby" | "playing" | "finished" | "reconnecting";
@@ -187,6 +187,106 @@ function statusOf(status: PollResult["room"]["status"]): NetStatus {
   return "lobby";
 }
 
+// ── темп опроса ──────────────────────────────────────────────────────────────
+
+/**
+ * Что последний полный кадр знает о темпе партии: метки бота/дедлайна
+ * (серверные часы) и признак «сейчас ходит другой человек». Держится рядом
+ * с сессией, чтобы nextDelayMs оставался чистым и тестируемым.
+ */
+export interface PacingInfo {
+  /** Следующий автошаг бота (PollResult.botStepAt); null — не ход бота. */
+  botStepAt: number | null;
+  /** Дедлайн текущего хода (PollResult.turnDeadlineAt); null — таймера нет. */
+  turnDeadlineAt: number | null;
+  /** Текущий актор — человек, но не я: только тогда опрос можно замедлить. */
+  otherHumanTurn: boolean;
+}
+
+/** Вход чистой функции nextDelayMs: всё, кроме часов, — из PacingInfo. */
+export interface NextDelayInput extends PacingInfo {
+  failCount: number;
+  hiddenTab: boolean;
+  msSinceOwnMove: number;
+  /** Серверные «сейчас» (epoch ms): локальные часы + смещение от serverNow. */
+  nowMs: number;
+}
+
+/** Обычный темп опроса, мс. */
+export const POLL_FAST_MS = 700;
+const POLL_HIDDEN_MS = 3000;
+const POLL_OWN_MOVE_MS = 350;
+const POLL_OWN_MOVE_WINDOW_MS = 3000;
+/** Замедленный темп на чужой думающий ход, мс. */
+const POLL_SLOW_MS = 2500;
+/** Остаток дедлайна, после которого опрос возвращается к быстрому темпу. */
+const POLL_DEADLINE_NEAR_MS = 15_000;
+const POLL_BACKOFF_BASE_MS = 400;
+const POLL_BACKOFF_MAX_MS = 5000;
+
+/**
+ * Пауза до следующего poll, мс. Правила по убыванию приоритета:
+ * — ошибка связи: экспоненциальный бэкофф (как и было);
+ * — скрытая вкладка: 3 с (как и было);
+ * — сразу после своего хода: 350 мс, увидеть последствия побыстрее (как и было);
+ * — pending шаг бота/автофазы: 700 — «ленивый сервер» двигает партии ТОЛЬКО
+ *   когда кто-то опрашивает, замедляться нельзя, иначе у всех всё стоит;
+ * — ход ДРУГОГО человека с дедлайном вдалеке (> 15 с): 2.5 с — игрок думает,
+ *   дёргать сервер незачем; близко к дедлайну — обратно в быстрый темп, чтобы
+ *   авто-конец хода приехал без заметной паузы;
+ * — всё остальное (свой ход, автофаза, финал, лобби): 700.
+ */
+export function nextDelayMs(input: NextDelayInput): number {
+  if (input.failCount > 0) {
+    return Math.min(POLL_BACKOFF_MAX_MS, POLL_BACKOFF_BASE_MS * 2 ** input.failCount);
+  }
+  if (input.hiddenTab) return POLL_HIDDEN_MS;
+  if (input.msSinceOwnMove < POLL_OWN_MOVE_WINDOW_MS) return POLL_OWN_MOVE_MS;
+  if (input.botStepAt !== null && input.botStepAt > input.nowMs) return POLL_FAST_MS;
+  if (
+    input.otherHumanTurn &&
+    input.turnDeadlineAt !== null &&
+    input.turnDeadlineAt - input.nowMs > POLL_DEADLINE_NEAR_MS
+  ) {
+    return POLL_SLOW_MS;
+  }
+  return POLL_FAST_MS;
+}
+
+/**
+ * Чей сейчас ход в кадре — зеркало серверного actingActor (server.ts): жертва
+ * защиты, контролёр раунда безумия или текущий игрок; в автофазах и финале
+ * актора нет (сервер двигает их сам, дедлайна на человека не вешает).
+ */
+function actorIdOf(st: GameState): number | null {
+  if (st.phase === "gameOver") return null;
+  if (st.pendingAttack) return st.pendingAttack.waitingFor;
+  if (st.phase === "foodBank" || st.phase === "extinction" || st.phase === "growth") return null;
+  return st.madController ?? st.currentPlayerId;
+}
+
+/**
+ * Ходит ли сейчас ДРУГОЙ человек: только этот случай позволяет замедлить
+ * опрос. Свой ход, бот (его шаги ведёт наш же poll) и автофаза — всегда
+ * быстрый темп. Сдавшийся актор исключён — его ходы сервер пропускает сам.
+ */
+function otherHumanTurnOf(st: GameState, mySeat: number): boolean {
+  const id = actorIdOf(st);
+  if (id === null) return false;
+  const actor = st.players[id];
+  return Boolean(actor && !actor.isAI && !actor.resigned && id !== mySeat);
+}
+
+/** Пейзинг из полного кадра игрока; кадр лобби (state === null) — нейтральный. */
+function pacingOf(snap: PollResult): PacingInfo {
+  const st = snap.state;
+  return {
+    botStepAt: snap.botStepAt,
+    turnDeadlineAt: snap.turnDeadlineAt,
+    otherHumanTurn: st ? otherHumanTurnOf(st, snap.seat) : false,
+  };
+}
+
 export function loadName(): string {
   try {
     return localStorage.getItem(NAME_KEY) ?? "";
@@ -315,6 +415,18 @@ export class NetSession {
   private lastVersion: number | undefined;
   private lastChatId: number | undefined;
   private lastReactionId: number | undefined;
+  /**
+   * Дельта журнала: logSeq последнего применённого кадра (state.logSeq
+   * сервера). Едет в poll — если журнал с тех пор не менялся, кадр возвращается
+   * без state.log и стор склеивает свою копию. Сбрасывается кадром лобби и
+   * переподключением: новая партия начинает счёт заново, старый номер мог бы
+   * совпасть с новым и «приклеить» чужой журнал.
+   */
+  private lastLogSeq: number | undefined;
+  /** Пейзинг из последнего полного кадра (для nextDelayMs). */
+  private pacing: PacingInfo = { botStepAt: null, turnDeadlineAt: null, otherHumanTurn: false };
+  /** Смещение локальных часов относительно сервера (serverNow − Date.now()). */
+  private serverOffsetMs = 0;
   /** Клиент — зритель: отдельный поллинг, ходы и действия запрещены. */
   private spectating = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -550,20 +662,16 @@ export class NetSession {
   async act(action: GameAction, actionId = newActionId()): Promise<NetFail | null> {
     const pendingId = actionId ?? `${Date.now()}-${Math.random()}`;
     this.setPending({ kind: "action", id: pendingId, action });
-    let r: Awaited<ReturnType<typeof netAction>>;
-    try {
-      r = await request(netAction({
-        data: {
-          code: this.code,
-          token: this.token,
-          action,
-          ...(actionId ? { actionId } : {}),
-        },
-      }));
-    } catch (error) {
-      // Transport-error: pending остаётся, чтобы UI не стирал действие до ACK.
-      throw error;
-    }
+    // Transport-error уходит наружу (обёртка request переведёт его в offline):
+    // pending при этом намеренно остаётся, чтобы UI не стирал действие до ACK.
+    const r: Awaited<ReturnType<typeof netAction>> = await request(netAction({
+      data: {
+        code: this.code,
+        token: this.token,
+        action,
+        ...(actionId ? { actionId } : {}),
+      },
+    }));
     this.clearPending(pendingId);
     if (!r.ok) {
       if (isFatalCode(r.code)) this.fatal(r.code!);
@@ -790,6 +898,10 @@ export class NetSession {
     this.waiting = false;
     this.waitNote = null;
     this.spectating = false;
+    // Новый стол (или повторное занятие места): счётчик журнала и пейзинг
+    // прошлого стола не имеют силы — первый кадр должен приехать полным.
+    this.lastLogSeq = undefined;
+    this.pacing = { botStepAt: null, turnDeadlineAt: null, otherHumanTurn: false };
     saveToken(code, token);
     this.failCount = 0;
   }
@@ -800,6 +912,9 @@ export class NetSession {
     this.waiting = false;
     this.spectating = true;
     this.lastVersion = undefined; // первый кадр — полный
+    // Зрителю адаптивный темп не положен: его poll партию не двигает.
+    this.lastLogSeq = undefined;
+    this.pacing = { botStepAt: null, turnDeadlineAt: null, otherHumanTurn: false };
     this.failCount = 0;
     this.hooks.onStatus("connecting");
     this.hooks.onSpectating?.(true);
@@ -862,6 +977,13 @@ export class NetSession {
     this.failCount = 0;
     this.seenStatus = statusOf(snap.room.status);
     this.wasReconnecting = false;
+    // Пейзинг — из любого применённого кадра: и полный, и дельта-журнальный
+    // несут актуальные метки бота/дедлайна (они меняются только с версией).
+    this.serverOffsetMs = snap.serverNow - Date.now();
+    this.pacing = pacingOf(snap);
+    // Дельта журнала: кадр лобби (state === null) сбрасывает счётчик — новая
+    // партия начнёт logSeq заново, и старый номер нельзя слать серверу.
+    this.lastLogSeq = snap.state === null ? undefined : snap.logSeq;
     // События — до снапшота: UI успевает поставить их в очередь воспроизведения.
     if (snap.skipped) this.hooks.onEventsSkipped?.(snap.skipped);
     if (snap.events.length) this.hooks.onEvents(snap.events);
@@ -880,10 +1002,17 @@ export class NetSession {
   }
 
   private nextDelay(): number {
-    if (this.failCount > 0) return Math.min(5000, 400 * 2 ** this.failCount);
-    if (typeof document !== "undefined" && document.visibilityState === "hidden") return 3000;
-    // Сразу после своего хода тянем чаще — увидеть последствия побыстрее.
-    return Date.now() - this.lastOwnMoveAt < 3000 ? 350 : 700;
+    return nextDelayMs({
+      failCount: this.failCount,
+      hiddenTab: typeof document !== "undefined" && document.visibilityState === "hidden",
+      msSinceOwnMove: Date.now() - this.lastOwnMoveAt,
+      // Метки кадров — в серверных часах: при ушедших часах устройства
+      // считаем «сейчас» через смещение от последнего serverNow.
+      nowMs: Date.now() + this.serverOffsetMs,
+      botStepAt: this.pacing.botStepAt,
+      turnDeadlineAt: this.pacing.turnDeadlineAt,
+      otherHumanTurn: this.pacing.otherHumanTurn,
+    });
   }
 
   private async tick(): Promise<void> {
@@ -907,6 +1036,9 @@ export class NetSession {
           // Без sinceReactionId сервер присылал бы ВСЮ историю реакций: старые
           // пузыри всплывали бы повторно на каждом кадре.
           sinceReactionId: this.lastReactionId,
+          // Дельта журнала: undefined (лобби/первый кадр) — сервер отдаёт
+          // полный журнал; совпал — кадр приедет без state.log.
+          logSeq: this.lastLogSeq,
         },
       });
       if (!r.ok) {

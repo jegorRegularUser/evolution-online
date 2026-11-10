@@ -270,6 +270,13 @@ export interface PollResult {
   state: GameState | null;
   /** Место запрашивающего (по токену). */
   seat: number;
+  /**
+   * Сквозной счётчик журнала партии (state.logSeq): клиент отправляет его
+   * обратно в poll, и если журнал с тех пор не менялся — кадр приезжает БЕЗ
+   * state.log (клиент оставляет свою копию). Полный лог всегда доезжает с
+   * rejoin/action/resign/start и первым кадром; 0 — журнала ещё нет (лобби).
+   */
+  logSeq: number;
   /** Батчи событий с version > sinceVersion; без sinceVersion — пусто. */
   events: EventBatch[];
   /** Границы окна событий; eventsTo — версия, до которой клиент может догнать. */
@@ -387,6 +394,14 @@ export const PACE = {
   /** Сторож раз в 10 с держит AFK и автошаги без зависимости от браузера. */
   watchdogMs: 10_000,
   roomTtlHours: 12,
+  /**
+   * TTL брошенной ИДУЩЕЙ партии (часы): раньше playing-стол был бессмертен —
+   * комната без единого heartbeat (все ушли / закрыли вкладку) висела в БД
+   * вечно и раздувала jsonb состояния. 48 ч без свежего last_seen_at ни у
+   * одного места и ни у одного зрителя — стол считается брошенным; janitor
+   * удаляет его вместе с местами/чатом/реакциями (FK cascade).
+   */
+  playingTtlHours: 48,
   /**
    * M10: ход человека без действий (остался только пас/завершение хода)
    * сервер заканчивает сам через столько миллисекунд. Пока действия есть —
@@ -542,6 +557,12 @@ export const pollInput = codeTokenInput.extend({
   sinceVersion: z.number().int().optional(),
   sinceChatId: z.number().int().optional(),
   sinceReactionId: z.number().int().optional(),
+  /**
+   * Дельта журнала: logSeq последней копии журнала клиента. Совпадает с
+   * текущим — кадр отдаётся без state.log (клиент хранит свою копию);
+   * отсутствует/не совпадает — полный журнал, как раньше.
+   */
+  logSeq: z.number().int().min(0).optional(),
 });
 export const roomInfoInput = codeTokenInput.extend({
   sinceChatId: z.number().int().optional(),

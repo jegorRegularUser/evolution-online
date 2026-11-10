@@ -88,6 +88,30 @@ test("favicon и ссылки head в __root.tsx указывают на сущ�
   assert.match(rootRoute, /rel: "icon", type: "image\/svg\+xml", href: "\/favicon\.svg"/);
 });
 
+test("favicon.ico существует, это валидный ICO с одной картинкой 192×192", () => {
+  // Браузеры дёргают /favicon.ico по умолчанию: раньше его отдавал middleware
+  // прежней платформы, теперь — статический файл, который собирает
+  // scripts/make-favicon.mjs из icon-192.png (воспроизводимо, не магический бинарь).
+  const path = join(ROOT, "public", "favicon.ico");
+  assert.ok(existsSync(path), path);
+  const buf = readFileSync(path);
+  // ICO magic \x00\x00\x01\x00: reserved=0, type=1 (icon), count=1.
+  assert.equal(buf.readUInt16LE(0), 0, "reserved");
+  assert.equal(buf.readUInt16LE(2), 1, "тип ICO = icon");
+  assert.equal(buf.readUInt16LE(4), 1, "ровно одна картинка внутри");
+  // ICONDIRENTRY: 192×192 (256 кодировалась бы нулём), planes=1, bitcount=32.
+  assert.equal(buf[6], 192, "width");
+  assert.equal(buf[7], 192, "height");
+  assert.equal(buf.readUInt16LE(10), 1, "planes");
+  assert.equal(buf.readUInt16LE(12), 32, "bit count");
+  // Запись — байты icon-192.png: рассинхрон favicon.ico с манифестом
+  // и исходной иконкой не должен пройти мимо теста.
+  const png = readFileSync(join(ROOT, "public", "icons", "icon-192.png"));
+  assert.equal(buf.readUInt32LE(14), png.length, "размер записи = длине PNG");
+  assert.equal(buf.readUInt32LE(18), 22, "данные начинаются сразу после заголовков");
+  assert.ok(buf.subarray(22).equals(png), "внутри — байты icon-192.png");
+});
+
 test("README не упоминает прежнюю платформу", () => {
   // Платформа вывода из эксплуатации: её имя не должно возвращаться в
   // публичную документацию (см. финальный grep по репозиторию).

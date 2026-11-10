@@ -706,6 +706,19 @@ function netHooks(
       }
       const cur = get().net;
       if (!cur) return;
+      // Дельта журнала: кадр приехал без state.log — сервер сравнил наш logSeq
+      // со своим и решил, что журнал не менялся (см. PollResult.logSeq).
+      // Склеиваем свою копию журнала с присланным состоянием, иначе лента
+      // мигнула бы пустотой до следующей записи в журнал. Совпадение logSeq —
+      // обязательное условие: новую партию счёт начинает заново, и совпавший
+      // номер НЕ означает «тот же журнал».
+      let nextState = snap.state;
+      if (nextState && nextState.log.length === 0) {
+        const curState = get().state;
+        if (curState && curState.log.length > 0 && curState.logSeq === nextState.logSeq) {
+          nextState = { ...nextState, log: curState.log };
+        }
+      }
       const own = snap.seats.find((x) => x.seat === snap.seat);
       const nextNet = mergeNetState(cur, {
         code: snap.room.code,
@@ -733,8 +746,8 @@ function netHooks(
         waiterPosition: null,
         waitNote: null,
       });
-      if (nextNet !== cur || get().state !== snap.state) {
-        set({ state: snap.state, net: nextNet });
+      if (nextNet !== cur || get().state !== nextState) {
+        set({ state: nextState, net: nextNet });
       }
     },
     onSeats: (seats, hostSeat, capacity, waiters, spectators) => {

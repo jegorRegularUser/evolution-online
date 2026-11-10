@@ -1062,6 +1062,97 @@ describe("журнал событий", () => {
   });
 });
 
+describe("дельта журнала (PollResult.logSeq)", () => {
+  async function logTable() {
+    const s = svc();
+    const host = await s.create({ name: "Аня", capacity: 2, botSeats: 0, difficulty: "normal" });
+    const g = await s.join({ code: host.code, name: "Боря" });
+    await s.start(host.code, host.token);
+    return { s, host, g };
+  }
+
+  /** Расклад: ход у места 0 в развитии, два животного для перестановки. */
+  async function devLayout(code: string): Promise<void> {
+    const room = await _internals.readRoom(sql, code);
+    const st = structuredClone(room!.state!);
+    st.phase = "development";
+    st.pendingAttack = null;
+    st.currentPlayerId = 0;
+    st.players[0]!.animals = [testAnimal("a-1", 0), testAnimal("a-2", 0)];
+    st.players[1]!.animals = [testAnimal("b-1", 1)];
+    await _internals.casUpdate(sql, code, room!.version, { state: st });
+  }
+
+  it("poll без logSeq (первый/старый клиент) отдаёт полный журнал и счётчик", async () => {
+    const { s, host } = await logTable();
+    const snap = full(await s.poll(host.code, host.token));
+    assert.ok(snap.state);
+    assert.ok(snap.state!.log.length > 0, "стартовый журнал не пуст (Год 1, стартовые строки)");
+    assert.ok(snap.logSeq > 0, "счётчик доезжает в кадре");
+    assert.equal(snap.logSeq, snap.state!.logSeq, "совпадает с state.logSeq");
+    assert.equal(snap.state!.log.at(-1)!.id, snap.logSeq);
+    // rejoin и после хода — всегда полный журнал, независимо ни от чего.
+    const rejoined = await s.rejoin(host.code, host.token);
+    assert.ok(rejoined.state!.log.length > 0);
+  });
+
+  it("poll с совпавшим logSeq отдаёт кадр БЕЗ журнала и с тем же счётчиком", async () => {
+    const { s, host } = await logTable();
+    const first = full(await s.poll(host.code, host.token));
+    // Меняем версию БЕЗ записи в журнал (автопараметр CAS). advance при этом
+    // может сама подправить метки темпа — версию поэтому сверяем только «выше».
+    const room = (await _internals.readRoom(sql, host.code))!;
+    await _internals.casUpdate(sql, host.code, room.version, { autoStepAt: fixedNow + 60 * 60 * 1000 });
+    const delta = full(await s.poll(host.code, host.token, first.version, undefined, undefined, first.logSeq));
+    assert.ok(delta.version > first.version, "версия уехала, кадр полный");
+    assert.equal(delta.logSeq, first.logSeq, "журнал не менялся — счётчик тот же");
+    assert.deepEqual(delta.state!.log, [], "журнал не поехал по проводу");
+    // Прочее содержимое состояния при этом цело (дельта касается только log).
+    assert.deepEqual(delta.state!.players.map((p: { name: string }) => p.name), ["Аня", "Боря"]);
+    // unchanged-кадр остался прежним: лёгкий ответ без logSeq, без state.
+    const unchanged = await s.poll(host.code, host.token, delta.version, undefined, undefined, first.logSeq);
+    assert.ok("unchanged" in unchanged);
+    // Чужой logSeq (клиент отстал или сбросился) — снова полный журнал.
+    const stale = full(await s.poll(host.code, host.token, first.version, undefined, undefined, 999));
+    assert.equal(stale.state!.log.length, first.state!.log.length);
+    assert.equal(stale.logSeq, first.logSeq);
+  });
+
+  it("reorderAnimal (версия без журнала) — дельта едет; devPass пишет в журнал — poll со старым logSeq возвращает полный", async () => {
+    const { s, host } = await logTable();
+    const first = full(await s.poll(host.code, host.token));
+    await devLayout(host.code);
+    // Косметическая перестановка: версия +1, журнала нет — кадр с тем же
+    // logSeq по-прежнему приезжает без журнала.
+    await s.action(host.code, host.token, {
+      type: "reorderAnimal",
+      animalId: "a-2",
+      beforeId: "a-1",
+    });
+    // sinceVersion = 0 — всегда позади текущей версии: advance могла сама
+    // подправить метки темпа, и точный номер здесь знать не требуется.
+    const afterReorder = full(await s.poll(host.code, host.token, 0, undefined, undefined, first.logSeq));
+    assert.equal(afterReorder.logSeq, first.logSeq);
+    assert.deepEqual(afterReorder.state!.log, []);
+    assert.deepEqual(
+      afterReorder.state!.players[0]!.animals.map((a: { id: string }) => a.id),
+      ["a-2", "a-1"],
+    );
+    // Ответ самого action всегда несёт полный журнал (восстановление после F5).
+    const ack = await s.action(host.code, host.token, { type: "devPass" });
+    assert.ok(ack.state!.log.length > first.state!.log.length, "devPass дописал журнал");
+    assert.ok(ack.logSeq > first.logSeq);
+    // Клиент со СТАРЫМ logSeq получает полный журнал и новый счётчик.
+    const refreshed = full(await s.poll(host.code, host.token, 0, undefined, undefined, first.logSeq));
+    assert.equal(refreshed.logSeq, ack.logSeq);
+    assert.equal(refreshed.state!.log.length, ack.state!.log.length);
+    // А клиент со СВЕЖИМ logSeq — дельту без журнала.
+    const upToDate = full(await s.poll(host.code, host.token, 0, undefined, undefined, ack.logSeq));
+    assert.equal(upToDate.logSeq, ack.logSeq);
+    assert.deepEqual(upToDate.state!.log, []);
+  });
+});
+
 describe("чат", () => {
   it("валидация, обрезка, автор из БД", async () => {
     const s = svc();
@@ -2150,6 +2241,69 @@ describe("janitor: TTL от активности, playing неприкоснов
     );
     await _internals.janitor(sql);
     assert.equal(await _internals.readRoom(sql, lobby.code), null);
+  });
+});
+
+describe("janitor: TTL брошенной идущей партии (PACE.playingTtlHours)", () => {
+  /** Playing-стол с уехавшими на N часов heartbeat'ами. */
+  async function stalePlaying(hours: number) {
+    const s = svc();
+    const t = await s.create({ name: "Хост", capacity: 2, botSeats: 1, difficulty: "normal" });
+    await s.start(t.code, t.token);
+    await sql.query(
+      `update evo_rooms set created_at = now() - ($1::int * interval '1 hour'),
+                         updated_at = now() - ($1::int * interval '1 hour') where code = $2`,
+      [hours, t.code],
+    );
+    await sql.query(
+      `update evo_seats set last_seen_at = now() - ($1::int * interval '1 hour') where room_code = $2`,
+      [hours, t.code],
+    );
+    return { s, t };
+  }
+
+  it("playing-стол без единого heartbeat'а 50 часов удаляется вместе с чатом и местами", async () => {
+    const { t } = await stalePlaying(PACE.playingTtlHours + 2);
+    // Строки-спутники: без каскада они остались бы сиротами.
+    await sql.query(
+      `insert into evo_chat (room_code, seat, name, text) values ($1, 0, 'Хост', 'последняя реплика')`,
+      [t.code],
+    );
+    await _internals.janitor(sql);
+    assert.equal(await _internals.readRoom(sql, t.code), null, "брошенная партия удалена");
+    assert.equal((await sql.query(`select 1 from evo_seats where room_code = $1`, [t.code])).length, 0);
+    assert.equal((await sql.query(`select 1 from evo_chat where room_code = $1`, [t.code])).length, 0);
+    assert.equal((await sql.query(`select 1 from evo_reactions where room_code = $1`, [t.code])).length, 0);
+  });
+
+  it("playing-стол с одним свежим heartbeat'ом остаётся, сколько бы остальные ни молчали", async () => {
+    const { t } = await stalePlaying(PACE.playingTtlHours + 2);
+    // Только место хоста «в сети»: один живой участник спасает весь стол.
+    await sql.query(
+      `update evo_seats set last_seen_at = now() where room_code = $1 and seat = 0`,
+      [t.code],
+    );
+    await _internals.janitor(sql);
+    assert.equal((await _internals.readRoom(sql, t.code))?.status, "playing");
+  });
+
+  it("playing-стол без игроков, но со свежим зрителем остаётся (last_seen_at из миграции 0005)", async () => {
+    const { s, t } = await stalePlaying(PACE.playingTtlHours + 2);
+    await s.spectate(t.code, "Зритель");
+    // Зритель только чтоpoll'ил: spectatorPoll ведёт его last_seen_at.
+    await sql.query(
+      `update evo_spectators set last_seen_at = now() where room_code = $1`,
+      [t.code],
+    );
+    await _internals.janitor(sql);
+    assert.equal((await _internals.readRoom(sql, t.code))?.status, "playing");
+  });
+
+  it("простой 20 часов — больше lobby-TTL, но меньше playing-TTL: партия жива", async () => {
+    // Гарантирует, что playing-ветка не подхватила 12-часовой порог лобби.
+    const { t } = await stalePlaying(PACE.roomTtlHours + 8);
+    await _internals.janitor(sql);
+    assert.equal((await _internals.readRoom(sql, t.code))?.status, "playing");
   });
 });
 
