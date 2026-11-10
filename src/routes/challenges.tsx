@@ -1,7 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ChallengesContent, FeaturePage } from "@/components/game/screens";
+import { routeSeoHead } from "@/lib/seo";
 
-export const Route = createFileRoute("/challenges")({ component: ChallengesPage });
+export const Route = createFileRoute("/challenges")({
+  head: () => routeSeoHead("/challenges"),
+  component: ChallengesPage,
+});
 
 /**
  * /challenges — «Вызовы» как страница (раньше были модалкой меню).
@@ -10,7 +14,7 @@ export const Route = createFileRoute("/challenges")({ component: ChallengesPage 
  */
 function ChallengesPage() {
   return (
-    <FeaturePage titleKey="challenges.title">
+    <FeaturePage>
       <ChallengesContent />
     </FeaturePage>
   );

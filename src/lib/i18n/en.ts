@@ -25,10 +25,33 @@ export const en: Record<keyof RuDict, string> = {
   "app.description":
     "Evolution — the digital edition of the Russian board game about the origin of species.",
 
+  // ── SEO: route metadata ────────────────────────────────────────────────────
+  "seo.siteName": "Evolution Online",
+  "seo.imageAlt": "Evolution Online — a browser-based board game",
+  "seo.home.title": "Evolution Online — a browser-based board game",
+  "seo.home.description":
+    "Play the Evolution board game online with friends and bots: develop species, find food, and survive extinctions.",
+  "seo.about.title": "Rights & attribution — Evolution Online",
+  "seo.about.description":
+    "Rights, authorship, and attribution information for the unofficial fan adaptation of the Evolution board game.",
+  "seo.bestiary.title": "Bestiarium — Evolution Online",
+  "seo.bestiary.description":
+    "The Bestiarium preserves named animals from your Evolution Online games, including their traits, victories, and history.",
+  "seo.campaign.title": "Campaign — Evolution Online",
+  "seo.campaign.description":
+    "Journey through evolutionary eras, develop species, and face unique opponents in the Evolution Online campaign.",
+  "seo.challenges.title": "Challenges — Evolution Online",
+  "seo.challenges.description":
+    "Complete challenges in games with people and bots, track your progress, and earn fossils.",
+  "seo.shop.title": "Shop — Evolution Online",
+  "seo.shop.description":
+    "Choose cosmetics for the game table, cards, dice, and avatars using fossils earned through play.",
+
   // ── top bar navigation buttons ───────────────────────────────────────────
   "topbar.tutorial": "Tutorial",
   "topbar.rules": "Rules",
   "topbar.stats": "Statistics",
+  "topbar.about": "About",
 
   // ── section pages (/shop, /bestiary, /campaign, /challenges) ─────────────
   "nav.home": "Home",

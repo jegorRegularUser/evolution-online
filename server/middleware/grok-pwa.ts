@@ -21,7 +21,7 @@ import {
   acceptsHtml,
   createHeadInjector,
   isDocumentPath,
-  isInstallQuery,
+  isInstallTutorialRequest,
   langFromAcceptLanguage,
   renderInstallPageHtml,
   renderWebManifest,
@@ -38,9 +38,10 @@ function requestHost(event: GrokPwaEvent): string {
   );
 }
 
-function injectHeadStreaming(response: Response, host: string): Response {
+function injectHeadStreaming(response: Response, host: string, pageUrl: string): Response {
   const injector = createHeadInjector({
     host,
+    pageUrl,
     site: grokOgIdentity.site,
   });
   const transformed = response.body!.pipeThrough(
@@ -84,19 +85,19 @@ export default async function grokPwaMiddleware(
   }
 
   if (path === "/__grok/manifest.webmanifest" || path === "/__grok/manifest.json") {
-    // Язык манифеста — по Accept-Language браузера (ru по умолчанию); ответ
-    // без кэша, как и раньше: заголовок запроса не участвует в ключе CDN.
+    // Manifest content varies by the request language, so shared caches must
+    // include Accept-Language in the cache key even while revalidating.
     return new Response(renderWebManifest(requestHost(event), langFromAcceptLanguage(event.req.headers.get("accept-language"))), {
       headers: {
         "content-type": "application/manifest+json; charset=utf-8",
         "cache-control": "no-cache",
+        vary: "Accept-Language",
       },
     });
   }
 
   if (
-    isInstallQuery(urlWithQuery) &&
-    isDocumentPath(path) &&
+    isInstallTutorialRequest(urlWithQuery) &&
     acceptsHtml(event.req.headers.get("accept"))
   ) {
     const html = renderInstallPageHtml(installPageTemplate, {
@@ -121,7 +122,7 @@ export default async function grokPwaMiddleware(
     String(result.headers.get("content-type") ?? "").includes("text/html") &&
     !result.headers.get("content-encoding")
   ) {
-    return injectHeadStreaming(result, requestHost(event));
+    return injectHeadStreaming(result, requestHost(event), urlWithQuery);
   }
   return result;
 }

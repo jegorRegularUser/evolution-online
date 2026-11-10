@@ -6,6 +6,8 @@
 
 *[English version](README.md)*
 
+**Играть онлайн:** <https://evolution-online.vercel.app/>
+
 | Главное меню | Игровой стол |
 | --- | --- |
 | ![Главное меню](screenshots/menu-v2.png) | ![Игровой стол](screenshots/desktop-development.png) |

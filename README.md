@@ -6,6 +6,8 @@ An online, browser-based adaptation of *Evolution*, the board game by Dmitry Kno
 
 *[Русская версия](README.ru.md)*
 
+**Play online:** <https://evolution-online.vercel.app/>
+
 | Main menu | Game table |
 | --- | --- |
 | ![Main menu](screenshots/menu-v2.png) | ![Game table](screenshots/desktop-development.png) |

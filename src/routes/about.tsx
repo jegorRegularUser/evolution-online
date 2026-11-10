@@ -1,14 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useT } from "@/lib/i18n";
+import { routeSeoHead } from "@/lib/seo";
 
-export const Route = createFileRoute("/about")({ component: About });
+export const Route = createFileRoute("/about")({
+  head: () => routeSeoHead("/about"),
+  component: About,
+});
 
 /**
- * Страница атрибуции (волна 0, IP-стоп-фактор): доступна по прямому адресу
- * /about, ссылок из меню/футера на неё сознательно нет (см. plans/ip-plan.md —
- * футер и меню трогать нельзя из-за параллельных веток). Задача страницы —
- * «не аффилирован», права на настольную игру за автором и издателем,
- * ссылка на rightgames.ru. Все строки — через i18n (ru.ts — канон).
+ * Страница атрибуции: доступна по прямому адресу /about и обычной ссылке в
+ * заголовочной области главного меню. Здесь зафиксированы неаффилированность,
+ * права автора и издателя, ссылка на rightgames.ru. Все строки — через i18n.
  */
 function About() {
   const t = useT();

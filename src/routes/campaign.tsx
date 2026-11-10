@@ -1,7 +1,11 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { CampaignContent, FeaturePage } from "@/components/game/screens";
+import { routeSeoHead } from "@/lib/seo";
 
-export const Route = createFileRoute("/campaign")({ component: CampaignPage });
+export const Route = createFileRoute("/campaign")({
+  head: () => routeSeoHead("/campaign"),
+  component: CampaignPage,
+});
 
 /**
  * /campaign — кампания-рогалик как страница (фундамент: забег за эпоху
@@ -12,7 +16,7 @@ export const Route = createFileRoute("/campaign")({ component: CampaignPage });
 function CampaignPage() {
   const navigate = useNavigate();
   return (
-    <FeaturePage titleKey="campaign.title">
+    <FeaturePage>
       <CampaignContent onStarted={() => navigate({ to: "/" })} />
     </FeaturePage>
   );

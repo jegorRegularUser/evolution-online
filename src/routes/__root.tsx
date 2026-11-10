@@ -1,8 +1,9 @@
-import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
+import { createRootRoute, HeadContent, Outlet, Scripts, useRouterState } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { AuthProvider } from "@/lib/auth/provider";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
-import { initLang, t, useLang, LANG_BOOT_SCRIPT } from "@/lib/i18n";
+import { initLang, useLang, LANG_BOOT_SCRIPT } from "@/lib/i18n";
+import { syncLocalizedDocumentSeo } from "@/lib/seo";
 // Прямой импорт вместо `?url`: в dev Vite применяет изменения CSS через HMR
 // без перезагрузки страницы (?url даёт <link> без HMR → full-reload →
 // соло-партия «выбрасывалась» в меню). Start собирает CSS в бандл сам.
@@ -17,18 +18,17 @@ import "../styles.css";
  */
 function LangInit() {
   const lang = useLang();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   useEffect(() => {
     // Единожды на монтирование: сохранённый выбор или язык устройства.
     initLang();
   }, []);
   useEffect(() => {
-    // Название и описание — на текущем языке. Императивно, а не в разметке:
-    // <title>/<meta> в дереве компонента React 19 поднимает в <head> и при
-    // гидратации может разойтись с SSR-набором HeadContent.
-    document.title = t("app.name");
-    const meta = document.querySelector('meta[name="description"]');
-    if (meta) meta.setAttribute("content", t("app.description"));
-  }, [lang]);
+    // Route head всегда отдаёт стабильные RU SSR metadata. После гидратации
+    // локализуем только title/description для текущего pathname; canonical и
+    // social metadata остаются теми же сигналами для поисковиков.
+    syncLocalizedDocumentSeo(pathname, lang);
+  }, [lang, pathname]);
   return null;
 }
 
@@ -40,13 +40,7 @@ export const Route = createRootRoute({
       // браузер ужимает вьюпорт, а не накладывает клавиатуру поверх — поле
       // ввода чата в игре остаётся видимым.
       { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" },
-      // Название/описание — из словаря, а не литералом: SSR и первый клиентский
-      // рендер читают «ru» из стора (см. LangInit ниже), после смены языка
-      // заголовок обновляет эффект LangInit — hydration это не задевает,
-      // document.title вне дерева React.
-      { title: t("app.name") },
       { name: "theme-color", content: "#111410" },
-      { name: "description", content: t("app.description") },
     ],
     links: [
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },

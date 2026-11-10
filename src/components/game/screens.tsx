@@ -250,15 +250,8 @@ export function TopBarNav({
  * названия (компактная строка модалок + звук + язык), внизу таб-бар разделов
  * с домиком — контент получает нижний паддинг, чтобы не прятаться под панелью.
  */
-export function FeaturePage({ titleKey, children }: { titleKey: TKey; children: ReactNode }) {
+export function FeaturePage({ children }: { children: ReactNode }) {
   const tt = useT();
-  // Заголовок вкладки браузера: LangInit в __root ставит app.name на
-  // монтировании и при смене языка; этот эффект перебивает его позже
-  // (дерево ниже), поэтому у каждой страницы свой title.
-  const title = tt(titleKey);
-  useEffect(() => {
-    document.title = title;
-  }, [title]);
   // Модалки шапки — те же, что в меню; состояние живёт на странице, панели —
   // за пределами шапки (см. TopBarNav).
   const [tutorialOpen, setTutorialOpen] = useState(false);
@@ -385,6 +378,12 @@ export function MenuScreen({ onRules }: { onRules: () => void }) {
           <header className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <h1 className="font-display text-2xl tracking-[0.08em] text-fg sm:text-3xl">{tt("app.name")}</h1>
             <p className="text-xs text-muted sm:text-sm">{tt("menu.subtitle")}</p>
+            <Link
+              to="/about"
+              className="text-xs text-muted underline decoration-border underline-offset-4 transition-colors hover:text-fg sm:text-sm"
+            >
+              {tt("topbar.about")}
+            </Link>
           </header>
 
           {netFatal ? (

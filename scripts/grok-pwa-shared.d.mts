@@ -6,6 +6,7 @@ export declare function appNameFromHost(hostHeader: string | null | undefined): 
 export declare function publicAppHost(hostHeader: string | null | undefined): string;
 export declare function resolvePublicHost(hostHeader: string | null | undefined): string;
 export declare function isInstallQuery(url: string | null | undefined): boolean;
+export declare function isInstallTutorialRequest(url: string | null | undefined): boolean;
 export declare function isDocumentPath(pathname: string | null | undefined): boolean;
 export declare function acceptsHtml(accept: string | null | undefined): boolean;
 export declare function stripInstallParams(url: string | null | undefined): string;
@@ -42,6 +43,7 @@ export type GrokHeadContext = {
   creator?: string;
   creatorId?: string;
   host?: string | null;
+  pageUrl?: string | null;
   cwd?: string;
   site?: OgSite;
 };
@@ -65,8 +67,10 @@ export declare function grokOgHeadTags(ctx?: {
   appName?: string;
   site?: OgSite;
   documentTitle?: string;
+  pageUrl?: string;
   cwd?: string;
 }): string[];
+export declare function resolveFallbackPageUrl(pageUrl: string, publicHost?: string): string;
 export declare function stripShareMetaTags(html: string): string;
 export declare function normalizeHeadContext(ctx?: GrokHeadContext): {
   appName: string;
@@ -74,6 +78,7 @@ export declare function normalizeHeadContext(ctx?: GrokHeadContext): {
   creator: string;
   creatorId: string;
   host: string;
+  pageUrl: string;
   cwd: string;
   site: OgSite;
 };

@@ -13,7 +13,7 @@ import {
   createHeadInjector,
   injectGrokPwaHead,
   isDocumentPath,
-  isInstallQuery,
+  isInstallTutorialRequest,
   langFromAcceptLanguage,
   renderInstallPageHtml,
   renderWebManifest,
@@ -82,12 +82,13 @@ function serveGrokPwa(middlewares) {
       res.statusCode = 200;
       res.setHeader("content-type", "application/manifest+json; charset=utf-8");
       res.setHeader("cache-control", "no-cache");
+      res.setHeader("vary", "Accept-Language");
       res.setHeader("content-length", String(body.byteLength));
       res.end(body);
       return;
     }
 
-    if (isInstallQuery(rawUrl) && isDocumentPath(pathOnly) && acceptsHtml(req.headers.accept)) {
+    if (isInstallTutorialRequest(rawUrl) && acceptsHtml(req.headers.accept)) {
       try {
         const acceptLanguage = req.headers["accept-language"];
         sendHtml(
@@ -123,7 +124,7 @@ function wrapHtmlResponses(middlewares, cwd) {
     const looksLikeDocument =
       method === "GET" &&
       String(req.headers.accept ?? "").includes("text/html") &&
-      !isInstallQuery(rawUrl) &&
+      !isInstallTutorialRequest(rawUrl) &&
       isDocumentPath(pathOnly);
     if (!looksLikeDocument) {
       next();
@@ -135,6 +136,7 @@ function wrapHtmlResponses(middlewares, cwd) {
     const host = requestHost(req);
     const injector = createHeadInjector({
       host,
+      pageUrl: rawUrl,
       cwd,
     });
     let mode = null; // null = undecided, "inject" | "passthrough"
@@ -196,9 +198,10 @@ export function grokPwaPlugin() {
       if (id !== `\0${GROK_OG_IDENTITY_ID}`) return;
       return `export const grokOgIdentity = ${JSON.stringify(snapshotOgIdentity(root))};`;
     },
-    transformIndexHtml(html) {
+    transformIndexHtml(html, context) {
       return injectGrokPwaHead(html, {
         host: process.env.VITE_PUBLIC_HOSTNAME ?? "",
+        pageUrl: context?.path ?? "",
         cwd: root,
       });
     },
