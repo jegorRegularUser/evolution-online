@@ -269,12 +269,30 @@ export const netSetColor = createServerFn({ method: "POST" })
   });
 
 /**
- * Косметика своего места (аватар/рубашка). Владение платными предметами
- * проверяется ЗДЕСЬ по профилю вызывающего (authMiddleware с dev-фолбэком
- * 'dev-user'); room-сервис остаётся без контекста auth и принимает готовый
- * белый список. Учёные (sci.*) и бесплатная классика слота доступны всем.
+ * Бесплатная косметика места (учёные, классика, сброс) авторизуется токеном
+ * места. Платные item_id сервис отклонит без списка владения; для них есть
+ * отдельный authenticated endpoint ниже.
  */
 export const netSetCosmetics = createServerFn({ method: "POST" })
+  .middleware([sameSiteGuard])
+  .validator(setCosmeticsInput)
+  .handler(async ({ data }) => {
+    try {
+      const s = await getRoomService();
+      const patch: { avatar?: string | null; cardback?: string | null } = {};
+      if (data.avatar !== undefined) patch.avatar = data.avatar;
+      if (data.cardback !== undefined) patch.cardback = data.cardback;
+      if (!("avatar" in patch) && !("cardback" in patch)) {
+        return { ok: true as const, avatar: "", cardback: "" };
+      }
+      return { ok: true as const, ...(await s.setSeatCosmetics(data.code, data.token, patch, [])) };
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+/** Платная косметика места: профиль подтверждает владение item_id. */
+export const netSetOwnedCosmetics = createServerFn({ method: "POST" })
   .middleware([sameSiteGuard, authMiddleware])
   .validator(setCosmeticsInput)
   .handler(async ({ data, context }) => {
@@ -286,11 +304,8 @@ export const netSetCosmetics = createServerFn({ method: "POST" })
       if (!("avatar" in patch) && !("cardback" in patch)) {
         return { ok: true as const, avatar: "", cardback: "" };
       }
-      let owned: string[] = [];
-      if ("cardback" in patch || ("avatar" in patch && !String(patch.avatar ?? "").startsWith("sci."))) {
-        const profile = createProfileService(await getSql());
-        owned = (await profile.getProfile(context.userId)).owned.map((o) => o.itemId);
-      }
+      const profile = createProfileService(await getSql());
+      const owned = (await profile.getProfile(context.userId)).owned.map((o) => o.itemId);
       return { ok: true as const, ...(await s.setSeatCosmetics(data.code, data.token, patch, owned)) };
     } catch (e) {
       return fail(e);

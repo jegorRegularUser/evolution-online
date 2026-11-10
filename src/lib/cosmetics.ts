@@ -246,6 +246,19 @@ export function cosmeticById(id: string): CosmeticItem | undefined {
   return COSMETIC_ITEMS.find((item) => item.id === id);
 }
 
+/** Нужен ли профиль владельца, чтобы применить патч косметики места. */
+export function cosmeticsPatchNeedsOwnership(patch: {
+  avatar?: string | null;
+  cardback?: string | null;
+}): boolean {
+  for (const id of [patch.avatar, patch.cardback]) {
+    if (!id || isScientistAvatarKey(id)) continue;
+    const item = cosmeticById(id);
+    if (!item || item.price > 0) return true;
+  }
+  return false;
+}
+
 /** Серверный белый список покупки: id каталога + цена на сервере, не в клиенте. */
 export const COSMETIC_PRICES: Record<string, number> = Object.fromEntries(
   COSMETIC_ITEMS.map((item) => [item.id, item.price]),

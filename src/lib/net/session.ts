@@ -29,6 +29,7 @@ import {
   netSetCapacity,
   netSetColor,
   netSetCosmetics,
+  netSetOwnedCosmetics,
   netSetName,
   netSetPassword,
   netSetRoomPrivacy,
@@ -55,6 +56,7 @@ import type {
   WaiterInfo,
 } from "./shared";
 import type { GameAction } from "@/game/types";
+import { cosmeticsPatchNeedsOwnership } from "@/lib/cosmetics";
 
 export type NetStatus = "connecting" | "lobby" | "playing" | "finished" | "reconnecting";
 
@@ -676,8 +678,11 @@ export class NetSession {
   async setSeatCosmetics(
     patch: { avatar?: string | null; cardback?: string | null },
   ): Promise<{ avatar: string; cardback: string } | null> {
+    const setCosmetics = cosmeticsPatchNeedsOwnership(patch)
+      ? netSetOwnedCosmetics
+      : netSetCosmetics;
     const r = await this.call(
-      netSetCosmetics({ data: { code: this.code, token: this.token, ...patch } }),
+      setCosmetics({ data: { code: this.code, token: this.token, ...patch } }),
     );
     if (!r.ok) return null;
     this.refresh();
