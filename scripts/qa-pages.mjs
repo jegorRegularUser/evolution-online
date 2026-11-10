@@ -7,7 +7,7 @@
  * Запуск при живом dev-сервере: node scripts/qa-pages.mjs
  */
 import { chromium } from "playwright";
-import { SHOTS, bodyOf, gotoUrl, menuReady, newRuPage, roomCode, sleep, trackPage, waitUntil } from "./qa-lib.mjs";
+import { SHOTS, bodyOf, gotoUrl, menuReady, newRuPage, sleep, trackPage, waitUntil } from "./qa-lib.mjs";
 
 const base = process.env.EVO_URL ?? "http://127.0.0.1:8099";
 
@@ -15,6 +15,7 @@ const PAGES = [
   {
     url: "/shop",
     title: "Магазин",
+    documentTitle: "Магазин — Эволюция Онлайн",
     button: "Магазин",
     probe: async (page) => (await text(page, "0% pay-to-win")) && (await text(page, "Сукно стола")),
     shot: "page-shop.png",
@@ -22,6 +23,7 @@ const PAGES = [
   {
     url: "/bestiary",
     title: "Бестиарий",
+    documentTitle: "Бестиарий — Эволюция Онлайн",
     button: "Бестиарий",
     // Свежий контекст — альбом пуст, пустое состояние объясняет, как завести питомца.
     probe: (page) => text(page, "Пока пусто"),
@@ -30,6 +32,7 @@ const PAGES = [
   {
     url: "/campaign",
     title: "Кампания",
+    documentTitle: "Кампания — Эволюция Онлайн",
     button: "Кампания",
     // Рогалик-забег: эпохи открыты все — кнопка «Новый забег» доступна.
     probe: (page) =>
@@ -39,6 +42,7 @@ const PAGES = [
   {
     url: "/challenges",
     title: "Вызовы",
+    documentTitle: "Вызовы — Эволюция Онлайн",
     button: "Вызовы",
     // Данные с сервера: либо чип баланса, либо (при сбое) честная ошибка —
     // как раньше вела себя модалка.
@@ -85,7 +89,7 @@ for (const p of PAGES) {
   const h1ok = await waitUntil(() => h1.isVisible().catch(() => false), 20000);
   const content = await waitUntil(() => p.probe(page), 15000, 400);
   const urlOk = await waitUntil(() => at(p.url), 10000, 300);
-  const title = await waitUntil(() => page.title().then((t) => t === p.title), 8000, 300);
+  const title = await waitUntil(() => page.title().then((t) => t === p.documentTitle), 8000, 300);
   const fit = await noHScroll();
   if (h1ok && content && urlOk && title && fit) {
     ok(`${p.url}: h1, содержимое, URL, title, без горскролла`);
@@ -268,7 +272,10 @@ await ctx.close().catch(() => {});
   await ctxEn.addInitScript(() => {
     try {
       localStorage.setItem("evo-lang", "en");
-    } catch {}
+    } catch {
+      // Storage may be unavailable in hardened browser contexts; locale still
+      // provides the English fallback exercised by this QA block.
+    }
   });
   const run = { ctx: ctxEn, page: await ctxEn.newPage() };
   // Без gotoUrl из qa-lib: он при первом переходе сеет на страницу RU-init

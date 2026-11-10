@@ -1,7 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { BestiariumContent, FeaturePage } from "@/components/game/screens";
+import { routeSeoHead } from "@/lib/seo";
 
-export const Route = createFileRoute("/bestiary")({ component: BestiaryPage });
+export const Route = createFileRoute("/bestiary")({
+  head: () => routeSeoHead("/bestiary"),
+  component: BestiaryPage,
+});
 
 /**
  * /bestiary — бестиарий натуралиста как страница (раньше был модалкой меню).
@@ -10,7 +14,7 @@ export const Route = createFileRoute("/bestiary")({ component: BestiaryPage });
  */
 function BestiaryPage() {
   return (
-    <FeaturePage titleKey="bestiarium.title">
+    <FeaturePage>
       <BestiariumContent />
     </FeaturePage>
   );

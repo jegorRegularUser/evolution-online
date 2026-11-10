@@ -6,6 +6,7 @@ import test from "node:test";
 import sharp from "sharp";
 import {
   isInstallQuery,
+  isInstallTutorialRequest,
   renderInstallPageHtml,
   renderWebManifest,
   snapshotOgIdentity,
@@ -27,10 +28,12 @@ test("манифест сохраняет единый бренд и deep-link �
   assert.ok(manifest.icons.some((icon) => icon.purpose === "maskable"));
 });
 
-test("голая install-ссылка открывает подсказку и сохраняет room", () => {
+test("голая install-ссылка открывает подсказку только в корне и сохраняет room", () => {
   assert.equal(isInstallQuery("/?install=1"), true);
   assert.equal(isInstallQuery("/?install=true&platform=android"), true);
   assert.equal(isInstallQuery("/?install=0"), false);
+  assert.equal(isInstallTutorialRequest("/?install=1"), true);
+  assert.equal(isInstallTutorialRequest("/not-a-route?install=1"), false);
   assert.equal(stripInstallParams("/?install=1&room=FVWG&platform=ios"), "/?room=FVWG");
 });
 
@@ -43,6 +46,7 @@ test("страница установки локализована и не по�
   assert.match(html, /Открыть Эволюцию/);
   assert.doesNotMatch(html, /Добавить Эволюция/);
   assert.match(html, /На экран «Домой»/);
+  assert.match(html, /name="robots" content="noindex,follow"/);
   assert.match(html, /href="\/\?room=FVWG"/);
   assert.doesNotMatch(html, />Grok</);
   assert.doesNotMatch(html, /Add Эволюция/);

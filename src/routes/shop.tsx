@@ -1,7 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { FeaturePage, ShopContent } from "@/components/game/screens";
+import { routeSeoHead } from "@/lib/seo";
 
-export const Route = createFileRoute("/shop")({ component: ShopPage });
+export const Route = createFileRoute("/shop")({
+  head: () => routeSeoHead("/shop"),
+  component: ShopPage,
+});
 
 /**
  * /shop — магазин косметики как страница (раньше был модалкой меню).
@@ -10,7 +14,7 @@ export const Route = createFileRoute("/shop")({ component: ShopPage });
  */
 function ShopPage() {
   return (
-    <FeaturePage titleKey="shop.title">
+    <FeaturePage>
       <ShopContent />
     </FeaturePage>
   );

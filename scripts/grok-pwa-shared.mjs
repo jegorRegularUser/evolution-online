@@ -63,6 +63,50 @@ function unescapeHtml(value) {
     .replaceAll("&amp;", "&");
 }
 
+function htmlAttribute(tag, attribute) {
+  const match = String(tag).match(
+    new RegExp(`\\s${attribute}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i"),
+  );
+  return match ? unescapeHtml(match[1] ?? match[2] ?? match[3] ?? "") : "";
+}
+
+function metaKey(tag) {
+  return (htmlAttribute(tag, "property") || htmlAttribute(tag, "name")).trim().toLowerCase();
+}
+
+function metaValues(html) {
+  const values = new Map();
+  for (const match of String(html).matchAll(/<meta\b[^>]*>/gi)) {
+    const key = metaKey(match[0]);
+    if (key && !values.has(key)) values.set(key, htmlAttribute(match[0], "content"));
+  }
+  return values;
+}
+
+function hasLinkRel(html, rel) {
+  const wanted = String(rel).toLowerCase();
+  return [...String(html).matchAll(/<link\b[^>]*>/gi)].some((match) =>
+    htmlAttribute(match[0], "rel")
+      .toLowerCase()
+      .split(/\s+/)
+      .includes(wanted),
+  );
+}
+
+function hasScriptSrc(html, src) {
+  return [...String(html).matchAll(/<script\b[^>]*>/gi)].some(
+    (match) => htmlAttribute(match[0], "src") === src,
+  );
+}
+
+function canonicalHref(html) {
+  for (const match of String(html).matchAll(/<link\b[^>]*>/gi)) {
+    const rels = htmlAttribute(match[0], "rel").toLowerCase().split(/\s+/);
+    if (rels.includes("canonical")) return htmlAttribute(match[0], "href").trim();
+  }
+  return "";
+}
+
 /** 6-digit hex for the og.grok.me placeholder, or "" if site.color is missing/invalid. */
 function placeholderCardColor(site = {}) {
   const raw = String(site.color ?? "").trim();
@@ -107,7 +151,7 @@ function isVercelSystemHost(host) {
   );
 }
 
-/** Hostname suitable for absolute og:image URLs. Preview guests (X-Forwarded-Host) are allowed. */
+/** Hostname validator for explicitly configured public social-card origins. */
 export function publicAppHost(hostHeader) {
   const host = String(hostHeader ?? "")
     .split(",")[0]
@@ -121,15 +165,13 @@ export function publicAppHost(hostHeader) {
 }
 
 /**
- * Published apps always use `VITE_PUBLIC_HOSTNAME` (the grok.me host the
- * deployer injects). Live preview has no such env, so fall back to the
- * request host / X-Forwarded-Host. Never prefer request Host on a published
- * app — Envoy rewrites it to `*.vercel.app`.
+ * Absolute social URLs may only use an explicitly configured public hostname.
+ * Request Host / X-Forwarded-Host is untrusted input and can poison shared
+ * caches, so preview requests without configuration intentionally get no
+ * generated absolute image URL.
  */
-export function resolvePublicHost(hostHeader) {
-  return (
-    publicAppHost(process.env?.VITE_PUBLIC_HOSTNAME) || publicAppHost(hostHeader)
-  );
+export function resolvePublicHost(_hostHeader) {
+  return publicAppHost(process.env?.VITE_PUBLIC_HOSTNAME);
 }
 
 export function isInstallQuery(url) {
@@ -137,6 +179,13 @@ export function isInstallQuery(url) {
   const params = new URLSearchParams(query);
   const install = params.get("install");
   return install === "1" || install === "true";
+}
+
+/** Install tutorial is a root-only alternate representation, never a route fallback. */
+export function isInstallTutorialRequest(url) {
+  const raw = String(url ?? "");
+  const pathname = raw.split("?", 1)[0] || "/";
+  return pathname === "/" && isInstallQuery(raw);
 }
 
 /** Paths that can carry an app document (vs assets / API / internals). */
@@ -417,11 +466,11 @@ export function resolveOgTitle(
   host = "",
   documentTitle = "",
 ) {
-  const fromSite = String(site.title ?? "").trim();
-  if (fromSite) return fromSite;
   const fromDoc = String(documentTitle ?? "").trim();
   if (fromDoc) return fromDoc;
-  const fromHost = appNameFromHost(host);
+  const fromSite = String(site.title ?? "").trim();
+  if (fromSite) return fromSite;
+  const fromHost = appNameFromHost(resolvePublicHost(host));
   if (fromHost && fromHost !== DEFAULT_APP_NAME) return fromHost;
   const fromArg = String(appName ?? "").trim();
   return fromArg || DEFAULT_APP_NAME;
@@ -452,14 +501,17 @@ export function grokOgHeadTags({
   appName = DEFAULT_APP_NAME,
   site = {},
   documentTitle = "",
+  pageUrl = "",
   cwd = process.cwd(),
 } = {}) {
   const title = resolveOgTitle(site, appName, host, documentTitle);
+  const siteName = String(site.title ?? "").trim() || String(appName ?? "").trim() || DEFAULT_APP_NAME;
   const publicHost = resolvePublicHost(host);
   const tags = [
     `<meta name="twitter:card" content="summary_large_image">`,
     `<meta property="og:title" content="${escapeHtml(title)}">`,
     `<meta name="twitter:title" content="${escapeHtml(title)}">`,
+    `<meta property="og:site_name" content="${escapeHtml(siteName)}">`,
   ];
   const description = String(site.description ?? "").trim();
   if (description) {
@@ -470,6 +522,10 @@ export function grokOgHeadTags({
   }
   if (String(site.type ?? "").toLowerCase() === "x:game") {
     tags.push(`<meta property="og:type" content="x:game">`);
+  }
+  const safePageUrl = resolveFallbackPageUrl(pageUrl, publicHost);
+  if (safePageUrl) {
+    tags.push(`<meta property="og:url" content="${escapeHtml(safePageUrl)}">`);
   }
   if (publicHost) {
     const asset = resolveOgCardAsset(site, cwd);
@@ -494,6 +550,27 @@ export function grokOgHeadTags({
   return tags;
 }
 
+/**
+ * Resolve a fallback page URL only from the explicitly configured public host.
+ * Request Host / X-Forwarded-Host and absolute URLs for any other host are
+ * deliberately rejected so machine-readable metadata cannot be cache-poisoned.
+ */
+export function resolveFallbackPageUrl(pageUrl, configuredPublicHost = "") {
+  const raw = String(pageUrl ?? "").trim();
+  if (!raw || raw.startsWith("//")) return "";
+  if (raw.startsWith("/")) {
+    return configuredPublicHost ? `https://${configuredPublicHost}${raw}` : "";
+  }
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return "";
+    return configuredPublicHost && parsed.hostname === configuredPublicHost ? parsed.href : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Legacy export retained for API compatibility; injection no longer calls it. */
 export function stripShareMetaTags(html) {
   return String(html).replace(/<meta\b[^>]*>/gi, (tag) => {
     const attrs = [...tag.matchAll(/\b(?:property|name)\s*=\s*["']([^"']+)["']/gi)];
@@ -536,57 +613,97 @@ export function normalizeHeadContext(ctx = {}) {
     creator: ctx.creator ?? readXCreator(),
     creatorId: ctx.creatorId ?? readXCreatorId(),
     host: ctx.host ?? "",
+    pageUrl: ctx.pageUrl ?? "",
     cwd,
     site,
   };
 }
 
+function isRoomPageUrl(pageUrl) {
+  const raw = String(pageUrl ?? "").trim();
+  if (!raw) return false;
+  try {
+    const parsed = raw.startsWith("/") ? new URL(raw, "https://local.invalid") : new URL(raw);
+    return parsed.searchParams.has("room");
+  } catch {
+    return false;
+  }
+}
+
+function missingShareHeadTags(html, context) {
+  const existing = metaValues(html);
+  const pageUrl = canonicalHref(html) || context.pageUrl;
+  const candidates = grokOgHeadTags({ ...context, pageUrl });
+  return candidates.filter((tag) => {
+    const key = metaKey(tag);
+    return key && !existing.has(key);
+  });
+}
+
 export function injectGrokPwaHead(html, ctx = {}) {
   if (typeof html !== "string") return html;
-  const { site, projectId, creator, creatorId, host, cwd } = normalizeHeadContext(ctx);
+  const normalized = normalizeHeadContext(ctx);
+  const { site, projectId, creator, creatorId, host, pageUrl, cwd } = normalized;
   const documentTitle = titleFromDocument(html);
+  const routeMeta = metaValues(html);
   const appName = resolveOgTitle(
     site,
     ctx.appName ?? DEFAULT_APP_NAME,
     host,
     documentTitle,
   );
-  let next = stripShareMetaTags(html);
+  let next = html;
+  const missing = [];
 
-  const missing = grokPwaHeadTags(appName)
-    .filter(([key]) => {
-      if (key === "manifest") return !next.includes('href="/__grok/manifest.webmanifest"');
-      if (key === "icon") return !next.includes('href="/__grok/icon-192.png"');
-      if (key === "mask-icon") return !next.includes('rel="mask-icon"');
-      if (key === "apple-touch-icon") return !next.includes('href="/__grok/icon-180.png"');
-      return !next.includes(`name="${key}"`);
-    })
-    .map(([, tag]) => tag);
+  for (const [key, tag] of grokPwaHeadTags(appName)) {
+    if (key === "manifest") {
+      if (!hasLinkRel(next, "manifest")) missing.push(tag);
+      continue;
+    }
+    if (key === "icon") {
+      if (!hasLinkRel(next, "icon")) missing.push(tag);
+      continue;
+    }
+    if (key === "mask-icon") {
+      if (!hasLinkRel(next, "mask-icon")) missing.push(tag);
+      continue;
+    }
+    if (key === "apple-touch-icon") {
+      if (!hasLinkRel(next, "apple-touch-icon")) missing.push(tag);
+      continue;
+    }
+    if (!routeMeta.has(key)) missing.push(tag);
+  }
 
-  next = insertAfterHeadOpen(
-    next,
-    grokOgHeadTags({ host, appName, site, documentTitle, cwd }).join(""),
-  );
+  const shareFallbacks = missingShareHeadTags(next, {
+    host,
+    appName,
+    site,
+    documentTitle,
+    pageUrl,
+    cwd,
+  });
+  if (shareFallbacks.length > 0) {
+    next = insertAfterHeadOpen(next, shareFallbacks.join(""));
+  }
 
-  if (!next.includes("/grok-app-builder/extensions.js")) {
+  const metaAfterShare = metaValues(next);
+  if (isRoomPageUrl(pageUrl) && !metaAfterShare.has("robots")) {
+    missing.push('<meta name="robots" content="noindex,follow">');
+  }
+
+  if (!hasScriptSrc(next, GROK_EXTENSIONS_SCRIPT_SRC)) {
     missing.push(...grokExtensionsHeadTags(projectId));
-  } else if (projectId && !next.includes('name="grok-project-id"')) {
+  } else if (projectId && !metaAfterShare.has("grok-project-id")) {
     missing.push(`<meta name="grok-project-id" content="${escapeHtml(projectId)}">`);
   }
-  if (
-    projectId &&
-    !next.includes('property="grok:app_id"') &&
-    !next.includes("property='grok:app_id'")
-  ) {
+  if (projectId && !metaAfterShare.has("grok:app_id")) {
     missing.push(`<meta property="grok:app_id" content="${escapeHtml(projectId)}">`);
   }
   const creatorTags = grokXCreatorHeadTags(creator, creatorId);
   if (creatorTags.length > 0) {
-    const hasCreator =
-      next.includes('property="x:creator" content=') ||
-      next.includes("property='x:creator' content=");
-    if (!hasCreator) missing.push(creatorTags[0]);
-    if (!next.includes('property="x:creator:id"')) missing.push(creatorTags[1]);
+    if (!metaAfterShare.has("x:creator")) missing.push(creatorTags[0]);
+    if (!metaAfterShare.has("x:creator:id")) missing.push(creatorTags[1]);
   }
 
   if (missing.length === 0) return next;
@@ -617,6 +734,7 @@ export function createHeadInjector(ctx = {}) {
       creator: normalized.creator,
       creatorId: normalized.creatorId,
       host: normalized.host,
+      pageUrl: normalized.pageUrl,
       cwd: normalized.cwd,
       site: normalized.site,
     });
