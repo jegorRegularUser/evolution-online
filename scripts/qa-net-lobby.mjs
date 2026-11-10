@@ -354,7 +354,7 @@ async function waitQueued(page, timeout = 25_000) {
  * заведомо негодными данными: ответ неважен, важен сам вызов. Затем ждём
  * раунд без перезагрузок — значит, сервер «горячий».
  */
-const WARM_CALLS = 17;
+const WARM_CALLS = 18;
 
 async function warmBatch(page) {
   return page.evaluate(async () => {
@@ -369,6 +369,7 @@ async function warmBatch(page) {
       () => api.netKick({ data: { code, token, seat: 1 } }),
       () => api.netSetCapacity({ data: { code, token, capacity: 3 } }),
       () => api.netSetSettings({ data: { code, token, settings: { difficulty: "hard" } } }),
+      () => api.netSetCosmetics({ data: { code, token, avatar: "sci.baer" } }),
       () => api.netTransferHost({ data: { code, token, seat: 1 } }),
       () => api.netKickWaiter({ data: { code, token, index: 0 } }),
       () => api.netRoomInfo({ data: { code, token } }),
@@ -648,6 +649,36 @@ try {
     if (!snap.seatItems.some((t) => t.includes("Аня"))) throw new Error("хост не видит себя среди мест");
     ok(`стол ${code} создан: вместимость 2, за столом 1, свободно 1`);
     await host.screenshot({ path: `${SHOTS}/10-net-lobby-host.png` });
+  });
+
+  await guard("смена бесплатного аватара", async () => {
+    const avatarButton = host.getByRole("button", { name: "Аватар", exact: true });
+    if (!(await waitUntil(() => isVisible(avatarButton), 15_000))) {
+      throw new Error("нет кнопки выбора аватара своего места");
+    }
+    await safeClick(avatarButton, 3000);
+    const baer = host.getByRole("button", { name: "Карл Бэр", exact: true });
+    if (!(await waitUntil(() => isVisible(baer), 10_000))) {
+      throw new Error("нет бесплатного портрета Карла Бэра");
+    }
+    await safeClick(baer, 3000);
+    const changed = await waitUntil(
+      () =>
+        host
+          .evaluate(() => {
+            const store = globalThis.__evoStore;
+            const net = store?.getState().net;
+            return net?.seats.find((seat) => seat.seat === net.seat)?.avatar === "sci.baer";
+          })
+          .catch(() => false),
+      10_000,
+      300,
+    );
+    if (!changed) throw new Error("сервер не подтвердил новый аватар");
+    if (await host.getByText(/Нет связи со столом/).count()) {
+      throw new Error("смена бесплатного аватара показала ошибку связи");
+    }
+    ok("бесплатный портрет меняется без профиля и без ошибки связи");
   });
 
   await guard("вход по ссылке", async () => {

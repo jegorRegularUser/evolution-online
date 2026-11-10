@@ -54,8 +54,11 @@ function harness(kind: "chat" | "reaction") {
   runInNewContext(source, {
     exports,
     require: (name: string) => {
-      assert.equal(name, "./api");
-      return api;
+      if (name === "./api") return api;
+      if (name === "@/lib/cosmetics") {
+        return { cosmeticsPatchNeedsOwnership: () => false };
+      }
+      assert.fail(`unexpected import: ${name}`);
     },
     setTimeout: (callback: () => void, delay: number) => {
       timers.set(++timerId, { callback, delay });

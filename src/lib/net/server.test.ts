@@ -2651,6 +2651,22 @@ describe("S10: same-site сторож net-функций", () => {
       "у каждой net-функции должен быть same-site сторож",
     );
   });
+
+  it("бесплатная косметика места не зависит от auth middleware", () => {
+    const src = readFileSync(fileURLToPath(new URL("./api.ts", import.meta.url)), "utf8");
+    const free = src.match(
+      /export const netSetCosmetics =[\s\S]*?(?=\nexport const netSetOwnedCosmetics =)/,
+    )?.[0];
+    const owned = src.match(
+      /export const netSetOwnedCosmetics =[\s\S]*?(?=\nexport const netTransferHost =)/,
+    )?.[0];
+
+    assert.ok(free, "netSetCosmetics должен сохранить старый endpoint для бесплатного выбора");
+    assert.match(free, /\.middleware\(\[sameSiteGuard\]\)/);
+    assert.doesNotMatch(free, /authMiddleware/);
+    assert.ok(owned, "для платных предметов нужен отдельный authenticated endpoint");
+    assert.match(owned, /\.middleware\(\[sameSiteGuard, authMiddleware\]\)/);
+  });
 });
 
 describe("S11: код стола — только алфавит комнат", () => {
