@@ -8,16 +8,22 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { isMigrationFile, migrationName, pendingMigrations } from "./migration-plan.mjs";
-import { projectRoot } from "./with-app-env.mjs";
+
+// Корень репозитория: раньше приезжал из with-app-env.mjs, но тот удалён
+// вместе с обвязкой прежнего хостинга — копия локальная, семантика
+// та же (dirname(dirname(имя этого файла)) = корень).
+const projectRoot = () => dirname(dirname(fileURLToPath(import.meta.url)));
 
 const AUTH_MIGRATION = "0001_auth.sql";
 
 /**
- * The auth-on copy of the Better Auth schema and its source, or null when the
- * app has not turned sign-in on (the shipped state).
+ * Гипотетическая копия Better Auth-схемы в корне migrations/ и её источник в
+ * migrations/auth/, или null, когда копии нет (текущее состояние репозитория:
+ * платформенный auth удалён, исторический файл остался только в подпапке).
  */
 function authSchemaCopy(root) {
   const copy = join(root, "migrations", AUTH_MIGRATION);

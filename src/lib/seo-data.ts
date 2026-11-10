@@ -12,8 +12,8 @@ export const SEO_ROUTE_KEYS = {
   "/shop": { titleKey: "seo.shop.title", descriptionKey: "seo.shop.description" },
 } as const;
 
-export const SOCIAL_IMAGE_PATH = "/__grok/og.jpg" as const;
-export const X_BANNER_PATH = "/__grok/x-banner.jpg" as const;
+export const SOCIAL_IMAGE_PATH = "/og.jpg" as const;
+export const X_BANNER_PATH = "/x-banner.jpg" as const;
 export const SOURCE_REPOSITORY_URL = "https://github.com/jegorRegularUser/evolution-online" as const;
 
 type AbsoluteProductionUrl<Path extends `/${string}`> = `${typeof PRODUCTION_ORIGIN}${Path}`;

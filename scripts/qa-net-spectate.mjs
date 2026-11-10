@@ -98,8 +98,8 @@ function track(page, label) {
   page.on("console", (m) => {
     if (m.type() !== "error") return;
     const t = m.text();
-    // Шум дев-окружения: grok-расширение, vite-клиент, favicon.
-    if (/NotSameOrigin|favicon|grok\.com|\[vite\]/i.test(t)) return;
+    // Шум дев-окружения: vite-клиент, favicon.
+    if (/NotSameOrigin|favicon|\[vite\]/i.test(t)) return;
     consoleErrors.push(`${label}: ${t.slice(0, 200)}`);
   });
   // Полная перезагрузка вкладки (dev full-reload) рвёт сессию: считаем и

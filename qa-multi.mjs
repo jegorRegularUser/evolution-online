@@ -19,15 +19,15 @@ function track(page, label) {
   page.on("console", (m) => {
     if (m.type() !== "error") return;
     const t = m.text();
-    // Платформенный скрипт grok.com блокируется браузером на постороннем
-    // домене (туннель) — на игру не влияет.
-    if (/NotSameOrigin/.test(t) && /Failed to load resource/.test(t)) return;
+    // Скрипт прежней платформы (extensions.js с чужого домена) удалён вместе
+    // с платформой — его шум «NotSameOrigin» больше не приходит, фильтр снят.
     note(`${label}/console`, t);
   });
   page.on("pageerror", (e) => note(`${label}/pageerror`, String(e)));
   page.on("requestfailed", (r) => {
     const u = r.url();
-    if (/grok\.com|fonts\.g|extensions\.js/.test(u)) return;
+    // fonts.g — Google Fonts (шрифты интерфейса), не ошибка приложения.
+    if (/fonts\.g/.test(u)) return;
     note(`${label}/request`, `${r.failure()?.errorText} ${u}`);
   });
 }

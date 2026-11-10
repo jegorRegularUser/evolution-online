@@ -22,7 +22,7 @@ async function track(page, label) {
   page.on("pageerror", (e) => note(`${label}/pageerror`, String(e)));
   page.on("requestfailed", (r) => {
     const u = r.url();
-    if (u.startsWith("http://127.0.0.1") || u.includes("fonts.g") || u.includes("grok.com")) return;
+    if (u.startsWith("http://127.0.0.1") || u.includes("fonts.g")) return;
     note(`${label}/request`, `${r.failure()?.errorText} ${u}`);
   });
 }

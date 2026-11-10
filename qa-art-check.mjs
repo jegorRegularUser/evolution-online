@@ -11,7 +11,7 @@ const { page } = await newRuPage(browser, { viewport: { width: 1280, height: 900
 const failed = [];
 page.on("requestfailed", (r) => {
   const u = r.url();
-  if (u.includes("fonts.g") || u.includes("grok.com")) return;
+  if (u.includes("fonts.g")) return;
   failed.push(`requestfailed ${r.failure()?.errorText} ${u}`);
 });
 page.on("response", (r) => {

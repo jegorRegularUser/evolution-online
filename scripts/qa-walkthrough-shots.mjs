@@ -68,7 +68,7 @@ async function safeClick(loc, timeout = 3000) {
 
 /** Шум dev-сервера и сторонних расширений не считаем ошибками приложения. */
 const IGNORE_CONSOLE =
-  /favicon|React DevTools|WebSocket connection|net::ERR_ABORTED|\[vite\]|vite\/client|grok\.com|Download the React DevTools|ResizeObserver loop|HMR|hot-update/i;
+  /favicon|React DevTools|WebSocket connection|net::ERR_ABORTED|\[vite\]|vite\/client|Download the React DevTools|ResizeObserver loop|HMR|hot-update/i;
 
 function track(page, label) {
   page.__navs = 0;

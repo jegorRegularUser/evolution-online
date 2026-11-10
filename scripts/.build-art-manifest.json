@@ -642,13 +642,5 @@
   "tutorial/extinction.jpg": {
     "src": "dd3b471cb7730c3b",
     "out": "4d985faa082f29d7"
-  },
-  "../og.jpg": {
-    "src": "94aab292bc696f76",
-    "out": "a5520f1b30bed0da"
-  },
-  "../x-banner.jpg": {
-    "src": "d1271d97cefabcbd",
-    "out": "f4f52e687e1c2ffa"
   }
 }

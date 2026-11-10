@@ -27,8 +27,10 @@ const PREVIEW_PORT = 8081;
 const PREVIEW_URL = `http://127.0.0.1:${PREVIEW_PORT}/`;
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PID_FILE = join(ROOT, ".grok/preview.pid");
-const LOG_FILE = join(ROOT, ".grok/preview.log");
+// Машинальные файлы превью живут в .evo/ — служебной папке проекта рядом с
+// прочими генерируемыми (.repo-context, .vercel), вне git.
+const PID_FILE = join(ROOT, ".evo/preview.pid");
+const LOG_FILE = join(ROOT, ".evo/preview.log");
 const READY_TIMEOUT_MS = Number(process.env.PREVIEW_READY_TIMEOUT_MS || 60000);
 const GRACE_MS = 3000;
 const POLL_MS = 100;

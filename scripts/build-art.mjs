@@ -1,4 +1,4 @@
-// Сборка арт-ассетов: assets/grok-*.jpg -> public/img/** (пережим под веб).
+// Сборка арт-ассетов: assets/*.jpg -> public/img/** (пережим под веб).
 // Сопоставление — по 8-символьному префиксу имени файла.
 // Запуск: node scripts/build-art.mjs [--force]
 // Манифест scripts/.build-art-manifest.json защищает ручные правки готовых
@@ -68,7 +68,7 @@ const JOBS = [
   ["1bec2502", "bg/texture-felt.jpg", "tex"],
   ["c11ec6f4", "bg/texture-paper.jpg", "tex"],
   // Водная текстура полосы океана: вырезка спокойной воды с тайла «Океан»
-  // (assets/continents/grok-world-ocean.jpg), см. kind texWater.
+  // (assets/continents/world-ocean.jpg), см. kind texWater.
   ["world-ocean", "bg/texture-water.jpg", "texWater"],
   // --- фазы ---
   ["f9d591ca", "phase/development.png", "art"],
@@ -203,10 +203,12 @@ const JOBS = [
   ["6b1c877d", "tutorial/feeding.jpg", "tut"],
   ["41b06939", "tutorial/hunt.jpg", "tut"],
   ["37c765cc", "tutorial/extinction.jpg", "tut"],
-  // --- корень public: обложки ---
-  ["341b0a7f", "../og.jpg", "og"],
-  ["2b7377c7", "../x-banner.jpg", ["bgw", 1600, 900]],
 ];
+
+// public/og.jpg и public/x-banner.jpg — НЕ выходы этого пайплайна: это
+// брендированные социальные карточки (плашка с названием поверх арта),
+// которые пайплайн из исходников воспроизвести не может. Их правят руками,
+// как public/favicon.svg; seo-data.ts ссылается на эти пути как константы.
 
 const files = [];
 for (const dir of SRC_DIRS) {
@@ -219,10 +221,15 @@ for (const dir of SRC_DIRS) {
 }
 const resolve = (prefix, dest) => {
   const base = (f) => f.split("/").pop();
-  const hit =
-    files.find((f) => base(f).startsWith(`grok-${prefix}`)) ??
-    // Растения лежат без префикса grok-: точное имя <префикс>.jpg.
-    files.find((f) => base(f) === `${prefix}.jpg`);
+  // Исходник — файл `<префикс>.jpg` (партии растений/грибов/мутаций лежат с
+  // осмысленными именами) либо `<префикс>-<хвост>.jpg` (ранние партии несли
+  // uuid-хвост после дефиса). Разделитель-дефис в условии обязателен:
+  // без него префикс-«ключ» заматчил бы и чужой файл, начинающийся с тех же
+  // символов.
+  const hit = files.find((f) => {
+    const b = base(f);
+    return b === `${prefix}.jpg` || b.startsWith(`${prefix}-`);
+  });
   if (!hit) {
     // Исходник мог быть удалён из assets/ после первой сборки: если готовый
     // файл уже лежит в public/img — пропускаем с предупреждением.
@@ -318,15 +325,13 @@ async function processKind(kind, src, dest) {
     pipe = sharp(src).resize(384, 384, { fit: "cover" });
   } else if (kind === "icon512") {
     pipe = sharp(src).resize(512, 512, { fit: "cover" });
-  } else if (kind === "og") {
-    pipe = sharp(src).resize(1200, 630, { fit: "cover", position: "entropy" });
   } else {
     throw new Error(`неизвестный kind: ${kind}`);
   }
 
   const png = dest.endsWith(".png");
   if (png) await pipe.png({ compressionLevel: 9 }).toFile(out);
-  else await pipe.jpeg({ quality: kind === "og" ? 84 : 80, progressive: true, mozjpeg: true }).toFile(out);
+  else await pipe.jpeg({ quality: 80, progressive: true, mozjpeg: true }).toFile(out);
 }
 
 const MANIFEST_PATH = "scripts/.build-art-manifest.json";
@@ -389,4 +394,4 @@ for (const [prefix, dest, kind] of JOBS) {
   built++;
 }
 writeFileSync(MANIFEST_PATH, `${JSON.stringify(nextManifest, null, 2)}\n`);
-console.log(`готово: собрано ${built}, оставлено ${kept}, без изменений ${fresh} -> ${OUT}/ и og/x-banner в public/`);
+console.log(`готово: собрано ${built}, оставлено ${kept}, без изменений ${fresh} -> ${OUT}/`);

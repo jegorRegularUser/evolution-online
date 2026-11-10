@@ -195,9 +195,10 @@ export function getSql(): Promise<Sql> {
 }
 
 /**
- * The shared PGLite instance (preview only), with `migrations/*.sql` applied.
- * Lets Better Auth persist to the SAME embedded DB as app data in preview (via a
- * Kysely dialect). Throws when `DATABASE_URL` is set (that path uses Neon).
+ * The shared PGLite instance (preview only), with `migrations/*.sql` applied —
+ * одна и та же embedded-база обслуживает и данные приложения, и якорные строки
+ * анонимной идентичности ("user", миграция 0016). Throws when `DATABASE_URL` is
+ * set (that path uses Neon).
  */
 export async function getPglite(): Promise<import("@electric-sql/pglite").PGlite> {
   if (dbSource !== "pglite") {

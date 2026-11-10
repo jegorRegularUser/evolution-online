@@ -270,9 +270,10 @@ export const netSetColor = createServerFn({ method: "POST" })
 
 /**
  * Косметика своего места (аватар/рубашка). Владение платными предметами
- * проверяется ЗДЕСЬ по профилю вызывающего (authMiddleware с dev-фолбэком
- * 'dev-user'); room-сервис остаётся без контекста auth и принимает готовый
- * белый список. Учёные (sci.*) и бесплатная классика слота доступны всем.
+ * проверяется ЗДЕСЬ по профилю вызывающего (authMiddleware резолвит
+ * анонимную куку __Host-evo-uid, см. identity.server.ts); room-сервис
+ * остаётся без контекста auth и принимает готовый белый список. Учёные
+ * (sci.*) и бесплатная классика слота доступны всем.
  */
 export const netSetCosmetics = createServerFn({ method: "POST" })
   .middleware([sameSiteGuard, authMiddleware])
