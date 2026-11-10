@@ -197,7 +197,7 @@ for (const [label, width, height] of [["1280", 1280, 900], ["390", 390, 844]]) {
     return { h: Math.round(r.height), w: Math.round(r.width), kids };
   });
   pass(
-    "C1280: строка одна линия (высота < 60), реакции справа",
+    "C1280: строка одна линия (высота < 60), реакции слева",
     row1280 && row1280.h > 0 && row1280.h < 60,
     JSON.stringify(row1280),
   );
